@@ -1,0 +1,19 @@
+name = "piubella-worker"
+main = "src/index.ts"
+compatibility_date = "2026-06-03"
+compatibility_flags = ["nodejs_compat"]
+
+# Hyperdrive hacia Supabase Postgres
+# El ID se completo desde `wrangler hyperdrive create`.
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "7e802994d43e47b0b038a50423291f8f"
+
+# Completar antes de `wrangler dev` con la connection string directa de Supabase
+# (la que entrega Supabase en Project Settings > Database > Connection string).
+# Formato: postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres
+# localConnectionString = ""
+
+# Variables de entorno no secretas (opcional)
+# [vars]
+# ENVIRONMENT = "development"
