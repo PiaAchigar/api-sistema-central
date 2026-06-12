@@ -20,7 +20,10 @@ app.use(
 app.onError((err, c) => {
   console.error("[error]", err);
   if ("status" in err && typeof err.status === "number") {
-    return c.json({ error: err.message }, err.status as 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500);
+    return c.json(
+      { error: err.message },
+      err.status as 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502,
+    );
   }
   return c.json({ error: "Internal server error" }, 500);
 });

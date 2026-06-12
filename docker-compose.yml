@@ -1,0 +1,24 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: piubella-db
+    ports:
+      - "5499:5432"
+    environment:
+      POSTGRES_USER: piubella
+      POSTGRES_PASSWORD: piubella
+      POSTGRES_DB: piubella
+    volumes:
+      # Se ejecutan en orden alfabético SOLO en el primer arranque (volumen vacío)
+      - ./src/db/migrations/1.0.0/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./src/db/migrations/1.1.0/sync.sql:/docker-entrypoint-initdb.d/02-sync.sql:ro
+      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/03-seed.sql:ro
+      - piubella-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  piubella-pgdata:

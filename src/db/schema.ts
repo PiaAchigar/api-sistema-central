@@ -1,7 +1,3 @@
-import { pgTable } from "drizzle-orm/pg-core";
-
-export const _placeholder = pgTable("_placeholder", (t) => ({
-  id: t.integer().primaryKey().generatedAlwaysAsIdentity(),
-}));
-
-export {};
+export * from "./schema/agenda";
+export * from "./schema/billing";
+export * from "./schema/crm";

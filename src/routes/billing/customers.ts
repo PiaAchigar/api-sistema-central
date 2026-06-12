@@ -1,0 +1,59 @@
+import { Hono } from "hono";
+import { zValidator } from "@hono/zod-validator";
+import { z } from "zod";
+import { createDb } from "../../db/client";
+import { conflict } from "../../lib/errors";
+import {
+  createQuickCustomer,
+  findCustomerByDni,
+  getCustomerById,
+  listRecentCustomers,
+  searchCustomers,
+} from "../../repositories/customers.repo";
+import { listInvoices } from "../../repositories/invoices.repo";
+import type { AppBindings } from "../../env";
+
+const customersRouter = new Hono<{ Bindings: AppBindings }>();
+
+customersRouter.get(
+  "/",
+  zValidator("query", z.object({ q: z.string().max(100).optional() })),
+  async (c) => {
+    const db = createDb(c.env);
+    const { q } = c.req.valid("query");
+    const rows = q ? await searchCustomers(db, q) : await listRecentCustomers(db);
+    return c.json(rows);
+  },
+);
+
+const createBody = z.object({
+  name: z.string().min(2).max(255),
+  dni: z.string().regex(/^\d{7,8}$/, "DNI de 7 u 8 dígitos"),
+  phone: z.string().max(50).optional(),
+  email: z.string().email().optional(),
+});
+
+customersRouter.post("/", zValidator("json", createBody), async (c) => {
+  const db = createDb(c.env);
+  const data = c.req.valid("json");
+  // El DNI filtra duplicados (regla del negocio: no repetir personas)
+  const existing = await findCustomerByDni(db, data.dni);
+  if (existing) throw conflict("Ya existe un cliente con ese DNI");
+
+  const { customerId } = await createQuickCustomer(db, data);
+  const customer = await getCustomerById(db, customerId);
+  return c.json(customer, 201);
+});
+
+customersRouter.get("/:id/invoices", async (c) => {
+  const db = createDb(c.env);
+  const rows = await listInvoices(db, { customerId: c.req.param("id") });
+  return c.json(
+    rows.map((r) => ({
+      ...r,
+      totalAmount: r.totalAmount != null ? Number(r.totalAmount) : null,
+    })),
+  );
+});
+
+export { customersRouter };

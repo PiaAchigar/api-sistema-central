@@ -9,11 +9,16 @@ compatibility_flags = ["nodejs_compat"]
 binding = "HYPERDRIVE"
 id = "7e802994d43e47b0b038a50423291f8f"
 
-# Completar antes de `wrangler dev` con la connection string directa de Supabase
-# (la que entrega Supabase en Project Settings > Database > Connection string).
-# Formato: postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres
-# localConnectionString = ""
+# En dev apunta al Postgres local de docker-compose (npm run db:up).
+# Para desarrollar contra Supabase real, NO editar esto: exportar la variable
+# WRANGLER_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE con la connection
+# string directa de Supabase (pisa este valor y no queda commiteada).
+localConnectionString = "postgresql://piubella:piubella@localhost:5499/piubella"
 
-# Variables de entorno no secretas (opcional)
-# [vars]
-# ENVIRONMENT = "development"
+# Variables de entorno no secretas
+[vars]
+ARCA_MODE = "mock"          # "mock" | "afip"
+ARCA_POS = "2"              # punto de venta (0002)
+ARCA_INVOICE_TYPE = "C"     # monotributo emite Factura C
+# Para ARCA_MODE="afip", definir como secretos (wrangler secret put / .dev.vars):
+#   AFIP_CUIT, AFIP_SDK_TOKEN
