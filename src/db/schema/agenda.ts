@@ -50,6 +50,9 @@ export const service = pgTable("service", {
   requiresMachine: boolean("requires_machine"),
   estimatedDurationMinutes: integer("estimated_duration_minutes"),
   isActive: boolean("is_active"),
+  isVisible: boolean("is_visible"),
+  webImageR2Path: varchar("web_image_r2_path", { length: 500 }),
+  webSortOrder: integer("web_sort_order"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

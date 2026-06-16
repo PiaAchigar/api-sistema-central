@@ -52,6 +52,7 @@ export const customers = pgTable("customers", {
 
 export const users = pgTable("users", {
   id: id(),
+  authId: uuid("auth_id"),
   email: varchar("email", { length: 255 }),
   fullName: varchar("full_name", { length: 255 }),
   role: varchar("role", { length: 50 }), // admin | accountant | sales | operator
@@ -64,6 +65,8 @@ export const companyConfig = pgTable("company_config", {
   id: id(),
   companyName: varchar("company_name", { length: 255 }),
   companyDescription: varchar("company_description", { length: 255 }),
+  heroTitle: varchar("hero_title", { length: 255 }),
+  heroSubtitle: varchar("hero_subtitle", { length: 500 }),
   aboutUs: text("about_us"),
   address: varchar("address", { length: 255 }),
   phone: varchar("phone", { length: 50 }),

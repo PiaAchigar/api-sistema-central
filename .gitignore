@@ -18,3 +18,5 @@ worker-configuration.d.ts
 .vscode
 .idea
 .DS_Store
+
+pnpm-lock.yaml
