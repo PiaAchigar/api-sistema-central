@@ -22,6 +22,14 @@ END $$;
 -- ── COLUMNA NUEVA en `users`: vincula con Supabase Auth (auth.users.id)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_id UUID UNIQUE;
 
+-- ── COLUMNAS NUEVAS en `service_providers`: datos personales y laborales
+ALTER TABLE service_providers ADD COLUMN IF NOT EXISTS dni         VARCHAR(50);
+ALTER TABLE service_providers ADD COLUMN IF NOT EXISTS cuit        VARCHAR(50);
+ALTER TABLE service_providers ADD COLUMN IF NOT EXISTS birthdate   DATE;
+ALTER TABLE service_providers ADD COLUMN IF NOT EXISTS address     VARCHAR(255);
+ALTER TABLE service_providers ADD COLUMN IF NOT EXISTS postal_code VARCHAR(20);
+ALTER TABLE service_providers ADD COLUMN IF NOT EXISTS cv_url      TEXT;
+
 -- ── COLUMNAS NUEVAS en `service`: visibilidad y presencia en piubella_web
 ALTER TABLE service ADD COLUMN IF NOT EXISTS is_visible        BOOLEAN NOT NULL DEFAULT true;
 ALTER TABLE service ADD COLUMN IF NOT EXISTS web_image_r2_path VARCHAR(500);

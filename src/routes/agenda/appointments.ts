@@ -5,6 +5,7 @@ import { createDb } from "../../db/client";
 import {
   createAppointment,
   listAppointmentsByDay,
+  rescheduleAppointment,
   updateAppointmentStatus,
 } from "../../services/appointments.service";
 import type { AppBindings } from "../../env";
@@ -37,6 +38,8 @@ const createBody = z.object({
   start: z.string().datetime({ offset: true }),
   priceMode: z.enum(["list", "cash"]).optional(),
   notes: z.string().max(1000).optional(),
+  status: z.enum(["scheduled", "reserved"]).optional(),
+  expiryMinutes: z.number().int().min(5).max(480).optional(),
 });
 
 appointmentsRouter.post("/", zValidator("json", createBody), async (c) => {
@@ -46,13 +49,23 @@ appointmentsRouter.post("/", zValidator("json", createBody), async (c) => {
 });
 
 const patchBody = z.object({
-  status: z.enum(["scheduled", "completed", "cancelled", "no_show"]).optional(),
+  status: z.enum(["reserved", "scheduled", "completed", "cancelled", "no_show"]).optional(),
   notes: z.string().max(1000).optional(),
 });
 
 appointmentsRouter.patch("/:id", zValidator("json", patchBody), async (c) => {
   const db = createDb(c.env);
   const updated = await updateAppointmentStatus(db, c.req.param("id"), c.req.valid("json"));
+  return c.json(updated);
+});
+
+const rescheduleBody = z.object({
+  newStart: z.string().datetime({ offset: true }),
+});
+
+appointmentsRouter.patch("/:id/reschedule", zValidator("json", rescheduleBody), async (c) => {
+  const db      = createDb(c.env);
+  const updated = await rescheduleAppointment(db, c.req.param("id"), c.req.valid("json").newStart);
   return c.json(updated);
 });
 

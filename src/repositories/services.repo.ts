@@ -6,6 +6,7 @@ import {
   service,
   serviceCategory,
   serviceMachine,
+  serviceProviderService,
 } from "../db/schema";
 
 const serviceSummary = {
@@ -61,6 +62,28 @@ export async function getCategoriesForServices(db: Db, serviceIds: string[]) {
     .from(serviceCategory)
     .innerJoin(categories, eq(categories.id, serviceCategory.categoryId))
     .where(inArray(serviceCategory.serviceId, serviceIds));
+}
+
+/** Servicios activos que ofrece una prestadora (acuerdo activo + servicio activo). */
+export async function listServicesForProvider(db: Db, providerId: string) {
+  return db
+    .select({
+      id: service.id,
+      name: service.name,
+      estimatedDurationMinutes: service.estimatedDurationMinutes,
+      unitPriceList: service.unitPriceList,
+      unitPriceCash: service.unitPriceCash,
+    })
+    .from(serviceProviderService)
+    .innerJoin(service, eq(service.id, serviceProviderService.serviceId))
+    .where(
+      and(
+        eq(serviceProviderService.serviceProviderId, providerId),
+        eq(serviceProviderService.isActive, true),
+        eq(service.isActive, true),
+      ),
+    )
+    .orderBy(asc(service.name));
 }
 
 /** Máquinas habilitadas para un servicio (activas, primarias primero). */

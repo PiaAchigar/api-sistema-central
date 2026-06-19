@@ -26,6 +26,7 @@ import {
   getOpenHoursForDay,
   getSaturdaySchedules,
   getWeeklyAvailability,
+  listActiveProviders,
 } from "../repositories/providers.repo";
 import { getMachinesForService, getServiceById } from "../repositories/services.repo";
 
@@ -221,6 +222,78 @@ export async function loadAvailabilityContext(
     busyByMachine,
     requiresMachine: svc.requiresMachine === true,
   };
+}
+
+export type ProviderDaySchedule = {
+  providerId: string;
+  windows: Interval[]; // en minutos locales ART; vacío = no trabaja ese día
+};
+
+/**
+ * Horario de trabajo de cada proveedora activa para un día dado.
+ * Considera: horario semanal, sábados específicos, excepciones y horario del local.
+ * No filtra por servicio — sirve para pintar el fondo del grid de la agenda.
+ */
+export async function getProviderSchedules(db: Db, date: string): Promise<ProviderDaySchedule[]> {
+  const dow = dayOfWeek(date);
+  const openRow = await getOpenHoursForDay(db, dow);
+  if (!openRow || openRow.isOpen === false || !openRow.openingTime || !openRow.closingTime) {
+    return [];
+  }
+  const localWindow: Interval = {
+    start: timeToMinutes(openRow.openingTime),
+    end:   timeToMinutes(openRow.closingTime),
+  };
+
+  const providers = await listActiveProviders(db);
+  const providerIds = providers.map((p) => p.id);
+
+  const baseWindows = new Map<string, Interval[]>();
+  if (dow === 6) {
+    const saturdays = await getSaturdaySchedules(db, providerIds, date);
+    for (const s of saturdays) {
+      if (s.isWorking && s.workStartTime && s.workEndTime && s.providerId) {
+        baseWindows.set(s.providerId, [
+          { start: timeToMinutes(s.workStartTime), end: timeToMinutes(s.workEndTime) },
+        ]);
+      }
+    }
+  } else {
+    const weekly = await getWeeklyAvailability(db, providerIds, dow, date);
+    for (const w of weekly) {
+      if (!w.providerId || !w.workStartTime || !w.workEndTime) continue;
+      const list = baseWindows.get(w.providerId) ?? [];
+      list.push({ start: timeToMinutes(w.workStartTime), end: timeToMinutes(w.workEndTime) });
+      baseWindows.set(w.providerId, list);
+    }
+  }
+
+  const exceptions = await getExceptionsForDate(db, providerIds, date);
+  for (const ex of exceptions) {
+    if (!ex.providerId) continue;
+    const current = baseWindows.get(ex.providerId) ?? [];
+    const hasOverride = ex.timeOverrideStart && ex.timeOverrideEnd;
+    if (ex.isWorking === false) {
+      baseWindows.set(
+        ex.providerId,
+        hasOverride
+          ? subtractAll(current, [{
+              start: timeToMinutes(ex.timeOverrideStart!),
+              end:   timeToMinutes(ex.timeOverrideEnd!),
+            }])
+          : [],
+      );
+    } else if (hasOverride) {
+      baseWindows.set(ex.providerId, [
+        { start: timeToMinutes(ex.timeOverrideStart!), end: timeToMinutes(ex.timeOverrideEnd!) },
+      ]);
+    }
+  }
+
+  return providers.map((p) => ({
+    providerId: p.id,
+    windows:    intersect(merge(baseWindows.get(p.id) ?? []), localWindow),
+  }));
 }
 
 export async function getAvailability(

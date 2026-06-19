@@ -4,11 +4,13 @@ import { z } from "zod";
 import { createDb } from "../../db/client";
 import { notFound } from "../../lib/errors";
 import { getActiveAgreementsForService, listActiveProviders } from "../../repositories/providers.repo";
+import { getProviderSchedules } from "../../services/availability.service";
 import {
   getCategoriesForServices,
   getMachinesForService,
   getServiceById,
   listServices,
+  listServicesForProvider,
 } from "../../repositories/services.repo";
 import { todayLocal } from "../../lib/time";
 import type { AppBindings } from "../../env";
@@ -79,5 +81,27 @@ providersRouter.get(
     return c.json(await listActiveProviders(db, serviceId));
   },
 );
+
+providersRouter.get(
+  "/schedule",
+  zValidator("query", z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })),
+  async (c) => {
+    const db = createDb(c.env);
+    const schedules = await getProviderSchedules(db, c.req.valid("query").date);
+    return c.json(schedules);
+  },
+);
+
+providersRouter.get("/:id/services", async (c) => {
+  const db = createDb(c.env);
+  const rows = await listServicesForProvider(db, c.req.param("id"));
+  return c.json(
+    rows.map((r) => ({
+      ...r,
+      unitPriceList: r.unitPriceList != null ? Number(r.unitPriceList) : null,
+      unitPriceCash: r.unitPriceCash != null ? Number(r.unitPriceCash) : null,
+    })),
+  );
+});
 
 export { providersRouter };

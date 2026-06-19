@@ -59,14 +59,21 @@ export const service = pgTable("service", {
 
 export const serviceProviders = pgTable("service_providers", {
   id: id(),
+  userId: uuid("user_id"),
   fullName: varchar("full_name", { length: 255 }),
   email: varchar("email", { length: 255 }),
   phone: varchar("phone", { length: 50 }),
+  dni: varchar("dni", { length: 50 }),
+  cuit: varchar("cuit", { length: 50 }),
+  birthdate: date("birthdate"),
+  address: varchar("address", { length: 255 }),
+  postalCode: varchar("postal_code", { length: 20 }),
   specialties: text("specialties"),
   hireDate: date("hire_date"),
   endDate: date("end_date"),
   status: varchar("status", { length: 50 }),
   hourlyRate: decimal("hourly_rate", { precision: 10, scale: 2 }),
+  cvUrl: text("cv_url"),
   notes: text("notes"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -175,7 +182,8 @@ export const appointments = pgTable("appointments", {
   appointmentEnd: timestamp("appointment_end"),
   durationMinutes: integer("duration_minutes"),
   servicePrice: decimal("service_price", { precision: 10, scale: 2 }),
-  status: varchar("status", { length: 50 }), // scheduled | completed | cancelled | no_show
+  status: varchar("status", { length: 50 }), // reserved | scheduled | completed | cancelled | no_show
+  reservationExpiresAt: timestamp("reservation_expires_at"), // solo relevante en status='reserved'
   // Snapshots congelados al completar el turno (no se recalculan si cambia el acuerdo)
   providerPaymentType: varchar("provider_payment_type", { length: 50 }),
   providerRate: decimal("provider_rate", { precision: 10, scale: 2 }),

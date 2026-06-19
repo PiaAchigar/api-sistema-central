@@ -22,6 +22,8 @@ export type CreateAppointmentInput = {
   start: string; // ISO datetime
   priceMode?: "list" | "cash";
   notes?: string;
+  status?: "scheduled" | "reserved";
+  expiryMinutes?: number; // solo para status='reserved'; default 60
 };
 
 export async function createAppointment(db: Db, input: CreateAppointmentInput) {
@@ -102,6 +104,12 @@ export async function createAppointment(db: Db, input: CreateAppointmentInput) {
       }
     }
 
+    const apptStatus = input.status ?? "scheduled";
+    const reservationExpiresAt =
+      apptStatus === "reserved"
+        ? new Date(Date.now() + (input.expiryMinutes ?? 60) * 60_000)
+        : null;
+
     return insertAppointment(tx, {
       customerId: input.customerId,
       serviceProviderId: input.providerId,
@@ -111,7 +119,8 @@ export async function createAppointment(db: Db, input: CreateAppointmentInput) {
       appointmentEnd: endDate,
       durationMinutes: ctx.durationMinutes,
       servicePrice,
-      status: "scheduled",
+      status: apptStatus,
+      reservationExpiresAt,
       notes: input.notes ?? null,
     });
   });
@@ -125,7 +134,7 @@ export async function listAppointmentsByDay(
   return listAppointmentsByRange(db, localDayRangeUtc(date), filters);
 }
 
-const VALID_STATUSES = ["scheduled", "completed", "cancelled", "no_show"];
+const VALID_STATUSES = ["reserved", "scheduled", "completed", "cancelled", "no_show"];
 
 export async function updateAppointmentStatus(
   db: Db,
@@ -145,8 +154,12 @@ export async function updateAppointmentStatus(
     }
     values.status = changes.status;
 
-    // Al completar se congela el snapshot de pago a la proveedora: si mañana
-    // cambia el acuerdo, los turnos ya liquidados no se mueven.
+    // Al confirmar una reserva → limpiar la fecha de expiración
+    if (changes.status === "scheduled" && appt.status === "reserved") {
+      values.reservationExpiresAt = null;
+    }
+
+    // Al completar se congela el snapshot de pago a la proveedora
     if (changes.status === "completed" && appt.status !== "completed") {
       const snapshot = await computeProviderEarning(db, appt);
       Object.assign(values, snapshot);
@@ -154,6 +167,48 @@ export async function updateAppointmentStatus(
   }
 
   return updateAppointment(db, id, values);
+}
+
+export async function rescheduleAppointment(db: Db, id: string, newStart: string) {
+  const startDate = new Date(newStart);
+  if (Number.isNaN(startDate.getTime())) throw badRequest("Fecha de inicio inválida");
+
+  const appt = await getAppointmentById(db, id);
+  if (!appt) throw notFound("Appointment");
+  if (appt.status === "completed") throw conflict("Un turno completado no puede reagendarse");
+  if (!appt.serviceId || !appt.serviceProviderId) throw badRequest("Turno sin servicio o proveedora");
+
+  const localDate = utcToLocalDateString(startDate);
+  const ctx = await loadAvailabilityContext(db, appt.serviceId, localDate, appt.serviceProviderId);
+  if (!ctx.open) throw conflict("El local está cerrado ese día");
+  if (ctx.providers.length === 0) throw conflict("La proveedora no está disponible ese día");
+
+  const startMin = utcToLocalMinutes(startDate);
+  const requested: Interval = { start: startMin, end: startMin + ctx.durationMinutes };
+  const endDate = new Date(startDate.getTime() + ctx.durationMinutes * 60_000);
+
+  const freeWindows = ctx.freeWindowsByProvider.get(appt.serviceProviderId) ?? [];
+  const fits = freeWindows.some((w) => requested.start >= w.start && requested.end <= w.end);
+  if (!fits) throw conflict("La proveedora no tiene ese horario disponible");
+
+  return db.transaction(async (tx) => {
+    const clashes = await getOverlappingAppointments(
+      tx,
+      { providerId: appt.serviceProviderId! },
+      startDate,
+      endDate,
+    );
+    const realClashes = clashes.filter((c) => c.id !== id);
+    if (realClashes.length > 0) throw conflict("El horario acaba de ser tomado por otro turno");
+
+    return updateAppointment(tx, id, {
+      appointmentStart:      startDate,
+      appointmentEnd:        endDate,
+      durationMinutes:       ctx.durationMinutes,
+      status:                "scheduled",
+      reservationExpiresAt:  null,
+    });
+  });
 }
 
 export async function computeProviderEarning(

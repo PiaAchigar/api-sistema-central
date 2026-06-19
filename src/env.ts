@@ -4,7 +4,7 @@ export type Variables = {
   userRole: string | null;
 };
 
-export type AppBindings = Env & {
+export type AppBindings = Omit<Env, "ARCA_MODE"> & {
   /** JWT secret de Supabase — obligatorio en prod, opcional en dev local (ver .dev.vars). */
   SUPABASE_JWT_SECRET?: string;
   /** "mock" emite CAE falsos; "afip" usa el cliente real (requiere AFIP_*). */

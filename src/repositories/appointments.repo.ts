@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, gte, inArray, lt, notInArray } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNotNull, lt, not, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   appointments,
@@ -9,8 +9,25 @@ import {
   serviceProviders,
 } from "../db/schema";
 
-/** Estados que NO bloquean disponibilidad. */
+/** Estados que nunca bloquean disponibilidad. */
 export const NON_BLOCKING_STATUSES = ["cancelled", "no_show"];
+
+/**
+ * Condición Drizzle: el turno SÍ ocupa agenda (bloquea disponibilidad).
+ * Excluye: cancelled, no_show y reserved cuyo reservation_expires_at ya venció.
+ */
+function isBlocking() {
+  return not(
+    or(
+      inArray(appointments.status, NON_BLOCKING_STATUSES),
+      and(
+        eq(appointments.status, "reserved"),
+        isNotNull(appointments.reservationExpiresAt),
+        lt(appointments.reservationExpiresAt, sql`now()`),
+      ),
+    )!,
+  );
+}
 
 type Tx = Pick<Db, "select" | "insert" | "update">;
 
@@ -34,7 +51,7 @@ export async function getBusyAppointmentsForProviders(
         inArray(appointments.serviceProviderId, providerIds),
         gte(appointments.appointmentStart, range.start),
         lt(appointments.appointmentStart, range.end),
-        notInArray(appointments.status, NON_BLOCKING_STATUSES),
+        isBlocking(),
       ),
     );
 }
@@ -58,7 +75,7 @@ export async function getBusyAppointmentsForMachines(
         inArray(appointments.machineId, machineIds),
         gte(appointments.appointmentStart, range.start),
         lt(appointments.appointmentStart, range.end),
-        notInArray(appointments.status, NON_BLOCKING_STATUSES),
+        isBlocking(),
       ),
     );
 }
@@ -76,7 +93,7 @@ export async function getOverlappingAppointments(
   const conditions = [
     lt(appointments.appointmentStart, end),
     gt(appointments.appointmentEnd, start),
-    notInArray(appointments.status, NON_BLOCKING_STATUSES),
+    isBlocking(),
   ];
   if (target.providerId) {
     conditions.push(eq(appointments.serviceProviderId, target.providerId));
@@ -111,6 +128,7 @@ export async function listAppointmentsByRange(
       durationMinutes: appointments.durationMinutes,
       servicePrice: appointments.servicePrice,
       status: appointments.status,
+      reservationExpiresAt: appointments.reservationExpiresAt,
       notes: appointments.notes,
       providerPaymentType: appointments.providerPaymentType,
       providerRate: appointments.providerRate,

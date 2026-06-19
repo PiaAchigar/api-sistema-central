@@ -10,7 +10,9 @@ async function verifySupabaseJWT(
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
-    const [headerB64, payloadB64, sigB64] = parts;
+    const headerB64 = parts[0]!;
+    const payloadB64 = parts[1]!;
+    const sigB64 = parts[2]!;
 
     const enc = new TextEncoder();
     const key = await crypto.subtle.importKey(
@@ -57,7 +59,7 @@ export const auth: MiddlewareHandler<HonoCtx> = async (c, next) => {
     const payload = await verifySupabaseJWT(token, c.env.SUPABASE_JWT_SECRET);
     if (payload) {
       c.set("userId", (payload.sub as string) ?? null);
-      const meta = payload.user_metadata as { role?: string } | undefined;
+      const meta = payload.app_metadata as { role?: string } | undefined;
       c.set("userRole", meta?.role ?? null);
     }
   }
