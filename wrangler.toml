@@ -20,5 +20,12 @@ localConnectionString = "postgresql://piubella:piubella@localhost:5499/piubella"
 ARCA_MODE = "mock"          # "mock" | "afip"
 ARCA_POS = "2"              # punto de venta (0002)
 ARCA_INVOICE_TYPE = "C"     # monotributo emite Factura C
-# Para ARCA_MODE="afip", definir como secretos (wrangler secret put / .dev.vars):
-#   AFIP_CUIT, AFIP_SDK_TOKEN
+
+# Secretos — NO van en este archivo. Configurar con:
+#   wrangler secret put SUPABASE_JWT_SECRET   ← JWT secret de Supabase (Settings > API > JWT Secret)
+#   wrangler secret put API_KEY               ← API key estática (para backend-to-backend / dev)
+#   wrangler secret put AFIP_CUIT             ← solo si ARCA_MODE="afip"
+#   wrangler secret put AFIP_SDK_TOKEN        ← solo si ARCA_MODE="afip"
+# Para dev local, crear .dev.vars (no commitear) con:
+#   SUPABASE_JWT_SECRET=your-local-or-supabase-jwt-secret
+#   API_KEY=fcac8522-f474-4d29-bd4f-92913a816541
