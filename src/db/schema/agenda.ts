@@ -11,6 +11,7 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 
+
 // Las tablas se crearon sin DEFAULTs en Postgres (ver migrations/1.0.0/init.sql),
 // por eso id/created_at/updated_at se generan en runtime con $defaultFn.
 const id = () => uuid("id").primaryKey().$defaultFn(() => crypto.randomUUID());
@@ -202,4 +203,29 @@ export const openHours = pgTable("open_hours", {
   notes: text("notes"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+});
+
+export const promotions = pgTable("promotions", {
+  id: id(),
+  name: varchar("name", { length: 255 }),
+  description: text("description"),
+  promotionType: varchar("promotion_type", { length: 50 }),
+  discountPercentage: decimal("discount_percentage", { precision: 5, scale: 2 }),
+  discountAmount: decimal("discount_amount", { precision: 10, scale: 2 }),
+  validFrom: date("valid_from"),
+  validUntil: date("valid_until"),
+  status: varchar("status", { length: 50 }), // active | inactive | expired
+  usageLimit: integer("usage_limit"),
+  timesUsed: integer("times_used"),
+  notes: text("notes"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const promotionService = pgTable("promotion_service", {
+  id: id(),
+  promotionId: uuid("promotion_id"),
+  serviceId: uuid("service_id"),
+  notes: text("notes"),
+  createdAt: createdAt(),
 });
