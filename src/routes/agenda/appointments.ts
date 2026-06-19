@@ -8,9 +8,10 @@ import {
   rescheduleAppointment,
   updateAppointmentStatus,
 } from "../../services/appointments.service";
-import type { AppBindings } from "../../env";
+import { requireAuth } from "../../middleware/auth";
+import type { AppBindings, Variables } from "../../env";
 
-const appointmentsRouter = new Hono<{ Bindings: AppBindings }>();
+const appointmentsRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 
 const listQuery = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -18,7 +19,7 @@ const listQuery = z.object({
   status: z.enum(["scheduled", "completed", "cancelled", "no_show"]).optional(),
 });
 
-appointmentsRouter.get("/", zValidator("query", listQuery), async (c) => {
+appointmentsRouter.get("/", requireAuth, zValidator("query", listQuery), async (c) => {
   const db = createDb(c.env);
   const { date, ...filters } = c.req.valid("query");
   const rows = await listAppointmentsByDay(db, date, filters);
@@ -53,7 +54,7 @@ const patchBody = z.object({
   notes: z.string().max(1000).optional(),
 });
 
-appointmentsRouter.patch("/:id", zValidator("json", patchBody), async (c) => {
+appointmentsRouter.patch("/:id", requireAuth, zValidator("json", patchBody), async (c) => {
   const db = createDb(c.env);
   const updated = await updateAppointmentStatus(db, c.req.param("id"), c.req.valid("json"));
   return c.json(updated);
@@ -63,7 +64,7 @@ const rescheduleBody = z.object({
   newStart: z.string().datetime({ offset: true }),
 });
 
-appointmentsRouter.patch("/:id/reschedule", zValidator("json", rescheduleBody), async (c) => {
+appointmentsRouter.patch("/:id/reschedule", requireAuth, zValidator("json", rescheduleBody), async (c) => {
   const db      = createDb(c.env);
   const updated = await rescheduleAppointment(db, c.req.param("id"), c.req.valid("json").newStart);
   return c.json(updated);

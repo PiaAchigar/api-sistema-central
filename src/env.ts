@@ -7,6 +7,8 @@ export type Variables = {
 export type AppBindings = Omit<Env, "ARCA_MODE"> & {
   /** JWT secret de Supabase — obligatorio en prod, opcional en dev local (ver .dev.vars). */
   SUPABASE_JWT_SECRET?: string;
+  /** API key estática — acepta x-api-key header o Bearer token. Asigna role=admin. */
+  API_KEY?: string;
   /** "mock" emite CAE falsos; "afip" usa el cliente real (requiere AFIP_*). */
   ARCA_MODE?: "mock" | "afip";
   /** Punto de venta ARCA (ej: 2 → "0002"). */

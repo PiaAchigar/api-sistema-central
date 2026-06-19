@@ -10,7 +10,17 @@ app.use("*", requestLogger);
 app.use(
   "*",
   cors({
-    origin: "*",
+    origin: (origin) => {
+      if (!origin) return null;
+      if (
+        origin === "http://localhost:3000" ||
+        origin === "http://localhost:5173" ||
+        /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)
+      ) {
+        return origin;
+      }
+      return null;
+    },
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
     maxAge: 86400,

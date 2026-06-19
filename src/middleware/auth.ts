@@ -53,6 +53,21 @@ export const auth: MiddlewareHandler<HonoCtx> = async (c, next) => {
   c.set("userId", null);
   c.set("userRole", null);
 
+  // API key estática (x-api-key o Bearer con la key)
+  if (c.env.API_KEY) {
+    const apiKey =
+      c.req.header("x-api-key") ??
+      (c.req.header("Authorization")?.startsWith("Bearer ")
+        ? c.req.header("Authorization")!.slice(7)
+        : undefined);
+    if (apiKey === c.env.API_KEY) {
+      c.set("userId", "api-key");
+      c.set("userRole", "admin");
+      return next();
+    }
+  }
+
+  // JWT de Supabase
   const authHeader = c.req.header("Authorization");
   if (c.env.SUPABASE_JWT_SECRET && authHeader?.startsWith("Bearer ")) {
     const token = authHeader.slice(7);

@@ -5,9 +5,12 @@ import { commissionsRouter } from "./commissions";
 import { customersRouter } from "./customers";
 import { invoicesRouter } from "./invoices";
 import { paymentsRouter } from "./payments";
-import type { AppBindings } from "../../env";
+import { requireAuth } from "../../middleware/auth";
+import type { AppBindings, Variables } from "../../env";
 
-const billing = new Hono<{ Bindings: AppBindings }>();
+const billing = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
+
+billing.use("*", requireAuth);
 
 billing.route("/customers", customersRouter);
 billing.route("/checkout", checkoutRouter);
