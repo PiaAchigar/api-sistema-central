@@ -2,8 +2,17 @@ import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { promotions, promotionService, service } from "../db/schema";
 
-export async function listActivePromotions(db: Db) {
+export async function listActivePromotions(
+  db: Db,
+  filters: { featured?: boolean } = {},
+) {
   const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+
+  const conditions = [
+    eq(promotions.status, "active"),
+    or(isNull(promotions.validUntil), sql`${promotions.validUntil} >= ${today}::date`),
+  ];
+  if (filters.featured) conditions.push(eq(promotions.isFeatured, true));
 
   const activePromos = await db
     .select({
@@ -15,17 +24,10 @@ export async function listActivePromotions(db: Db) {
       discountAmount: promotions.discountAmount,
       validFrom: promotions.validFrom,
       validUntil: promotions.validUntil,
+      isFeatured: promotions.isFeatured,
     })
     .from(promotions)
-    .where(
-      and(
-        eq(promotions.status, "active"),
-        or(
-          isNull(promotions.validUntil),
-          sql`${promotions.validUntil} >= ${today}::date`,
-        ),
-      ),
-    )
+    .where(and(...conditions))
     .orderBy(asc(promotions.name));
 
   if (activePromos.length === 0) return [];
@@ -70,4 +72,18 @@ export async function listActivePromotions(db: Db) {
       estimatedDurationMinutes: s.estimatedDurationMinutes,
     })),
   }));
+}
+
+export async function updatePromotionFeatured(
+  db: Db,
+  id: string,
+  isFeatured: boolean,
+) {
+  const result = await db
+    .update(promotions)
+    .set({ isFeatured })
+    .where(eq(promotions.id, id))
+    .returning({ id: promotions.id, isFeatured: promotions.isFeatured });
+
+  return result[0] ?? null;
 }

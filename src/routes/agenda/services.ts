@@ -3,6 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
 import { notFound } from "../../lib/errors";
+import { auth, requireAuth } from "../../middleware/auth";
 import { getActiveAgreementsForService, listActiveProviders } from "../../repositories/providers.repo";
 import { getProviderSchedules } from "../../services/availability.service";
 import {
@@ -11,6 +12,7 @@ import {
   getServiceById,
   listServices,
   listServicesForProvider,
+  updateServiceWebSettings,
 } from "../../repositories/services.repo";
 import { todayLocal } from "../../lib/time";
 import type { AppBindings } from "../../env";
@@ -20,12 +22,17 @@ const services = new Hono<{ Bindings: AppBindings }>();
 const listQuery = z.object({
   categoryId: z.string().uuid().optional(),
   q: z.string().max(100).optional(),
+  featured: z.string().optional().transform((v) => v === "true"),
 });
 
 services.get("/", zValidator("query", listQuery), async (c) => {
   const db = createDb(c.env);
   const filters = c.req.valid("query");
-  const rows = await listServices(db, filters);
+  const rows = await listServices(db, {
+    categoryId: filters.categoryId,
+    q: filters.q,
+    featured: filters.featured,
+  });
 
   const categoryRows = await getCategoriesForServices(db, rows.map((r) => r.id));
   const categoriesByService = new Map<string, { id: string; name: string | null }[]>();
@@ -66,6 +73,20 @@ services.get("/:id", async (c) => {
     machines,
     providers: providers.map((p) => ({ id: p.providerId, name: p.providerName })),
   });
+});
+
+const patchServiceBody = z.object({
+  isFeatured: z.boolean().optional(),
+  webSortOrder: z.number().int().min(0).optional(),
+});
+
+services.patch("/:id", auth, requireAuth, zValidator("json", patchServiceBody), async (c) => {
+  const db = createDb(c.env);
+  const id = c.req.param("id");
+  const patch = c.req.valid("json");
+  const updated = await updateServiceWebSettings(db, id, patch);
+  if (!updated) return c.json({ error: "Service not found" }, 404);
+  return c.json(updated);
 });
 
 export { services };

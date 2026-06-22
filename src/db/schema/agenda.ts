@@ -52,6 +52,7 @@ export const service = pgTable("service", {
   estimatedDurationMinutes: integer("estimated_duration_minutes"),
   isActive: boolean("is_active"),
   isVisible: boolean("is_visible"),
+  isFeatured: boolean("is_featured"),
   webImageR2Path: varchar("web_image_r2_path", { length: 500 }),
   webSortOrder: integer("web_sort_order"),
   createdAt: createdAt(),
@@ -215,6 +216,7 @@ export const promotions = pgTable("promotions", {
   validFrom: date("valid_from"),
   validUntil: date("valid_until"),
   status: varchar("status", { length: 50 }), // active | inactive | expired
+  isFeatured: boolean("is_featured"),
   usageLimit: integer("usage_limit"),
   timesUsed: integer("times_used"),
   notes: text("notes"),

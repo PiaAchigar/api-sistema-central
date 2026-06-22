@@ -20,30 +20,33 @@ const serviceSummary = {
   requiresOperator: service.requiresOperator,
   requiresMachine: service.requiresMachine,
   estimatedDurationMinutes: service.estimatedDurationMinutes,
+  isFeatured: service.isFeatured,
+  isVisible: service.isVisible,
+  webSortOrder: service.webSortOrder,
 };
 
 export async function listServices(
   db: Db,
-  filters: { categoryId?: string; q?: string },
+  filters: { categoryId?: string; q?: string; featured?: boolean },
 ) {
   const conditions = [eq(service.isActive, true)];
   if (filters.q) conditions.push(ilike(service.name, `%${filters.q}%`));
+  if (filters.featured) conditions.push(eq(service.isFeatured, true));
 
   if (filters.categoryId) {
-    const rows = await db
+    return db
       .select(serviceSummary)
       .from(service)
       .innerJoin(serviceCategory, eq(serviceCategory.serviceId, service.id))
       .where(and(...conditions, eq(serviceCategory.categoryId, filters.categoryId)))
-      .orderBy(asc(service.name));
-    return rows;
+      .orderBy(asc(service.webSortOrder), asc(service.name));
   }
 
   return db
     .select(serviceSummary)
     .from(service)
     .where(and(...conditions))
-    .orderBy(asc(service.name));
+    .orderBy(asc(service.webSortOrder), asc(service.name));
 }
 
 export async function getServiceById(db: Db, id: string) {
@@ -62,6 +65,27 @@ export async function getCategoriesForServices(db: Db, serviceIds: string[]) {
     .from(serviceCategory)
     .innerJoin(categories, eq(categories.id, serviceCategory.categoryId))
     .where(inArray(serviceCategory.serviceId, serviceIds));
+}
+
+export async function updateServiceWebSettings(
+  db: Db,
+  id: string,
+  patch: { isFeatured?: boolean; webSortOrder?: number },
+) {
+  const result = await db
+    .update(service)
+    .set({
+      ...(patch.isFeatured !== undefined && { isFeatured: patch.isFeatured }),
+      ...(patch.webSortOrder !== undefined && { webSortOrder: patch.webSortOrder }),
+    })
+    .where(eq(service.id, id))
+    .returning({
+      id: service.id,
+      isFeatured: service.isFeatured,
+      webSortOrder: service.webSortOrder,
+    });
+
+  return result[0] ?? null;
 }
 
 /** Servicios activos que ofrece una prestadora (acuerdo activo + servicio activo). */
