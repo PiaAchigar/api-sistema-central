@@ -5,8 +5,12 @@ export type Variables = {
 };
 
 export type AppBindings = Omit<Env, "ARCA_MODE"> & {
-  /** JWT secret de Supabase — obligatorio en prod, opcional en dev local (ver .dev.vars). */
-  SUPABASE_JWT_SECRET?: string;
+  /**
+   * URL base del proyecto Supabase (ej: https://xxxx.supabase.co).
+   * Se usa para verificar los access tokens (ES256) contra el JWKS público
+   * en `${SUPABASE_URL}/auth/v1/.well-known/jwks.json`. No es secreto.
+   */
+  SUPABASE_URL?: string;
   /** API key estática — acepta x-api-key header o Bearer token. Asigna role=admin. */
   API_KEY?: string;
   /** "mock" emite CAE falsos; "afip" usa el cliente real (requiere AFIP_*). */

@@ -20,12 +20,15 @@ localConnectionString = "postgresql://piubella:piubella@localhost:5499/piubella"
 ARCA_MODE = "mock"          # "mock" | "afip"
 ARCA_POS = "2"              # punto de venta (0002)
 ARCA_INVOICE_TYPE = "C"     # monotributo emite Factura C
+# URL del proyecto Supabase. Se usa para verificar los access tokens (ES256)
+# contra el JWKS público. No es secreto. Setear el mismo valor en producción.
+SUPABASE_URL = "https://pfemndbftxhlcvyhpbfg.supabase.co"
 
 # Secretos — NO van en este archivo. Configurar con:
-#   wrangler secret put SUPABASE_JWT_SECRET   ← JWT secret de Supabase (Settings > API > JWT Secret)
 #   wrangler secret put API_KEY               ← API key estática (para backend-to-backend / dev)
 #   wrangler secret put AFIP_CUIT             ← solo si ARCA_MODE="afip"
 #   wrangler secret put AFIP_SDK_TOKEN        ← solo si ARCA_MODE="afip"
 # Para dev local, crear .dev.vars (no commitear) con:
-#   SUPABASE_JWT_SECRET=your-local-or-supabase-jwt-secret
+#   SUPABASE_URL=https://pfemndbftxhlcvyhpbfg.supabase.co
 #   API_KEY=fcac8522-f474-4d29-bd4f-92913a816541
+# Nota: SUPABASE_JWT_SECRET quedó obsoleto (los tokens son ES256, no HMAC).

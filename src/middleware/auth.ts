@@ -1,47 +1,38 @@
 import type { MiddlewareHandler } from "hono";
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import type { AppBindings, Variables } from "../env";
 
 type HonoCtx = { Bindings: AppBindings; Variables: Variables };
 
+/**
+ * Cache del JWKSet a nivel módulo, keyed por issuer.
+ * Supabase firma los access tokens con ES256 (claves asimétricas), por eso se
+ * valida contra el JWKS público del proyecto y NO con un secreto HMAC.
+ * `createRemoteJWKSet` cachea las claves internamente (con cooldown ante rotación).
+ */
+const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+
+function getJwks(supabaseUrl: string) {
+  let jwks = jwksCache.get(supabaseUrl);
+  if (!jwks) {
+    jwks = createRemoteJWKSet(
+      new URL(`${supabaseUrl}/auth/v1/.well-known/jwks.json`),
+    );
+    jwksCache.set(supabaseUrl, jwks);
+  }
+  return jwks;
+}
+
 async function verifySupabaseJWT(
   token: string,
-  secret: string,
-): Promise<Record<string, unknown> | null> {
+  supabaseUrl: string,
+): Promise<JWTPayload | null> {
   try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-    const headerB64 = parts[0]!;
-    const payloadB64 = parts[1]!;
-    const sigB64 = parts[2]!;
-
-    const enc = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-      "raw",
-      enc.encode(secret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["verify"],
-    );
-
-    const sig = Uint8Array.from(
-      atob(sigB64.replace(/-/g, "+").replace(/_/g, "/")),
-      (ch) => ch.charCodeAt(0),
-    );
-    const valid = await crypto.subtle.verify(
-      "HMAC",
-      key,
-      sig,
-      enc.encode(`${headerB64}.${payloadB64}`),
-    );
-    if (!valid) return null;
-
-    const payload = JSON.parse(
-      atob(payloadB64.replace(/-/g, "+").replace(/_/g, "/")),
-    ) as Record<string, unknown>;
-
-    if (typeof payload.exp === "number" && payload.exp < Date.now() / 1000) {
-      return null;
-    }
+    const issuer = `${supabaseUrl}/auth/v1`;
+    const { payload } = await jwtVerify(token, getJwks(supabaseUrl), {
+      issuer,
+      audience: "authenticated",
+    });
     return payload;
   } catch {
     return null;
@@ -67,13 +58,13 @@ export const auth: MiddlewareHandler<HonoCtx> = async (c, next) => {
     }
   }
 
-  // JWT de Supabase
+  // JWT de Supabase (ES256, verificado contra el JWKS del proyecto)
   const authHeader = c.req.header("Authorization");
-  if (c.env.SUPABASE_JWT_SECRET && authHeader?.startsWith("Bearer ")) {
+  if (c.env.SUPABASE_URL && authHeader?.startsWith("Bearer ")) {
     const token = authHeader.slice(7);
-    const payload = await verifySupabaseJWT(token, c.env.SUPABASE_JWT_SECRET);
+    const payload = await verifySupabaseJWT(token, c.env.SUPABASE_URL);
     if (payload) {
-      c.set("userId", (payload.sub as string) ?? null);
+      c.set("userId", payload.sub ?? null);
       const meta = payload.app_metadata as { role?: string } | undefined;
       c.set("userRole", meta?.role ?? null);
     }
