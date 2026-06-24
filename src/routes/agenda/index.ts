@@ -5,6 +5,7 @@ import { categoriesRouter } from "./categories";
 import { companyConfigRouter } from "./company-config";
 import { promotionsRouter } from "./promotions";
 import { providersRouter, services } from "./services";
+import { trainings } from "./trainings";
 import type { AppBindings } from "../../env";
 
 const agenda = new Hono<{ Bindings: AppBindings }>();
@@ -16,5 +17,6 @@ agenda.route("/appointments", appointmentsRouter);
 agenda.route("/providers", providersRouter);
 agenda.route("/company-config", companyConfigRouter);
 agenda.route("/promotions", promotionsRouter);
+agenda.route("/trainings", trainings);
 
 export { agenda };

@@ -59,6 +59,30 @@ export const service = pgTable("service", {
   updatedAt: updatedAt(),
 });
 
+export const training = pgTable("training", {
+  id: id(),
+  name: varchar("name", { length: 255 }),
+  description: text("description"),
+  modality: varchar("modality", { length: 50 }), // in_person, online, hybrid
+  location: varchar("location", { length: 255 }),
+  totalSessions: integer("total_sessions"),
+  durationPerSessionMinutes: integer("duration_per_session_minutes"),
+  prerequisitesText: text("prerequisites_text"),
+  maxParticipants: integer("max_participants"),
+  includesCertification: boolean("includes_certification"),
+  certificationTitle: varchar("certification_title", { length: 255 }),
+  listPrice: decimal("list_price", { precision: 10, scale: 2 }),
+  cashPrice: decimal("cash_price", { precision: 10, scale: 2 }),
+  taxCategory: varchar("tax_category", { length: 50 }),
+  isActive: boolean("is_active"),
+  isVisible: boolean("is_visible"),
+  isFeatured: boolean("is_featured"),
+  webImageR2Path: varchar("web_image_r2_path", { length: 500 }),
+  webSortOrder: integer("web_sort_order"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
 export const serviceProviders = pgTable("service_providers", {
   id: id(),
   userId: uuid("user_id"),

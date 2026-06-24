@@ -28,6 +28,32 @@ INSERT INTO service_category (service_id, category_id, created_at)
 VALUES ('aaaaaaaa-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222222', now()),
        ('aaaaaaaa-0000-0000-0000-000000000002', '11111111-1111-1111-1111-111111111111', now());
 
+-- ─── Capacitaciones (training) — data real de ejemplo, SOLO local ───────────────
+INSERT INTO training (
+  id, name, description, modality, location, total_sessions,
+  duration_per_session_minutes, prerequisites_text, max_participants,
+  includes_certification, certification_title, list_price, cash_price,
+  tax_category, is_active, is_visible, is_featured, web_sort_order, created_at
+) VALUES
+(
+  gen_random_uuid(),
+  'Instructorado de Pilates Reformer',
+  'Formación profesional para convertirte en instructor/a de Pilates Reformer (teórico + práctico): metodología, biomecánica, armado de rutinas y evaluación final. Salida laboral asegurada. Cursada: 3 meses, sábados de 13 a 17 hs.',
+  'in_person', 'México 1120, 2do piso - El Talar de Pacheco', 12,
+  240, NULL, NULL,
+  true, 'Instructor/a de Pilates Reformer', 403000.00, 350000.00,
+  'exempt', true, true, true, 1, now()
+),
+(
+  gen_random_uuid(),
+  'Workshop Tren Superior - Capacitación Profesional',
+  'Workshop intensivo para crear rutinas seguras y efectivas en alumnos con dolor o disfunciones de hombro, codo, muñeca y mano. Prácticas directas + armado de rutinas.',
+  'in_person', 'México 1120, 2do piso - El Talar de Pacheco', 1,
+  240, 'Instructores de Pilates y educadores físicos', NULL,
+  false, NULL, 62000.00, 58000.00,
+  'exempt', true, true, true, 2, now()
+);
+
 -- Proveedoras
 INSERT INTO service_providers (id, full_name, status, hourly_rate, created_at)
 VALUES ('bbbbbbbb-0000-0000-0000-000000000001', 'Romina Suárez', 'active', 8000, now()),

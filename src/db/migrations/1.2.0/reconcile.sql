@@ -35,6 +35,11 @@ ALTER TABLE service ADD COLUMN IF NOT EXISTS is_visible        BOOLEAN NOT NULL 
 ALTER TABLE service ADD COLUMN IF NOT EXISTS web_image_r2_path VARCHAR(500);
 ALTER TABLE service ADD COLUMN IF NOT EXISTS web_sort_order    INTEGER NOT NULL DEFAULT 0;
 
+-- ── "Destacados" en la home (feature featured-services). Estaban en Supabase y en
+--    el schema Drizzle pero faltaban acá, por eso un db:reset rompía /services y /promotions.
+ALTER TABLE service    ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT false;
+ALTER TABLE promotions ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT false;
+
 -- ── COLUMNAS NUEVAS en `company_config`: hero de la home de piubella_web
 ALTER TABLE company_config ADD COLUMN IF NOT EXISTS hero_title    VARCHAR(255);
 ALTER TABLE company_config ADD COLUMN IF NOT EXISTS hero_subtitle VARCHAR(500);
