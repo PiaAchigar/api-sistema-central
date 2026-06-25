@@ -33,6 +33,15 @@ export async function listTrainings(db: Db, filters: { featured?: boolean }) {
     .orderBy(asc(training.webSortOrder), asc(training.name));
 }
 
+/** Lista para administración: todas las capacitaciones activas, visibles o no. */
+export async function listTrainingsAdmin(db: Db) {
+  return db
+    .select(trainingSummary)
+    .from(training)
+    .where(eq(training.isActive, true))
+    .orderBy(asc(training.webSortOrder), asc(training.name));
+}
+
 export async function getTrainingById(db: Db, id: string) {
   const rows = await db
     .select(trainingSummary)
@@ -45,18 +54,20 @@ export async function getTrainingById(db: Db, id: string) {
 export async function updateTrainingWebSettings(
   db: Db,
   id: string,
-  patch: { isFeatured?: boolean; webSortOrder?: number },
+  patch: { isFeatured?: boolean; isVisible?: boolean; webSortOrder?: number },
 ) {
   const result = await db
     .update(training)
     .set({
       ...(patch.isFeatured !== undefined && { isFeatured: patch.isFeatured }),
+      ...(patch.isVisible !== undefined && { isVisible: patch.isVisible }),
       ...(patch.webSortOrder !== undefined && { webSortOrder: patch.webSortOrder }),
     })
     .where(eq(training.id, id))
     .returning({
       id: training.id,
       isFeatured: training.isFeatured,
+      isVisible: training.isVisible,
       webSortOrder: training.webSortOrder,
     });
 

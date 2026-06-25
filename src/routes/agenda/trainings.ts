@@ -2,13 +2,16 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
-import { auth, requireAuth } from "../../middleware/auth";
+import { auth, requireAuth, requireRole } from "../../middleware/auth";
 import {
   getTrainingById,
   listTrainings,
+  listTrainingsAdmin,
   updateTrainingWebSettings,
 } from "../../repositories/trainings.repo";
 import type { AppBindings } from "../../env";
+
+const STAFF = ["admin", "manager", "operator"] as const;
 
 const trainings = new Hono<{ Bindings: AppBindings }>();
 
@@ -31,6 +34,13 @@ trainings.get("/", zValidator("query", listQuery), async (c) => {
   return c.json(rows.map(serializePrices));
 });
 
+// Lista para administración: todas las activas (visibles o no).
+trainings.get("/admin", auth, requireAuth, requireRole(...STAFF), async (c) => {
+  const db = createDb(c.env);
+  const rows = await listTrainingsAdmin(db);
+  return c.json(rows.map(serializePrices));
+});
+
 trainings.get("/:id", async (c) => {
   const db = createDb(c.env);
   const row = await getTrainingById(db, c.req.param("id"));
@@ -41,11 +51,15 @@ trainings.get("/:id", async (c) => {
 const patchBody = z
   .object({
     isFeatured: z.boolean().optional(),
+    isVisible: z.boolean().optional(),
     webSortOrder: z.number().int().min(0).optional(),
   })
   .refine(
-    (data) => data.isFeatured !== undefined || data.webSortOrder !== undefined,
-    { message: "At least one field (isFeatured or webSortOrder) is required" },
+    (data) =>
+      data.isFeatured !== undefined ||
+      data.isVisible !== undefined ||
+      data.webSortOrder !== undefined,
+    { message: "At least one field (isFeatured, isVisible or webSortOrder) is required" },
   );
 
 trainings.patch("/:id", auth, requireAuth, zValidator("json", patchBody), async (c) => {

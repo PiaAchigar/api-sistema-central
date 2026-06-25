@@ -1,6 +1,7 @@
 import {
   boolean,
   date,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -76,4 +77,17 @@ export const companyConfig = pgTable("company_config", {
   facebook: varchar("facebook", { length: 255 }),
   whatsapp: varchar("whatsapp", { length: 50 }),
   lastModifiedAt: timestamp("last_modified_at"),
+});
+
+export const faq = pgTable("faq", {
+  id: id(),
+  question: varchar("question", { length: 255 }),
+  answer: text("answer"),
+  category: varchar("category", { length: 100 }),
+  isActive: boolean("is_active"),
+  displayOrder: integer("display_order"),
+  keywords: text("keywords").array(),
+  createdByUserId: uuid("created_by_user_id"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
 });
