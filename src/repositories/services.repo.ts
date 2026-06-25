@@ -127,6 +127,25 @@ export async function getMachinesForService(db: Db, serviceId: string) {
     .where(and(eq(serviceMachine.serviceId, serviceId), eq(machines.status, "active")));
 }
 
+/** Máquina principal (service_machine.is_primary_machine) por servicio, en batch. */
+export async function getPrimaryMachinesForServices(db: Db, serviceIds: string[]) {
+  if (serviceIds.length === 0) return [];
+  return db
+    .select({
+      serviceId: serviceMachine.serviceId,
+      machineId: machines.id,
+      machineName: machines.name,
+    })
+    .from(serviceMachine)
+    .innerJoin(machines, eq(machines.id, serviceMachine.machineId))
+    .where(
+      and(
+        inArray(serviceMachine.serviceId, serviceIds),
+        eq(serviceMachine.isPrimaryMachine, true),
+      ),
+    );
+}
+
 // ── Mutaciones (CRUD admin) ────────────────────────────────────────────────────
 
 type ServiceWritable = {

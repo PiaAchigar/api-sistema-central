@@ -172,10 +172,32 @@ export const machines = pgTable("machines", {
   description: text("description"),
   equipmentType: varchar("equipment_type", { length: 100 }),
   requiresOperator: boolean("requires_operator"),
-  status: varchar("status", { length: 50 }),
+  hourlyCost: decimal("hourly_cost", { precision: 10, scale: 2 }),
+  status: varchar("status", { length: 50 }), // active | inactive | maintenance
+  purchaseDate: date("purchase_date"),
+  weightKg: decimal("weight_kg", { precision: 10, scale: 2 }),
+  dimensions: varchar("dimensions", { length: 100 }),
   quantity: integer("quantity"),
+  maintenanceCount: integer("maintenance_count"),
+  lastMaintenanceAt: timestamp("last_maintenance_at"),
+  maintenanceNotes: text("maintenance_notes"),
+  supplierInfo: text("supplier_info"),
+  warrantyCost: decimal("warranty_cost", { precision: 10, scale: 2 }),
+  warrantyExpiry: timestamp("warranty_expiry"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+});
+
+export const machineMaintenanceLogs = pgTable("machine_maintenance_logs", {
+  id: id(),
+  machineId: uuid("machine_id"),
+  maintenanceDate: date("maintenance_date"),
+  maintenanceType: varchar("maintenance_type", { length: 50 }), // preventive | corrective | repair
+  description: text("description"),
+  cost: decimal("cost", { precision: 10, scale: 2 }),
+  performedBy: varchar("performed_by", { length: 255 }),
+  notes: text("notes"),
+  createdAt: createdAt(),
 });
 
 export const serviceMachine = pgTable("service_machine", {

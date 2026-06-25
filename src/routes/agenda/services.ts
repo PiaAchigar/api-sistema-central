@@ -17,12 +17,14 @@ import {
   createService,
   getCategoriesForServices,
   getMachinesForService,
+  getPrimaryMachinesForServices,
   getServiceById,
   listServices,
   listServicesForProvider,
   setServiceActive,
   updateService,
 } from "../../repositories/services.repo";
+import { setServicePrimaryMachine } from "../../repositories/machines.repo";
 import { todayLocal } from "../../lib/time";
 import type { AppBindings, Variables } from "../../env";
 
@@ -51,7 +53,12 @@ services.get("/", auth, zValidator("query", listQuery), async (c) => {
     includeInactive: canSeeInactive && filters.includeInactive === "true",
   });
 
-  const categoryRows = await getCategoriesForServices(db, rows.map((r) => r.id));
+  const serviceIds = rows.map((r) => r.id);
+  const [categoryRows, primaryMachineRows] = await Promise.all([
+    getCategoriesForServices(db, serviceIds),
+    getPrimaryMachinesForServices(db, serviceIds),
+  ]);
+
   const categoriesByService = new Map<string, { id: string; name: string | null }[]>();
   for (const cr of categoryRows) {
     if (!cr.serviceId) continue;
@@ -60,12 +67,18 @@ services.get("/", auth, zValidator("query", listQuery), async (c) => {
     categoriesByService.set(cr.serviceId, list);
   }
 
+  const machineByService = new Map<string, { id: string; name: string | null }>();
+  for (const m of primaryMachineRows) {
+    if (m.serviceId) machineByService.set(m.serviceId, { id: m.machineId, name: m.machineName });
+  }
+
   return c.json(
     rows.map((r) => ({
       ...r,
       unitPriceList: r.unitPriceList != null ? Number(r.unitPriceList) : null,
       unitPriceCash: r.unitPriceCash != null ? Number(r.unitPriceCash) : null,
       categories: categoriesByService.get(r.id) ?? [],
+      primaryMachine: machineByService.get(r.id) ?? null,
     })),
   );
 });
@@ -107,6 +120,8 @@ const serviceBody = z.object({
   isVisible: z.boolean().nullish(),
   isFeatured: z.boolean().optional(),
   webSortOrder: z.number().int().min(0).nullish(),
+  /** Máquina principal del servicio (gestiona service_machine). null = quitar. */
+  machineId: z.string().uuid().nullish(),
 });
 
 /** Serializa decimales (string en DB) a number para el cliente. */
@@ -121,15 +136,20 @@ function serializeService<T extends { unitPriceList?: unknown; unitPriceCash?: u
 // Crear — solo admin.
 services.post("/", auth, requireAuth, requireAdmin, zValidator("json", serviceBody.extend({ name: z.string().min(1).max(255) })), async (c) => {
   const db = createDb(c.env);
-  const created = await createService(db, c.req.valid("json"));
+  const { machineId, ...body } = c.req.valid("json");
+  const created = await createService(db, body);
+  if (machineId !== undefined) await setServicePrimaryMachine(db, created.id, machineId ?? null);
   return c.json(serializeService(created), 201);
 });
 
 // Editar — admin + manager + operator.
 services.patch("/:id", auth, requireAuth, requireRole(...STAFF), zValidator("json", serviceBody), async (c) => {
   const db = createDb(c.env);
-  const updated = await updateService(db, c.req.param("id"), c.req.valid("json"));
+  const id = c.req.param("id");
+  const { machineId, ...patch } = c.req.valid("json");
+  const updated = await updateService(db, id, patch);
   if (!updated) throw notFound("Service");
+  if (machineId !== undefined) await setServicePrimaryMachine(db, id, machineId ?? null);
   return c.json(serializeService(updated));
 });
 
