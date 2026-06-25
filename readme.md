@@ -149,7 +149,7 @@ Despues correr `npm run db:generate` y `npm run db:migrate`.
 
 Rutas montadas en `src/routes/index.ts`:
 
-- **`/api/agenda`** — `services`, `services/:id`, `categories` (árbol), `availability/:serviceId?date=`, `appointments` (GET por día / POST con validaciones / PATCH estado con snapshot de comisión), `providers`, `company-config`.
+- **`/api/agenda`** — `services`, `services/:id`, `categories` (árbol), `availability/:serviceId?date=`, `appointments` (GET por día / POST con validaciones / PATCH estado con snapshot de comisión), `providers`, `company-config`, `trainings`, `machines`, `web` (galería + testimonios), `faq`.
 - **`/api/billing`** — `customers` (búsqueda + alta rápida), `customers/:id/invoices`, `checkout` (cobranza orquestada), `invoices` (+ `:id/emit`, `emit-batch`, `:id/cancel`), `payments`, `cash-register` (+ `daily-report`), `commissions`.
 
 Capas: `routes` (Hono + zod) → `services` (lógica de negocio) → `repositories` (Drizzle). El adapter ARCA está en `src/arca/` (interfaz `ArcaClient`, mock por default).
@@ -186,9 +186,81 @@ JWT de Supabase (`app_metadata.role`) — o de la `API_KEY` estática, que cuent
 > El `GET /api/agenda/providers` público (booking) **no cambió**: devuelve solo campos
 > mínimos sin PII. La data sensible va por `GET /api/agenda/providers/all` (staff).
 
+#### Máquinas (Pieza 3B)
+
+CRUD de **Máquinas** + log de **mantenimientos** (`machines`, `machine_maintenance_logs`).
+Mismo modelo de permisos. Archivar = `status='inactive'`. Crear un log recalcula
+`maintenance_count` / `last_maintenance_at`.
+
+| Método | Ruta | Permiso | Descripción |
+|---|---|---|---|
+| `GET` | `/api/agenda/machines?includeInactive=true` | staff | Lista (oculta `inactive` sin el flag) |
+| `POST` | `/api/agenda/machines` | admin | Crear máquina |
+| `PATCH` | `/api/agenda/machines/:id` | staff | Editar |
+| `DELETE` | `/api/agenda/machines/:id` | admin | Archivar (`status='inactive'`) |
+| `POST` | `/api/agenda/machines/:id/restore` | admin | Restaurar |
+| `GET` | `/api/agenda/machines/:id/logs` | staff | Historial de mantenimientos |
+| `POST` | `/api/agenda/machines/:id/logs` | staff | Registrar mantenimiento |
+| `PATCH` | `/api/agenda/machines/log/:logId` | staff | Editar mantenimiento |
+| `DELETE` | `/api/agenda/machines/log/:logId` | admin | Eliminar mantenimiento (físico) |
+
+> El servicio se vincula a su máquina principal vía `service_machine`: el `PATCH/POST`
+> de `services` acepta `machineId` (reemplaza el vínculo) y el `GET` devuelve `primaryMachine`.
+
+### Sitio Web — CRUD admin (Pieza 4)
+
+Contenido de la web pública: visibilidad, destacados, textos, galería, testimonios y FAQ.
+Mismo modelo de permisos (editar = staff; crear/archivar/eliminar = admin).
+
+| Método | Ruta | Permiso | Descripción |
+|---|---|---|---|
+| `GET` | `/api/agenda/trainings/admin` | staff | Capacitaciones (todas las activas, visibles o no) |
+| `PATCH` | `/api/agenda/trainings/:id` | staff | `isVisible`, `isFeatured`, `webSortOrder` |
+| `GET` | `/api/agenda/company-config` | público | Textos + datos de empresa + `openHours` |
+| `PATCH` | `/api/agenda/company-config` | staff | Editar textos/datos (`heroTitle`, `aboutUs`, contacto, redes, …) |
+| `GET` | `/api/agenda/web/gallery` | staff | Items de galería |
+| `POST` | `/api/agenda/web/gallery` | admin | Alta de imagen (por `publicUrl`) |
+| `PATCH` | `/api/agenda/web/gallery/:id` | staff | Editar / toggle `isVisible` |
+| `DELETE` | `/api/agenda/web/gallery/:id` | admin | Eliminar (físico) |
+| `GET` | `/api/agenda/web/testimonials` | staff | Testimonios |
+| `POST` | `/api/agenda/web/testimonials` | admin | Alta |
+| `PATCH` | `/api/agenda/web/testimonials/:id` | staff | Editar / toggle `isVisible` |
+| `DELETE` | `/api/agenda/web/testimonials/:id` | admin | Eliminar (físico) |
+| `GET` | `/api/agenda/faq?includeInactive=true` | staff | FAQ (oculta `is_active=false` sin el flag) |
+| `POST` | `/api/agenda/faq` | admin | Crear FAQ |
+| `PATCH` | `/api/agenda/faq/:id` | staff | Editar (`question`, `answer`, `category`, `keywords`, …) |
+| `DELETE` | `/api/agenda/faq/:id` | admin | Archivar (`is_active=false`) |
+| `POST` | `/api/agenda/faq/:id/restore` | admin | Restaurar |
+
+> **Sin migración nueva:** todas las tablas/columnas ya existen en `init.sql` /
+> `1.2.0/reconcile.sql` (`faq`, `web_gallery`, `web_testimonials`, `company_config.hero_*`,
+> `about_us`, campos web de `training`). Pieza 4 solo agregó el mapeo Drizzle de `faq`.
+> La galería v1 usa `public_url` (URL externa); la subida a Cloudflare R2 queda como sub-tema.
+
+### Configuración (Pieza 5)
+
+Datos de empresa + horarios + gestión de usuarios. **Toda la sección es admin-only.**
+
+| Método | Ruta | Permiso | Descripción |
+|---|---|---|---|
+| `PATCH` | `/api/agenda/company-config/open-hours` | staff | Upsert de horarios por día (`{ days: [{ dayOfWeek, openingTime, closingTime, isOpen }] }`) |
+| `GET` | `/api/users` | admin | Lista de usuarios (Supabase Auth) |
+| `POST` | `/api/users` | admin | Crear usuario (`email`, `password`, `role`) |
+| `PATCH` | `/api/users/:id` | admin | Cambiar rol (`admin`\|`manager`\|`operator`) |
+| `DELETE` | `/api/users/:id` | admin | Eliminar usuario |
+
+> **Gestión de usuarios — requiere `service_role` de Supabase.** Los endpoints `/api/users`
+> usan la Auth Admin API (GoTrue) con el `service_role` (god-mode, **server-side only**).
+> Configurar con `wrangler secret put SUPABASE_SERVICE_ROLE_KEY` (y en local, agregarlo a
+> `.dev.vars`). Si falta, responden **503** con mensaje claro; el resto de Configuración
+> (datos de empresa, horarios) funciona igual. Un admin no puede cambiarse el rol ni borrarse
+> a sí mismo (evita lockout).
+
 > **Pendiente (Pieza 2):** acuerdos proveedora↔servicio (`service_provider_service`,
-> regla "cerrar viejo + crear nuevo"), CRUD de `web_gallery`/`web_testimonials` + textos
-> de `company_config`, y gestión de usuarios (requiere `service_role` de Supabase).
+> regla "cerrar viejo + crear nuevo").
+>
+> **Pendiente (Pieza 5, futuro):** parámetros de reserva (expiración por defecto — necesita
+> columna nueva), ARCA solo-lectura y vista de matriz de roles.
 
 ## ARCA
 

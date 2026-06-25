@@ -1,6 +1,6 @@
 import { HTTPException } from "hono/http-exception";
 
-export type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502;
+export type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502 | 503;
 
 export class AppError extends HTTPException {
   constructor(status: ErrorStatus, message: string, cause?: unknown) {

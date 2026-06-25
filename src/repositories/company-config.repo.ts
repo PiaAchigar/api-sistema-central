@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { companyConfig } from "../db/schema";
+import { companyConfig, openHours } from "../db/schema";
 
 export async function getConfigRow(db: Db) {
   const [row] = await db.select().from(companyConfig).limit(1);
@@ -36,4 +36,41 @@ export async function updateConfig(db: Db, patch: ConfigWritable) {
   }
   const [row] = await db.insert(companyConfig).values(values).returning();
   return row ?? null;
+}
+
+// ── Horarios de atención (open_hours) ────────────────────────────────────────
+
+export type OpenHourInput = {
+  dayOfWeek: number;
+  openingTime?: string | null;
+  closingTime?: string | null;
+  isOpen?: boolean | null;
+};
+
+/** Upsert por día de la semana (0=domingo … 6=sábado). */
+export async function upsertOpenHours(db: Db, days: OpenHourInput[]) {
+  for (const d of days) {
+    const values = {
+      openingTime: d.openingTime ?? null,
+      closingTime: d.closingTime ?? null,
+      isOpen: d.isOpen ?? null,
+    };
+    const updated = await db
+      .update(openHours)
+      .set(values)
+      .where(eq(openHours.dayOfWeek, d.dayOfWeek))
+      .returning({ id: openHours.id });
+    if (updated.length === 0) {
+      await db.insert(openHours).values({ dayOfWeek: d.dayOfWeek, ...values });
+    }
+  }
+  return db
+    .select({
+      dayOfWeek: openHours.dayOfWeek,
+      openingTime: openHours.openingTime,
+      closingTime: openHours.closingTime,
+      isOpen: openHours.isOpen,
+    })
+    .from(openHours)
+    .orderBy(openHours.dayOfWeek);
 }

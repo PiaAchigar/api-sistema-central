@@ -25,9 +25,10 @@ ARCA_INVOICE_TYPE = "C"     # monotributo emite Factura C
 SUPABASE_URL = "https://pfemndbftxhlcvyhpbfg.supabase.co"
 
 # Secretos — NO van en este archivo. Configurar con:
-#   wrangler secret put API_KEY               ← API key estática (para backend-to-backend / dev)
-#   wrangler secret put AFIP_CUIT             ← solo si ARCA_MODE="afip"
-#   wrangler secret put AFIP_SDK_TOKEN        ← solo si ARCA_MODE="afip"
+#   wrangler secret put API_KEY                    ← API key estática (para backend-to-backend / dev)
+#   wrangler secret put SUPABASE_SERVICE_ROLE_KEY  ← gestión de usuarios (Pieza 5, Auth Admin API)
+#   wrangler secret put AFIP_CUIT                  ← solo si ARCA_MODE="afip"
+#   wrangler secret put AFIP_SDK_TOKEN             ← solo si ARCA_MODE="afip"
 # Para dev local, crear .dev.vars (no commitear) con:
 #   SUPABASE_URL=https://pfemndbftxhlcvyhpbfg.supabase.co
 #   API_KEY=fcac8522-f474-4d29-bd4f-92913a816541

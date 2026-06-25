@@ -13,6 +13,12 @@ export type AppBindings = Omit<Env, "ARCA_MODE"> & {
   SUPABASE_URL?: string;
   /** API key estática — acepta x-api-key header o Bearer token. Asigna role=admin. */
   API_KEY?: string;
+  /**
+   * Service role key de Supabase (secreto, server-side only). Habilita la gestión
+   * de usuarios vía Auth Admin API. Configurar con `wrangler secret put
+   * SUPABASE_SERVICE_ROLE_KEY`. Si falta, los endpoints de usuarios responden 503.
+   */
+  SUPABASE_SERVICE_ROLE_KEY?: string;
   /** "mock" emite CAE falsos; "afip" usa el cliente real (requiere AFIP_*). */
   ARCA_MODE?: "mock" | "afip";
   /** Punto de venta ARCA (ej: 2 → "0002"). */

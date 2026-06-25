@@ -3,7 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
 import { getAllOpenHours } from "../../repositories/providers.repo";
-import { getConfigRow, updateConfig } from "../../repositories/company-config.repo";
+import { getConfigRow, updateConfig, upsertOpenHours } from "../../repositories/company-config.repo";
 import { auth, requireAuth, requireRole } from "../../middleware/auth";
 import type { AppBindings, Variables } from "../../env";
 
@@ -60,6 +60,30 @@ companyConfigRouter.patch(
     const db = createDb(c.env);
     const updated = await updateConfig(db, c.req.valid("json"));
     return c.json(serialize(updated));
+  },
+);
+
+const TIME = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+const openHoursBody = z.object({
+  days: z.array(
+    z.object({
+      dayOfWeek: z.number().int().min(0).max(6),
+      openingTime: z.string().regex(TIME).nullish(),
+      closingTime: z.string().regex(TIME).nullish(),
+      isOpen: z.boolean().nullish(),
+    }),
+  ),
+});
+
+companyConfigRouter.patch(
+  "/open-hours",
+  requireAuth,
+  requireRole(...STAFF),
+  zValidator("json", openHoursBody),
+  async (c) => {
+    const db = createDb(c.env);
+    const rows = await upsertOpenHours(db, c.req.valid("json").days);
+    return c.json(rows);
   },
 );
 
