@@ -154,6 +154,42 @@ Rutas montadas en `src/routes/index.ts`:
 
 Capas: `routes` (Hono + zod) → `services` (lógica de negocio) → `repositories` (Drizzle). El adapter ARCA está en `src/arca/` (interfaz `ArcaClient`, mock por default).
 
+### Catálogo — CRUD admin
+
+Administración de **Servicios**, **Categorías** y **Proveedoras**. El permiso se lee del
+JWT de Supabase (`app_metadata.role`) — o de la `API_KEY` estática, que cuenta como
+`admin`. Roles válidos: `admin | manager | operator` (matriz en `reglas_negocio.md`).
+**"Eliminar" = archivar** (soft-delete, regla 1.3): nunca hace `DELETE` físico.
+
+- **Crear / archivar / restaurar** → solo `admin` (`requireAdmin`).
+- **Editar** → `admin`, `manager` u `operator` (`requireRole`).
+- **Listar archivados** (`?includeInactive=true`) → solo staff; se ignora para anónimos.
+
+| Método | Ruta | Permiso | Descripción |
+|---|---|---|---|
+| `POST` | `/api/agenda/categories` | admin | Crear categoría |
+| `PATCH` | `/api/agenda/categories/:id` | staff | Editar (`name`, `description`, `parentCategoryId`, `displayOrder`) |
+| `DELETE` | `/api/agenda/categories/:id` | admin | Archivar (`is_active=false`) |
+| `POST` | `/api/agenda/categories/:id/restore` | admin | Restaurar |
+| `GET` | `/api/agenda/categories?includeInactive=true` | staff | Árbol incluyendo archivadas |
+| `POST` | `/api/agenda/services` | admin | Crear servicio |
+| `PATCH` | `/api/agenda/services/:id` | staff | Editar core + web (`unitPriceList/Cash`, `taxCategory`, `isVisible`, `isFeatured`, `webSortOrder`, …) |
+| `DELETE` | `/api/agenda/services/:id` | admin | Archivar (`is_active=false`) |
+| `POST` | `/api/agenda/services/:id/restore` | admin | Restaurar |
+| `GET` | `/api/agenda/services?includeInactive=true` | staff | Lista incluyendo archivados |
+| `GET` | `/api/agenda/providers/all?includeInactive=true` | staff | Lista admin (incluye datos de contacto / PII) |
+| `POST` | `/api/agenda/providers` | admin | Crear proveedora |
+| `PATCH` | `/api/agenda/providers/:id` | staff | Editar (`fullName`, `email`, `phone`, `dni`, `cuit`, `specialties`, `notes`, `address`, …) |
+| `DELETE` | `/api/agenda/providers/:id` | admin | Archivar (`status='inactive'`) |
+| `POST` | `/api/agenda/providers/:id/restore` | admin | Restaurar (`status='active'`) |
+
+> El `GET /api/agenda/providers` público (booking) **no cambió**: devuelve solo campos
+> mínimos sin PII. La data sensible va por `GET /api/agenda/providers/all` (staff).
+
+> **Pendiente (Pieza 2):** acuerdos proveedora↔servicio (`service_provider_service`,
+> regla "cerrar viejo + crear nuevo"), CRUD de `web_gallery`/`web_testimonials` + textos
+> de `company_config`, y gestión de usuarios (requiere `service_role` de Supabase).
+
 ## ARCA
 
 `wrangler.toml` define `ARCA_MODE` (`mock` | `afip`), `ARCA_POS` (punto de venta) y `ARCA_INVOICE_TYPE` (`C` para monotributo). El modo `mock` genera CAE falsos y persiste todo en `ARCA_LOGS`, así el flujo completo funciona sin credenciales. Para pasar a real: cuenta en [afipsdk.com](https://docs.afipsdk.com), `wrangler secret put AFIP_CUIT` y `wrangler secret put AFIP_SDK_TOKEN`, y `ARCA_MODE = "afip"` (ver TODOs en `src/arca/afip-client.ts`).

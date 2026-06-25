@@ -88,3 +88,19 @@ export const requireAdmin: MiddlewareHandler<HonoCtx> = async (c, next) => {
   }
   await next();
 };
+
+/**
+ * Rechaza si el rol del usuario no está entre los permitidos. Para acciones
+ * role-aware (ej: editar catálogo = admin + manager + operator, mientras que
+ * crear/archivar queda solo para admin vía `requireAdmin`). Ver matriz de roles
+ * en `reglas_negocio.md`. Siempre usar después de `requireAuth`.
+ */
+export const requireRole =
+  (...roles: string[]): MiddlewareHandler<HonoCtx> =>
+  async (c, next) => {
+    const role = c.get("userRole");
+    if (!role || !roles.includes(role)) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+    await next();
+  };

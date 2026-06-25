@@ -216,3 +216,81 @@ export async function getAllOpenHours(db: Db) {
     .from(openHours)
     .orderBy(asc(openHours.dayOfWeek));
 }
+
+// ── CRUD admin de proveedoras ───────────────────────────────────────────────
+
+const providerFields = {
+  id: serviceProviders.id,
+  fullName: serviceProviders.fullName,
+  email: serviceProviders.email,
+  phone: serviceProviders.phone,
+  dni: serviceProviders.dni,
+  cuit: serviceProviders.cuit,
+  specialties: serviceProviders.specialties,
+  notes: serviceProviders.notes,
+  address: serviceProviders.address,
+  postalCode: serviceProviders.postalCode,
+  status: serviceProviders.status,
+};
+
+/** Lista completa para la vista admin (incluye archivadas si `includeInactive`). */
+export async function listProvidersAdmin(db: Db, includeInactive = false) {
+  const base = db.select(providerFields).from(serviceProviders);
+  const ordered = includeInactive
+    ? base
+    : base.where(eq(serviceProviders.status, "active"));
+  return ordered.orderBy(asc(serviceProviders.fullName));
+}
+
+type ProviderWritable = {
+  fullName?: string;
+  email?: string | null;
+  phone?: string | null;
+  dni?: string | null;
+  cuit?: string | null;
+  specialties?: string | null;
+  notes?: string | null;
+  address?: string | null;
+  postalCode?: string | null;
+};
+
+function toProviderSet(p: ProviderWritable) {
+  return {
+    ...(p.fullName !== undefined && { fullName: p.fullName }),
+    ...(p.email !== undefined && { email: p.email }),
+    ...(p.phone !== undefined && { phone: p.phone }),
+    ...(p.dni !== undefined && { dni: p.dni }),
+    ...(p.cuit !== undefined && { cuit: p.cuit }),
+    ...(p.specialties !== undefined && { specialties: p.specialties }),
+    ...(p.notes !== undefined && { notes: p.notes }),
+    ...(p.address !== undefined && { address: p.address }),
+    ...(p.postalCode !== undefined && { postalCode: p.postalCode }),
+  };
+}
+
+export async function createProvider(db: Db, data: ProviderWritable & { fullName: string }) {
+  const rows = await db
+    .insert(serviceProviders)
+    .values({ ...toProviderSet(data), status: "active" })
+    .returning(providerFields);
+  return rows[0]!;
+}
+
+export async function updateProvider(db: Db, id: string, patch: ProviderWritable) {
+  const rows = await db
+    .update(serviceProviders)
+    .set(toProviderSet(patch))
+    .where(eq(serviceProviders.id, id))
+    .returning(providerFields);
+  return rows[0] ?? null;
+}
+
+/** Soft-delete / restore: cambia `status` (active ↔ inactive), nunca borra (regla 1.3). */
+export async function setProviderStatus(db: Db, id: string, status: "active" | "inactive") {
+  const rows = await db
+    .update(serviceProviders)
+    .set({ status })
+    .where(eq(serviceProviders.id, id))
+    .returning(providerFields);
+  return rows[0] ?? null;
+}

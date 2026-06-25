@@ -1,4 +1,4 @@
-import { and, asc, eq, ilike, inArray } from "drizzle-orm";
+import { and, asc, eq, ilike, inArray, type SQL } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   categories,
@@ -20,6 +20,8 @@ const serviceSummary = {
   requiresOperator: service.requiresOperator,
   requiresMachine: service.requiresMachine,
   estimatedDurationMinutes: service.estimatedDurationMinutes,
+  unitType: service.unitType,
+  isActive: service.isActive,
   isFeatured: service.isFeatured,
   isVisible: service.isVisible,
   webSortOrder: service.webSortOrder,
@@ -27,9 +29,10 @@ const serviceSummary = {
 
 export async function listServices(
   db: Db,
-  filters: { categoryId?: string; q?: string; featured?: boolean },
+  filters: { categoryId?: string; q?: string; featured?: boolean; includeInactive?: boolean },
 ) {
-  const conditions = [eq(service.isActive, true)];
+  const conditions: SQL[] = [];
+  if (!filters.includeInactive) conditions.push(eq(service.isActive, true));
   if (filters.q) conditions.push(ilike(service.name, `%${filters.q}%`));
   if (filters.featured) conditions.push(eq(service.isFeatured, true));
 
@@ -122,4 +125,74 @@ export async function getMachinesForService(db: Db, serviceId: string) {
     .from(serviceMachine)
     .innerJoin(machines, eq(machines.id, serviceMachine.machineId))
     .where(and(eq(serviceMachine.serviceId, serviceId), eq(machines.status, "active")));
+}
+
+// ── Mutaciones (CRUD admin) ────────────────────────────────────────────────────
+
+type ServiceWritable = {
+  name?: string;
+  description?: string | null;
+  code?: string | null;
+  unitPriceList?: number | null;
+  unitPriceCash?: number | null;
+  unitType?: string | null;
+  taxCategory?: string | null;
+  requiresOperator?: boolean | null;
+  requiresMachine?: boolean | null;
+  estimatedDurationMinutes?: number | null;
+  isVisible?: boolean | null;
+  isFeatured?: boolean | null;
+  webSortOrder?: number | null;
+};
+
+/** Construye el `set` parcial; convierte decimales a string (lo que espera drizzle). */
+function toServiceSet(p: ServiceWritable) {
+  return {
+    ...(p.name !== undefined && { name: p.name }),
+    ...(p.description !== undefined && { description: p.description }),
+    ...(p.code !== undefined && { code: p.code }),
+    ...(p.unitPriceList !== undefined && {
+      unitPriceList: p.unitPriceList === null ? null : String(p.unitPriceList),
+    }),
+    ...(p.unitPriceCash !== undefined && {
+      unitPriceCash: p.unitPriceCash === null ? null : String(p.unitPriceCash),
+    }),
+    ...(p.unitType !== undefined && { unitType: p.unitType }),
+    ...(p.taxCategory !== undefined && { taxCategory: p.taxCategory }),
+    ...(p.requiresOperator !== undefined && { requiresOperator: p.requiresOperator }),
+    ...(p.requiresMachine !== undefined && { requiresMachine: p.requiresMachine }),
+    ...(p.estimatedDurationMinutes !== undefined && {
+      estimatedDurationMinutes: p.estimatedDurationMinutes,
+    }),
+    ...(p.isVisible !== undefined && { isVisible: p.isVisible }),
+    ...(p.isFeatured !== undefined && { isFeatured: p.isFeatured }),
+    ...(p.webSortOrder !== undefined && { webSortOrder: p.webSortOrder }),
+  };
+}
+
+export async function createService(db: Db, data: ServiceWritable & { name: string }) {
+  const rows = await db
+    .insert(service)
+    .values({ ...toServiceSet(data), isActive: true })
+    .returning(serviceSummary);
+  return rows[0]!;
+}
+
+export async function updateService(db: Db, id: string, patch: ServiceWritable) {
+  const rows = await db
+    .update(service)
+    .set(toServiceSet(patch))
+    .where(eq(service.id, id))
+    .returning(serviceSummary);
+  return rows[0] ?? null;
+}
+
+/** Soft-delete / restore (regla 1.3). */
+export async function setServiceActive(db: Db, id: string, isActive: boolean) {
+  const rows = await db
+    .update(service)
+    .set({ isActive })
+    .where(eq(service.id, id))
+    .returning(serviceSummary);
+  return rows[0] ?? null;
 }
