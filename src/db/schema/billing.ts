@@ -112,3 +112,20 @@ export const products = pgTable("products", {
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
+
+// Cuentas de MercadoPago. Pertenecen a una service_provider (la dueña entra como
+// proveedora). Relación 1:N: una proveedora puede tener varias cuentas.
+export const mercadopagoAccounts = pgTable("mercadopago_accounts", {
+  id: id(),
+  serviceProviderId: uuid("service_provider_id"),
+  mercadopagoUserId: varchar("mercadopago_user_id", { length: 100 }),
+  accountOwnerName: varchar("account_owner_name", { length: 255 }),
+  accountEmail: varchar("account_email", { length: 255 }),
+  alias: varchar("alias", { length: 255 }),
+  cvu: varchar("cvu", { length: 34 }),
+  accessTokenEncrypted: varchar("access_token_encrypted", { length: 255 }),
+  publicKeyEncrypted: varchar("public_key_encrypted", { length: 255 }),
+  status: varchar("status", { length: 50 }), // active | inactive | pending_verification
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
-import { notFound } from "../../lib/errors";
+import { badRequest, notFound } from "../../lib/errors";
 import { auth, requireAdmin, requireAuth, requireRole } from "../../middleware/auth";
 import {
   createProvider,
@@ -25,6 +25,12 @@ import {
   updateService,
 } from "../../repositories/services.repo";
 import { setServicePrimaryMachine } from "../../repositories/machines.repo";
+import {
+  createMpAccount,
+  deleteMpAccount,
+  listMpAccountsByProvider,
+  updateMpAccount,
+} from "../../repositories/mercadopago.repo";
 import { todayLocal } from "../../lib/time";
 import type { AppBindings, Variables } from "../../env";
 
@@ -276,6 +282,57 @@ providersRouter.get("/:id/services", async (c) => {
       unitPriceCash: r.unitPriceCash != null ? Number(r.unitPriceCash) : null,
     })),
   );
+});
+
+// ── Cuentas de MercadoPago de la proveedora (alias / CVU) ───────────────────
+// Una proveedora puede tener varias cuentas (1:N). Ver reglas_negocio §4.9.
+const mpBody = z.object({
+  alias: z.string().max(255).nullish(),
+  cvu: z.string().max(34).nullish(),
+  accountOwnerName: z.string().max(255).nullish(),
+  accountEmail: z.string().email().max(255).nullish(),
+});
+
+providersRouter.get("/:id/mp-accounts", auth, requireAuth, requireRole(...STAFF), async (c) => {
+  const db = createDb(c.env);
+  return c.json(await listMpAccountsByProvider(db, c.req.param("id")));
+});
+
+providersRouter.post(
+  "/:id/mp-accounts",
+  auth,
+  requireAuth,
+  requireRole(...STAFF),
+  zValidator("json", mpBody),
+  async (c) => {
+    const body = c.req.valid("json");
+    if (!body.alias && !body.cvu) {
+      throw badRequest("Indicá al menos el alias o el CVU.");
+    }
+    const db = createDb(c.env);
+    return c.json(await createMpAccount(db, c.req.param("id"), body), 201);
+  },
+);
+
+providersRouter.patch(
+  "/mp-accounts/:accountId",
+  auth,
+  requireAuth,
+  requireRole(...STAFF),
+  zValidator("json", mpBody),
+  async (c) => {
+    const db = createDb(c.env);
+    const updated = await updateMpAccount(db, c.req.param("accountId"), c.req.valid("json"));
+    if (!updated) throw notFound("MercadopagoAccount");
+    return c.json(updated);
+  },
+);
+
+providersRouter.delete("/mp-accounts/:accountId", auth, requireAuth, requireAdmin, async (c) => {
+  const db = createDb(c.env);
+  const deleted = await deleteMpAccount(db, c.req.param("accountId"));
+  if (!deleted) throw notFound("MercadopagoAccount");
+  return c.json({ ok: true });
 });
 
 export { providersRouter };
