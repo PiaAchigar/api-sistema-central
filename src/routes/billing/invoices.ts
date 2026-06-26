@@ -11,6 +11,7 @@ import {
   getInvoiceDetail,
   listInvoices,
 } from "../../services/invoicing.service";
+import { generateInvoicePdf } from "../../services/invoice-pdf.service";
 import type { AppBindings } from "../../env";
 
 const invoicesRouter = new Hono<{ Bindings: AppBindings }>();
@@ -102,6 +103,11 @@ invoicesRouter.post("/:id/emit", async (c) => {
   const db = createDb(c.env);
   const arca = createArcaClient(c.env);
   return c.json(await emitInvoice(db, arca, c.req.param("id")));
+});
+
+invoicesRouter.get("/:id/pdf", async (c) => {
+  const db = createDb(c.env);
+  return c.json(await generateInvoicePdf(db, c.env, c.req.param("id")));
 });
 
 invoicesRouter.post(

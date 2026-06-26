@@ -21,6 +21,8 @@ export type AppBindings = Omit<Env, "ARCA_MODE"> & {
   SUPABASE_SERVICE_ROLE_KEY?: string;
   /** "mock" emite CAE falsos; "afip" usa el cliente real (requiere AFIP_*). */
   ARCA_MODE?: "mock" | "afip";
+  /** Ambiente del cliente real: "prod" → producción, cualquier otro → homologación. */
+  ARCA_ENV?: "homo" | "prod";
   /** Punto de venta ARCA (ej: 2 → "0002"). */
   ARCA_POS?: string;
   /** Tipo de comprobante por default (monotributo → "C"). */
@@ -28,6 +30,9 @@ export type AppBindings = Omit<Env, "ARCA_MODE"> & {
   /** Credenciales Afip SDK (solo para ARCA_MODE="afip"). */
   AFIP_CUIT?: string;
   AFIP_SDK_TOKEN?: string;
+  /** Certificado X.509 y clave privada (PEM crudo o base64). Solo ARCA_MODE="afip". */
+  AFIP_CERT?: string;
+  AFIP_KEY?: string;
   /** Solo para tests: fuerza fallo del mock ARCA. */
   ARCA_MOCK_FAIL?: string;
 };
