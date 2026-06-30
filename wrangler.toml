@@ -18,6 +18,7 @@ localConnectionString = "postgresql://piubella:piubella@localhost:5499/piubella"
 # Variables de entorno no secretas
 [vars]
 ARCA_MODE = "mock"          # "mock" | "afip"
+ARCA_ENV = "homo"           # "homo" (homologación) | "prod" — solo aplica si ARCA_MODE="afip"
 ARCA_POS = "2"              # punto de venta (0002)
 ARCA_INVOICE_TYPE = "C"     # monotributo emite Factura C
 # URL del proyecto Supabase. Se usa para verificar los access tokens (ES256)
@@ -25,11 +26,14 @@ ARCA_INVOICE_TYPE = "C"     # monotributo emite Factura C
 SUPABASE_URL = "https://pfemndbftxhlcvyhpbfg.supabase.co"
 
 # Secretos — NO van en este archivo. Configurar con:
-#   wrangler secret put API_KEY                    ← API key estática (para backend-to-backend / dev)
-#   wrangler secret put SUPABASE_SERVICE_ROLE_KEY  ← gestión de usuarios (Pieza 5, Auth Admin API)
-#   wrangler secret put AFIP_CUIT                  ← solo si ARCA_MODE="afip"
-#   wrangler secret put AFIP_SDK_TOKEN             ← solo si ARCA_MODE="afip"
+#   wrangler secret put API_KEY               ← API key estática (para backend-to-backend / dev)
+#   wrangler secret put AFIP_CUIT             ← solo si ARCA_MODE="afip"
+#   wrangler secret put AFIP_SDK_TOKEN        ← token de app.afipsdk.com
+#   wrangler secret put AFIP_CERT             ← certificado .crt (pegar PEM o base64)
+#   wrangler secret put AFIP_KEY              ← clave privada .key (pegar PEM o base64)
 # Para dev local, crear .dev.vars (no commitear) con:
 #   SUPABASE_URL=https://pfemndbftxhlcvyhpbfg.supabase.co
 #   API_KEY=fcac8522-f474-4d29-bd4f-92913a816541
+#   AFIP_CERT y AFIP_KEY en .dev.vars: usar base64 en una sola línea
+#   (el PEM multilínea no entra en .dev.vars; ver ARCA_SETUP.md).
 # Nota: SUPABASE_JWT_SECRET quedó obsoleto (los tokens son ES256, no HMAC).

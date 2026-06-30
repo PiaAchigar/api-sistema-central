@@ -14,13 +14,19 @@ export function createArcaClient(env: AppBindings): ArcaConfig {
   const invoiceType = env.ARCA_INVOICE_TYPE ?? "C";
 
   if (env.ARCA_MODE === "afip") {
-    if (!env.AFIP_CUIT || !env.AFIP_SDK_TOKEN) {
+    if (!env.AFIP_CUIT || !env.AFIP_SDK_TOKEN || !env.AFIP_CERT || !env.AFIP_KEY) {
       throw new Error(
-        "ARCA_MODE=afip requiere los secretos AFIP_CUIT y AFIP_SDK_TOKEN",
+        "ARCA_MODE=afip requiere los secretos AFIP_CUIT, AFIP_SDK_TOKEN, AFIP_CERT y AFIP_KEY",
       );
     }
     return {
-      client: new AfipArcaClient(env.AFIP_CUIT, env.AFIP_SDK_TOKEN),
+      client: new AfipArcaClient(
+        env.AFIP_CUIT,
+        env.AFIP_SDK_TOKEN,
+        decodePem(env.AFIP_CERT),
+        decodePem(env.AFIP_KEY),
+        env.ARCA_ENV === "prod",
+      ),
       pointOfSale,
       invoiceType,
     };
@@ -31,4 +37,12 @@ export function createArcaClient(env: AppBindings): ArcaConfig {
     pointOfSale,
     invoiceType,
   };
+}
+
+/**
+ * Acepta PEM crudo (multilínea, ideal para `wrangler secret put` desde archivo)
+ * o base64 (una sola línea, ideal para `.dev.vars`). Devuelve siempre PEM.
+ */
+function decodePem(value: string): string {
+  return value.includes("-----BEGIN") ? value : atob(value.trim());
 }
