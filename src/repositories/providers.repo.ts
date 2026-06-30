@@ -1,5 +1,6 @@
 import { and, asc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import type { Db } from "../db/client";
+import { type AgreementInput, diffAgreements } from "../lib/agreements";
 import {
   openHours,
   providerAvailabilityExceptions,
@@ -293,4 +294,77 @@ export async function setProviderStatus(db: Db, id: string, status: "active" | "
     .where(eq(serviceProviders.id, id))
     .returning(providerFields);
   return rows[0] ?? null;
+}
+
+// ── Acuerdos proveedora↔servicio (service_provider_service) ──────────────────
+
+/** Filas de acuerdo VIGENTES (is_active=true) de un servicio, para editar/reconciliar.
+ *  Incluye el nombre de la proveedora para prefill del modal. */
+export async function listAgreementRowsForService(db: Db, serviceId: string) {
+  const rows = await db
+    .select({
+      serviceProviderId: serviceProviderService.serviceProviderId,
+      providerName: serviceProviders.fullName,
+      paymentType: serviceProviderService.paymentType,
+      rate: serviceProviderService.rate,
+    })
+    .from(serviceProviderService)
+    .innerJoin(serviceProviders, eq(serviceProviders.id, serviceProviderService.serviceProviderId))
+    .where(
+      and(
+        eq(serviceProviderService.serviceId, serviceId),
+        eq(serviceProviderService.isActive, true),
+      ),
+    );
+  return rows.map((r) => ({
+    serviceProviderId: r.serviceProviderId as string,
+    providerName: r.providerName,
+    paymentType: r.paymentType,
+    rate: r.rate != null ? Number(r.rate) : null,
+  }));
+}
+
+/** Reconcilia los acuerdos de un servicio respetando §4 (cerrar viejo + crear nuevo).
+ *  `today` en formato YYYY-MM-DD (lo provee la ruta con todayLocal()). */
+export async function setServiceAgreements(
+  db: Db,
+  serviceId: string,
+  desired: AgreementInput[],
+  today: string,
+) {
+  const current = await listAgreementRowsForService(db, serviceId);
+  const { toCreate, toCloseProviderIds } = diffAgreements(
+    current.map((c) => ({
+      serviceProviderId: c.serviceProviderId,
+      paymentType: c.paymentType,
+      rate: c.rate,
+    })),
+    desired,
+  );
+
+  for (const providerId of toCloseProviderIds) {
+    await db
+      .update(serviceProviderService)
+      .set({ isActive: false, validUntil: today })
+      .where(
+        and(
+          eq(serviceProviderService.serviceId, serviceId),
+          eq(serviceProviderService.serviceProviderId, providerId),
+          eq(serviceProviderService.isActive, true),
+        ),
+      );
+  }
+
+  if (toCreate.length > 0) {
+    await db.insert(serviceProviderService).values(
+      toCreate.map((a) => ({
+        serviceProviderId: a.serviceProviderId,
+        serviceId,
+        paymentType: a.paymentType,
+        rate: a.rate != null ? String(a.rate) : null,
+        validFrom: today,
+        isActive: true,
+      })),
+    );
+  }
 }

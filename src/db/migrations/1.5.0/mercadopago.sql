@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- 1.4.0 — Cuentas de MercadoPago por proveedora de servicio
+-- 1.5.0 — Cuentas de MercadoPago por proveedora de servicio
 -- ════════════════════════════════════════════════════════════════════════════
 -- Modelo: una cuenta MP PERTENECE a una service_provider (la FK va en el lado
 -- "hijo": mercadopago_accounts). Relación 1:N — una proveedora puede tener

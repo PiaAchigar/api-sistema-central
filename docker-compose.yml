@@ -15,7 +15,9 @@ services:
       - ./src/db/migrations/1.2.0/reconcile.sql:/docker-entrypoint-initdb.d/03-reconcile.sql:ro
       - ./src/db/migrations/1.3.0/reservations.sql:/docker-entrypoint-initdb.d/04-reservations.sql:ro
       - ./src/db/migrations/1.4.0/trainings-web.sql:/docker-entrypoint-initdb.d/05-trainings-web.sql:ro
-      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/06-seed.sql:ro
+      - ./src/db/migrations/1.5.0/mercadopago.sql:/docker-entrypoint-initdb.d/06-mercadopago.sql:ro
+      - ./src/db/migrations/1.6.0/promotions.sql:/docker-entrypoint-initdb.d/07-promotions.sql:ro
+      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/08-seed.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]

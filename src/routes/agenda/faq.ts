@@ -3,11 +3,9 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
 import { notFound } from "../../lib/errors";
-import { auth, requireAdmin, requireAuth, requireRole } from "../../middleware/auth";
+import { auth, requireAuth, requirePermission } from "../../middleware/auth";
 import { createFaq, listFaqs, setFaqActive, updateFaq } from "../../repositories/faq.repo";
 import type { AppBindings, Variables } from "../../env";
-
-const STAFF = ["admin", "manager", "operator"] as const;
 
 const faqRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 
@@ -15,7 +13,7 @@ faqRouter.get(
   "/",
   auth,
   requireAuth,
-  requireRole(...STAFF),
+  requirePermission("sitio-web", "view"),
   zValidator("query", z.object({ includeInactive: z.string().optional() })),
   async (c) => {
     const db = createDb(c.env);
@@ -37,7 +35,7 @@ faqRouter.post(
   "/",
   auth,
   requireAuth,
-  requireAdmin,
+  requirePermission("sitio-web", "manage"),
   zValidator("json", faqBody.extend({ question: z.string().min(1).max(255) })),
   async (c) => {
     const db = createDb(c.env);
@@ -49,7 +47,7 @@ faqRouter.patch(
   "/:id",
   auth,
   requireAuth,
-  requireRole(...STAFF),
+  requirePermission("sitio-web", "edit"),
   zValidator("json", faqBody),
   async (c) => {
     const db = createDb(c.env);
@@ -59,14 +57,14 @@ faqRouter.patch(
   },
 );
 
-faqRouter.delete("/:id", auth, requireAuth, requireAdmin, async (c) => {
+faqRouter.delete("/:id", auth, requireAuth, requirePermission("sitio-web", "manage"), async (c) => {
   const db = createDb(c.env);
   const archived = await setFaqActive(db, c.req.param("id"), false);
   if (!archived) throw notFound("Faq");
   return c.json(archived);
 });
 
-faqRouter.post("/:id/restore", auth, requireAuth, requireAdmin, async (c) => {
+faqRouter.post("/:id/restore", auth, requireAuth, requirePermission("sitio-web", "manage"), async (c) => {
   const db = createDb(c.env);
   const restored = await setFaqActive(db, c.req.param("id"), true);
   if (!restored) throw notFound("Faq");

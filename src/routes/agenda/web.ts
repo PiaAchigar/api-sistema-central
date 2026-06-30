@@ -3,7 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
 import { notFound } from "../../lib/errors";
-import { auth, requireAdmin, requireAuth, requireRole } from "../../middleware/auth";
+import { auth, requireAuth, requirePermission } from "../../middleware/auth";
 import {
   createGalleryItem,
   createTestimonial,
@@ -16,12 +16,10 @@ import {
 } from "../../repositories/web.repo";
 import type { AppBindings, Variables } from "../../env";
 
-const STAFF = ["admin", "manager", "operator"] as const;
-
 const webRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 
 // ── Galería ──────────────────────────────────────────────────────────────────
-webRouter.get("/gallery", auth, requireAuth, requireRole(...STAFF), async (c) => {
+webRouter.get("/gallery", auth, requireAuth, requirePermission("sitio-web", "view"), async (c) => {
   const db = createDb(c.env);
   return c.json(await listGallery(db));
 });
@@ -39,7 +37,7 @@ webRouter.post(
   "/gallery",
   auth,
   requireAuth,
-  requireAdmin,
+  requirePermission("sitio-web", "manage"),
   zValidator("json", galleryBody),
   async (c) => {
     const db = createDb(c.env);
@@ -51,7 +49,7 @@ webRouter.patch(
   "/gallery/:id",
   auth,
   requireAuth,
-  requireRole(...STAFF),
+  requirePermission("sitio-web", "edit"),
   zValidator("json", galleryBody),
   async (c) => {
     const db = createDb(c.env);
@@ -61,7 +59,7 @@ webRouter.patch(
   },
 );
 
-webRouter.delete("/gallery/:id", auth, requireAuth, requireAdmin, async (c) => {
+webRouter.delete("/gallery/:id", auth, requireAuth, requirePermission("sitio-web", "manage"), async (c) => {
   const db = createDb(c.env);
   const deleted = await deleteGalleryItem(db, c.req.param("id"));
   if (!deleted) throw notFound("GalleryItem");
@@ -69,7 +67,7 @@ webRouter.delete("/gallery/:id", auth, requireAuth, requireAdmin, async (c) => {
 });
 
 // ── Testimonios ──────────────────────────────────────────────────────────────
-webRouter.get("/testimonials", auth, requireAuth, requireRole(...STAFF), async (c) => {
+webRouter.get("/testimonials", auth, requireAuth, requirePermission("sitio-web", "view"), async (c) => {
   const db = createDb(c.env);
   return c.json(await listTestimonials(db));
 });
@@ -85,7 +83,7 @@ webRouter.post(
   "/testimonials",
   auth,
   requireAuth,
-  requireAdmin,
+  requirePermission("sitio-web", "manage"),
   zValidator("json", testimonialBody),
   async (c) => {
     const db = createDb(c.env);
@@ -97,7 +95,7 @@ webRouter.patch(
   "/testimonials/:id",
   auth,
   requireAuth,
-  requireRole(...STAFF),
+  requirePermission("sitio-web", "edit"),
   zValidator("json", testimonialBody),
   async (c) => {
     const db = createDb(c.env);
@@ -107,7 +105,7 @@ webRouter.patch(
   },
 );
 
-webRouter.delete("/testimonials/:id", auth, requireAuth, requireAdmin, async (c) => {
+webRouter.delete("/testimonials/:id", auth, requireAuth, requirePermission("sitio-web", "manage"), async (c) => {
   const db = createDb(c.env);
   const deleted = await deleteTestimonial(db, c.req.param("id"));
   if (!deleted) throw notFound("Testimonial");

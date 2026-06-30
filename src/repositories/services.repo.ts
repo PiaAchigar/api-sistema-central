@@ -57,6 +57,15 @@ export async function getServiceById(db: Db, id: string) {
   return rows[0] ?? null;
 }
 
+/** Reemplaza las categorías de un servicio (M:N). Patrón delete + insert. */
+export async function setServiceCategories(db: Db, serviceId: string, categoryIds: string[]) {
+  await db.delete(serviceCategory).where(eq(serviceCategory.serviceId, serviceId));
+  if (categoryIds.length === 0) return;
+  await db
+    .insert(serviceCategory)
+    .values(categoryIds.map((categoryId) => ({ serviceId, categoryId })));
+}
+
 export async function getCategoriesForServices(db: Db, serviceIds: string[]) {
   if (serviceIds.length === 0) return [];
   return db

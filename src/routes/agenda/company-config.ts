@@ -4,10 +4,8 @@ import { z } from "zod";
 import { createDb } from "../../db/client";
 import { getAllOpenHours } from "../../repositories/providers.repo";
 import { getConfigRow, updateConfig, upsertOpenHours } from "../../repositories/company-config.repo";
-import { auth, requireAuth, requireRole } from "../../middleware/auth";
+import { auth, requireAuth, requirePermission } from "../../middleware/auth";
 import type { AppBindings, Variables } from "../../env";
-
-const STAFF = ["admin", "manager", "operator"] as const;
 
 const companyConfigRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 
@@ -35,27 +33,24 @@ companyConfigRouter.get("/", async (c) => {
   return c.json({ ...serialize(config), openHours });
 });
 
-const configBody = z.object({
-  companyName: z.string().max(255).nullish(),
-  companyDescription: z.string().max(255).nullish(),
+// ── Branding (sitio-web/edit) ─────────────────────────────────────────────
+const brandingBody = z.object({
   heroTitle: z.string().max(255).nullish(),
   heroSubtitle: z.string().max(500).nullish(),
   aboutUs: z.string().max(10000).nullish(),
-  address: z.string().max(255).nullish(),
-  phone: z.string().max(50).nullish(),
-  email: z.string().max(255).nullish(),
-  website: z.string().max(255).nullish(),
+  companyDescription: z.string().max(255).nullish(),
   instagram: z.string().max(255).nullish(),
   facebook: z.string().max(255).nullish(),
   whatsapp: z.string().max(50).nullish(),
+  website: z.string().max(255).nullish(),
 });
 
 companyConfigRouter.patch(
-  "/",
+  "/branding",
   auth,
   requireAuth,
-  requireRole(...STAFF),
-  zValidator("json", configBody),
+  requirePermission("sitio-web", "edit"),
+  zValidator("json", brandingBody),
   async (c) => {
     const db = createDb(c.env);
     const updated = await updateConfig(db, c.req.valid("json"));
@@ -63,6 +58,28 @@ companyConfigRouter.patch(
   },
 );
 
+// ── Datos de empresa (config-local/edit) ─────────────────────────────────
+const datosBody = z.object({
+  companyName: z.string().max(255).nullish(),
+  address: z.string().max(255).nullish(),
+  phone: z.string().max(50).nullish(),
+  email: z.string().email().max(255).nullish(),
+});
+
+companyConfigRouter.patch(
+  "/datos",
+  auth,
+  requireAuth,
+  requirePermission("config-local", "edit"),
+  zValidator("json", datosBody),
+  async (c) => {
+    const db = createDb(c.env);
+    const updated = await updateConfig(db, c.req.valid("json"));
+    return c.json(serialize(updated));
+  },
+);
+
+// ── Horarios (config-local/edit) ─────────────────────────────────────────
 const TIME = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 const openHoursBody = z.object({
   days: z.array(
@@ -77,8 +94,9 @@ const openHoursBody = z.object({
 
 companyConfigRouter.patch(
   "/open-hours",
+  auth,
   requireAuth,
-  requireRole(...STAFF),
+  requirePermission("config-local", "edit"),
   zValidator("json", openHoursBody),
   async (c) => {
     const db = createDb(c.env);

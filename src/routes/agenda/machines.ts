@@ -3,7 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
 import { notFound } from "../../lib/errors";
-import { auth, requireAdmin, requireAuth, requireRole } from "../../middleware/auth";
+import { auth, requireAuth, requirePermission } from "../../middleware/auth";
 import {
   createMachine,
   createMaintenanceLog,
@@ -68,7 +68,7 @@ machinesRouter.post(
   "/",
   auth,
   requireAuth,
-  requireAdmin,
+  requirePermission("catalogo", "manage"),
   zValidator("json", machineBody.extend({ name: z.string().min(1).max(255) })),
   async (c) => {
     const db = createDb(c.env);
@@ -81,7 +81,7 @@ machinesRouter.patch(
   "/:id",
   auth,
   requireAuth,
-  requireRole(...STAFF),
+  requirePermission("catalogo", "edit"),
   zValidator("json", machineBody),
   async (c) => {
     const db = createDb(c.env);
@@ -91,14 +91,14 @@ machinesRouter.patch(
   },
 );
 
-machinesRouter.delete("/:id", auth, requireAuth, requireAdmin, async (c) => {
+machinesRouter.delete("/:id", auth, requireAuth, requirePermission("catalogo", "manage"), async (c) => {
   const db = createDb(c.env);
   const archived = await setMachineStatus(db, c.req.param("id"), "inactive");
   if (!archived) throw notFound("Machine");
   return c.json(serializeMachine(archived));
 });
 
-machinesRouter.post("/:id/restore", auth, requireAuth, requireAdmin, async (c) => {
+machinesRouter.post("/:id/restore", auth, requireAuth, requirePermission("catalogo", "manage"), async (c) => {
   const db = createDb(c.env);
   const restored = await setMachineStatus(db, c.req.param("id"), "active");
   if (!restored) throw notFound("Machine");
@@ -106,7 +106,7 @@ machinesRouter.post("/:id/restore", auth, requireAuth, requireAdmin, async (c) =
 });
 
 // ── Logs de mantenimiento ───────────────────────────────────────────────────
-machinesRouter.get("/:id/logs", auth, requireAuth, requireRole(...STAFF), async (c) => {
+machinesRouter.get("/:id/logs", auth, requireAuth, requirePermission("catalogo", "edit"), async (c) => {
   const db = createDb(c.env);
   const logs = await listMaintenanceLogs(db, c.req.param("id"));
   return c.json(logs.map(serializeLog));
@@ -125,7 +125,7 @@ machinesRouter.post(
   "/:id/logs",
   auth,
   requireAuth,
-  requireRole(...STAFF),
+  requirePermission("catalogo", "manage"),
   zValidator("json", logBody.extend({ maintenanceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })),
   async (c) => {
     const db = createDb(c.env);
@@ -138,7 +138,7 @@ machinesRouter.patch(
   "/log/:logId",
   auth,
   requireAuth,
-  requireRole(...STAFF),
+  requirePermission("catalogo", "edit"),
   zValidator("json", logBody),
   async (c) => {
     const db = createDb(c.env);
@@ -148,7 +148,7 @@ machinesRouter.patch(
   },
 );
 
-machinesRouter.delete("/log/:logId", auth, requireAuth, requireAdmin, async (c) => {
+machinesRouter.delete("/log/:logId", auth, requireAuth, requirePermission("catalogo", "manage"), async (c) => {
   const db = createDb(c.env);
   const deleted = await deleteMaintenanceLog(db, c.req.param("logId"));
   if (!deleted) throw notFound("MaintenanceLog");

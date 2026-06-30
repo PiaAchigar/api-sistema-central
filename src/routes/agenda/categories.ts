@@ -8,7 +8,7 @@ import {
   setCategoryActive,
   updateCategory,
 } from "../../repositories/categories.repo";
-import { auth, requireAdmin, requireAuth, requireRole } from "../../middleware/auth";
+import { auth, requireAuth, requirePermission } from "../../middleware/auth";
 import { notFound } from "../../lib/errors";
 import type { AppBindings, Variables } from "../../env";
 
@@ -71,7 +71,7 @@ const categoryBody = z.object({
 });
 
 // Crear — solo admin (crear = nivel F de la matriz).
-categoriesRouter.post("/", auth, requireAuth, requireAdmin, zValidator("json", categoryBody), async (c) => {
+categoriesRouter.post("/", auth, requireAuth, requirePermission("catalogo", "manage"), zValidator("json", categoryBody), async (c) => {
   const db = createDb(c.env);
   const created = await createCategory(db, c.req.valid("json"));
   return c.json(created, 201);
@@ -82,7 +82,7 @@ categoriesRouter.patch(
   "/:id",
   auth,
   requireAuth,
-  requireRole(...STAFF),
+  requirePermission("catalogo", "edit"),
   zValidator("json", categoryBody.partial()),
   async (c) => {
     const db = createDb(c.env);
@@ -93,7 +93,7 @@ categoriesRouter.patch(
 );
 
 // Archivar (soft-delete) — solo admin.
-categoriesRouter.delete("/:id", auth, requireAuth, requireAdmin, async (c) => {
+categoriesRouter.delete("/:id", auth, requireAuth, requirePermission("catalogo", "manage"), async (c) => {
   const db = createDb(c.env);
   const archived = await setCategoryActive(db, c.req.param("id"), false);
   if (!archived) throw notFound("Category");
@@ -101,7 +101,7 @@ categoriesRouter.delete("/:id", auth, requireAuth, requireAdmin, async (c) => {
 });
 
 // Restaurar — solo admin.
-categoriesRouter.post("/:id/restore", auth, requireAuth, requireAdmin, async (c) => {
+categoriesRouter.post("/:id/restore", auth, requireAuth, requirePermission("catalogo", "manage"), async (c) => {
   const db = createDb(c.env);
   const restored = await setCategoryActive(db, c.req.param("id"), true);
   if (!restored) throw notFound("Category");

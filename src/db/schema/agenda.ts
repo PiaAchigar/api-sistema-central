@@ -259,6 +259,8 @@ export const promotions = pgTable("promotions", {
   promotionType: varchar("promotion_type", { length: 50 }),
   discountPercentage: decimal("discount_percentage", { precision: 5, scale: 2 }),
   discountAmount: decimal("discount_amount", { precision: 10, scale: 2 }),
+  servicesSubtotal: decimal("services_subtotal", { precision: 10, scale: 2 }),
+  finalAmount: decimal("final_amount", { precision: 10, scale: 2 }),
   validFrom: date("valid_from"),
   validUntil: date("valid_until"),
   status: varchar("status", { length: 50 }), // active | inactive | expired
@@ -274,6 +276,9 @@ export const promotionService = pgTable("promotion_service", {
   id: id(),
   promotionId: uuid("promotion_id"),
   serviceId: uuid("service_id"),
+  serviceProviderId: uuid("service_provider_id"),
+  servicePrice: decimal("service_price", { precision: 10, scale: 2 }),
+  providerPayment: decimal("provider_payment", { precision: 10, scale: 2 }),
   notes: text("notes"),
   createdAt: createdAt(),
 });

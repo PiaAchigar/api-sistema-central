@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
-import { auth, requireAuth, requireRole } from "../../middleware/auth";
+import { auth, requireAuth, requirePermission } from "../../middleware/auth";
 import {
   getTrainingById,
   listTrainings,
@@ -10,8 +10,6 @@ import {
   updateTrainingWebSettings,
 } from "../../repositories/trainings.repo";
 import type { AppBindings } from "../../env";
-
-const STAFF = ["admin", "manager", "operator"] as const;
 
 const trainings = new Hono<{ Bindings: AppBindings }>();
 
@@ -35,7 +33,7 @@ trainings.get("/", zValidator("query", listQuery), async (c) => {
 });
 
 // Lista para administración: todas las activas (visibles o no).
-trainings.get("/admin", auth, requireAuth, requireRole(...STAFF), async (c) => {
+trainings.get("/admin", auth, requireAuth, requirePermission("sitio-web", "view"), async (c) => {
   const db = createDb(c.env);
   const rows = await listTrainingsAdmin(db);
   return c.json(rows.map(serializePrices));
@@ -62,7 +60,7 @@ const patchBody = z
     { message: "At least one field (isFeatured, isVisible or webSortOrder) is required" },
   );
 
-trainings.patch("/:id", auth, requireAuth, zValidator("json", patchBody), async (c) => {
+trainings.patch("/:id", auth, requireAuth, requirePermission("sitio-web", "edit"), zValidator("json", patchBody), async (c) => {
   const db = createDb(c.env);
   const id = c.req.param("id");
   const updated = await updateTrainingWebSettings(db, id, c.req.valid("json"));

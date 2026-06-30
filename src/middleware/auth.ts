@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from "hono";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import type { AppBindings, Variables } from "../env";
+import { can, type Capability, type Role, type Section } from "../lib/permissions";
 
 type HonoCtx = { Bindings: AppBindings; Variables: Variables };
 
@@ -100,6 +101,18 @@ export const requireRole =
   async (c, next) => {
     const role = c.get("userRole");
     if (!role || !roles.includes(role)) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+    await next();
+  };
+
+/** Rechaza si el rol del usuario no tiene la capacidad pedida sobre la sección.
+ *  Deriva de la matriz §1.7 (lib/permissions.ts). Usar después de requireAuth. */
+export const requirePermission =
+  (section: Section, cap: Capability): MiddlewareHandler<HonoCtx> =>
+  async (c, next) => {
+    const role = c.get("userRole") as Role | null;
+    if (!can(role, section, cap)) {
       return c.json({ error: "Forbidden" }, 403);
     }
     await next();

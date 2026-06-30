@@ -3,13 +3,15 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
 import { badRequest, notFound } from "../../lib/errors";
-import { auth, requireAdmin, requireAuth, requireRole } from "../../middleware/auth";
+import { auth, requireAuth, requirePermission } from "../../middleware/auth";
 import {
   createProvider,
   getActiveAgreementsForService,
   listActiveProviders,
+  listAgreementRowsForService,
   listProvidersAdmin,
   setProviderStatus,
+  setServiceAgreements,
   updateProvider,
 } from "../../repositories/providers.repo";
 import { getProviderSchedules } from "../../services/availability.service";
@@ -22,6 +24,7 @@ import {
   listServices,
   listServicesForProvider,
   setServiceActive,
+  setServiceCategories,
   updateService,
 } from "../../repositories/services.repo";
 import { setServicePrimaryMachine } from "../../repositories/machines.repo";
@@ -140,7 +143,7 @@ function serializeService<T extends { unitPriceList?: unknown; unitPriceCash?: u
 }
 
 // Crear — solo admin.
-services.post("/", auth, requireAuth, requireAdmin, zValidator("json", serviceBody.extend({ name: z.string().min(1).max(255) })), async (c) => {
+services.post("/", auth, requireAuth, requirePermission("catalogo", "manage"), zValidator("json", serviceBody.extend({ name: z.string().min(1).max(255) })), async (c) => {
   const db = createDb(c.env);
   const { machineId, ...body } = c.req.valid("json");
   const created = await createService(db, body);
@@ -149,7 +152,7 @@ services.post("/", auth, requireAuth, requireAdmin, zValidator("json", serviceBo
 });
 
 // Editar — admin + manager + operator.
-services.patch("/:id", auth, requireAuth, requireRole(...STAFF), zValidator("json", serviceBody), async (c) => {
+services.patch("/:id", auth, requireAuth, requirePermission("catalogo", "edit"), zValidator("json", serviceBody), async (c) => {
   const db = createDb(c.env);
   const id = c.req.param("id");
   const { machineId, ...patch } = c.req.valid("json");
@@ -160,7 +163,7 @@ services.patch("/:id", auth, requireAuth, requireRole(...STAFF), zValidator("jso
 });
 
 // Archivar (soft-delete) — solo admin.
-services.delete("/:id", auth, requireAuth, requireAdmin, async (c) => {
+services.delete("/:id", auth, requireAuth, requirePermission("catalogo", "manage"), async (c) => {
   const db = createDb(c.env);
   const archived = await setServiceActive(db, c.req.param("id"), false);
   if (!archived) throw notFound("Service");
@@ -168,12 +171,59 @@ services.delete("/:id", auth, requireAuth, requireAdmin, async (c) => {
 });
 
 // Restaurar — solo admin.
-services.post("/:id/restore", auth, requireAuth, requireAdmin, async (c) => {
+services.post("/:id/restore", auth, requireAuth, requirePermission("catalogo", "manage"), async (c) => {
   const db = createDb(c.env);
   const restored = await setServiceActive(db, c.req.param("id"), true);
   if (!restored) throw notFound("Service");
   return c.json(serializeService(restored));
 });
+
+// ── Relaciones del servicio (categorías + acuerdos con proveedoras) ──────────
+
+// Reemplaza las categorías del servicio (M:N). Staff.
+services.put(
+  "/:id/categories",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "edit"),
+  zValidator("json", z.object({ categoryIds: z.array(z.string().uuid()).default([]) })),
+  async (c) => {
+    const db = createDb(c.env);
+    await setServiceCategories(db, c.req.param("id"), c.req.valid("json").categoryIds);
+    return c.json({ ok: true });
+  },
+);
+
+// Acuerdos vigentes (proveedora + tipo de pago + tarifa) para prefill del modal. Staff.
+services.get("/:id/agreements", auth, requireAuth, requirePermission("catalogo", "edit"), async (c) => {
+  const db = createDb(c.env);
+  const rows = await listAgreementRowsForService(db, c.req.param("id"));
+  return c.json(rows);
+});
+
+// Reconcilia los acuerdos del servicio respetando §4 (cierra viejo + crea nuevo). Staff.
+const agreementSchema = z.object({
+  serviceProviderId: z.string().uuid(),
+  paymentType: z.enum(["per_hour", "percentage", "fixed_per_service"]).nullish(),
+  rate: z.number().nonnegative().nullish(),
+});
+services.put(
+  "/:id/agreements",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "edit"),
+  zValidator("json", z.object({ agreements: z.array(agreementSchema).default([]) })),
+  async (c) => {
+    const db = createDb(c.env);
+    const desired = c.req.valid("json").agreements.map((a) => ({
+      serviceProviderId: a.serviceProviderId,
+      paymentType: a.paymentType ?? null,
+      rate: a.rate ?? null,
+    }));
+    await setServiceAgreements(db, c.req.param("id"), desired, todayLocal());
+    return c.json({ ok: true });
+  },
+);
 
 export { services };
 
@@ -196,7 +246,7 @@ providersRouter.get(
   "/all",
   auth,
   requireAuth,
-  requireRole(...STAFF),
+  requirePermission("proveedoras", "view"),
   zValidator("query", z.object({ includeInactive: z.string().optional() })),
   async (c) => {
     const db = createDb(c.env);
@@ -222,7 +272,7 @@ providersRouter.post(
   "/",
   auth,
   requireAuth,
-  requireAdmin,
+  requirePermission("proveedoras", "manage"),
   zValidator("json", providerBody.extend({ fullName: z.string().min(1).max(255) })),
   async (c) => {
     const db = createDb(c.env);
@@ -236,7 +286,7 @@ providersRouter.patch(
   "/:id",
   auth,
   requireAuth,
-  requireRole(...STAFF),
+  requirePermission("proveedoras", "edit"),
   zValidator("json", providerBody),
   async (c) => {
     const db = createDb(c.env);
@@ -247,7 +297,7 @@ providersRouter.patch(
 );
 
 // Archivar (soft-delete) — solo admin.
-providersRouter.delete("/:id", auth, requireAuth, requireAdmin, async (c) => {
+providersRouter.delete("/:id", auth, requireAuth, requirePermission("proveedoras", "manage"), async (c) => {
   const db = createDb(c.env);
   const archived = await setProviderStatus(db, c.req.param("id"), "inactive");
   if (!archived) throw notFound("Provider");
@@ -255,7 +305,7 @@ providersRouter.delete("/:id", auth, requireAuth, requireAdmin, async (c) => {
 });
 
 // Restaurar — solo admin.
-providersRouter.post("/:id/restore", auth, requireAuth, requireAdmin, async (c) => {
+providersRouter.post("/:id/restore", auth, requireAuth, requirePermission("proveedoras", "manage"), async (c) => {
   const db = createDb(c.env);
   const restored = await setProviderStatus(db, c.req.param("id"), "active");
   if (!restored) throw notFound("Provider");
@@ -293,7 +343,7 @@ const mpBody = z.object({
   accountEmail: z.string().email().max(255).nullish(),
 });
 
-providersRouter.get("/:id/mp-accounts", auth, requireAuth, requireRole(...STAFF), async (c) => {
+providersRouter.get("/:id/mp-accounts", auth, requireAuth, requirePermission("proveedoras", "view"), async (c) => {
   const db = createDb(c.env);
   return c.json(await listMpAccountsByProvider(db, c.req.param("id")));
 });
@@ -302,7 +352,7 @@ providersRouter.post(
   "/:id/mp-accounts",
   auth,
   requireAuth,
-  requireRole(...STAFF),
+  requirePermission("proveedoras", "edit"),
   zValidator("json", mpBody),
   async (c) => {
     const body = c.req.valid("json");
@@ -318,7 +368,7 @@ providersRouter.patch(
   "/mp-accounts/:accountId",
   auth,
   requireAuth,
-  requireRole(...STAFF),
+  requirePermission("proveedoras", "edit"),
   zValidator("json", mpBody),
   async (c) => {
     const db = createDb(c.env);
@@ -328,7 +378,7 @@ providersRouter.patch(
   },
 );
 
-providersRouter.delete("/mp-accounts/:accountId", auth, requireAuth, requireAdmin, async (c) => {
+providersRouter.delete("/mp-accounts/:accountId", auth, requireAuth, requirePermission("proveedoras", "manage"), async (c) => {
   const db = createDb(c.env);
   const deleted = await deleteMpAccount(db, c.req.param("accountId"));
   if (!deleted) throw notFound("MercadopagoAccount");
