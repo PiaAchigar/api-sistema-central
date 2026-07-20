@@ -50,6 +50,8 @@ export async function checkout(db: Db, arca: ArcaConfig, input: CheckoutInput) {
 
   // Snapshot de comisión calculado fuera de la transacción (solo lecturas)
   let appointmentSnapshot: Record<string, unknown> | null = null;
+  let providerEarning = 0;
+  let appointmentServiceId: string | null = null;
   if (input.appointmentId) {
     const appt = await getAppointmentById(db, input.appointmentId);
     if (!appt) throw notFound("Appointment");
@@ -58,6 +60,26 @@ export async function checkout(db: Db, arca: ArcaConfig, input: CheckoutInput) {
     }
     appointmentSnapshot =
       appt.status === "completed" ? {} : await computeProviderEarning(db, appt);
+    // Si el turno ya estaba completado, la comisión ya quedó congelada antes
+    // (vía "Completar" en la agenda) y computeProviderEarning no la recalcula.
+    providerEarning = Number(
+      appt.status === "completed"
+        ? (appt.providerEarning ?? 0)
+        : ((appointmentSnapshot as { providerEarning?: string }).providerEarning ?? 0),
+    );
+    appointmentServiceId = appt.serviceId;
+  }
+
+  // Lo que cobra la profesional por este turno (service_provider_service) no
+  // es ingreso de PiuBella: se descuenta del ítem facturado al cliente. El
+  // monto que el cliente paga en mano (payment.amount) no se toca.
+  if (providerEarning > 0 && appointmentServiceId) {
+    const idx = items.findIndex((i) => i.serviceId === appointmentServiceId);
+    const item = idx !== -1 ? items[idx] : undefined;
+    if (item) {
+      const earningPerUnit = providerEarning / item.quantity;
+      items[idx] = { ...item, unitPrice: Math.max(0, item.unitPrice - earningPerUnit) };
+    }
   }
 
   const now = new Date();

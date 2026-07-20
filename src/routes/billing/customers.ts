@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
-import { conflict } from "../../lib/errors";
+import { conflict, notFound } from "../../lib/errors";
 import {
   createQuickCustomer,
   findCustomerByDni,
@@ -43,6 +43,13 @@ customersRouter.post("/", zValidator("json", createBody), async (c) => {
   const { customerId } = await createQuickCustomer(db, data);
   const customer = await getCustomerById(db, customerId);
   return c.json(customer, 201);
+});
+
+customersRouter.get("/:id", async (c) => {
+  const db = createDb(c.env);
+  const customer = await getCustomerById(db, c.req.param("id"));
+  if (!customer) throw notFound("Customer");
+  return c.json(customer);
 });
 
 customersRouter.get("/:id/invoices", async (c) => {

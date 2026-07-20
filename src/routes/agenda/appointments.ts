@@ -8,7 +8,9 @@ import {
   rescheduleAppointment,
   updateAppointmentStatus,
 } from "../../services/appointments.service";
+import { getAppointmentDetail } from "../../repositories/appointments.repo";
 import { requireAuth } from "../../middleware/auth";
+import { notFound } from "../../lib/errors";
 import type { AppBindings, Variables } from "../../env";
 
 const appointmentsRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
@@ -29,6 +31,18 @@ appointmentsRouter.get("/", requireAuth, zValidator("query", listQuery), async (
       servicePrice: r.servicePrice != null ? Number(r.servicePrice) : null,
     })),
   );
+});
+
+appointmentsRouter.get("/:id", requireAuth, async (c) => {
+  const db = createDb(c.env);
+  const appt = await getAppointmentDetail(db, c.req.param("id"));
+  if (!appt) throw notFound("Appointment");
+  return c.json({
+    ...appt,
+    servicePrice: appt.servicePrice != null ? Number(appt.servicePrice) : null,
+    providerRate: appt.providerRate != null ? Number(appt.providerRate) : null,
+    providerEarning: appt.providerEarning != null ? Number(appt.providerEarning) : null,
+  });
 });
 
 const createBody = z.object({
