@@ -89,7 +89,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_sps_active
   WHERE is_active;
 
 -- VIEW de normalización a $/hora (doc v2.2)
-CREATE OR REPLACE VIEW provider_rates_per_hour AS
+-- security_invoker=on: la vista respeta el RLS/permisos de quien la consulta
+-- (no los del owner). Postgres 15+ / Supabase. Evita el warning "Security definer view".
+CREATE OR REPLACE VIEW provider_rates_per_hour WITH (security_invoker = on) AS
 SELECT
   sps.id,
   sps.service_provider_id,
