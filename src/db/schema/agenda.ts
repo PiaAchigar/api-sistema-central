@@ -3,6 +3,7 @@ import {
   date,
   decimal,
   integer,
+  jsonb,
   pgTable,
   text,
   time,
@@ -165,6 +166,24 @@ export const providerAvailabilityExceptions = pgTable(
     updatedAt: updatedAt(),
   },
 );
+
+// Tabla creada desde el día uno en migrations/1.0.0/init.sql (junto con sus FKs
+// fk_provaudit_provider/fk_provaudit_user) pero nunca expuesta acá — nadie la
+// escribía. reglas_negocio.md §3.4 exige auditar todo cambio de disponibilidad;
+// esta pieza es la primera en escribirle. Tipos y nombres calcan init.sql
+// exactamente (no se toca la columna real, no hace falta migración nueva).
+export const providerAvailabilityAudit = pgTable("provider_availability_audit", {
+  id: id(),
+  serviceProviderId: uuid("service_provider_id"),
+  changeType: varchar("change_type", { length: 50 }), // created | updated | deleted
+  tableAffected: varchar("table_affected", { length: 100 }),
+  recordIdChanged: uuid("record_id_changed"),
+  oldValues: jsonb("old_values"),
+  newValues: jsonb("new_values"),
+  changedByUserId: uuid("changed_by_user_id"),
+  changeReason: text("change_reason"),
+  createdAt: createdAt(),
+});
 
 export const machines = pgTable("machines", {
   id: id(),
