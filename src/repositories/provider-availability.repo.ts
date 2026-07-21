@@ -78,6 +78,7 @@ export async function setWeeklyAvailability(
     const { toCreate, toCloseIds } = diffWeeklyAvailability(current, desired);
 
     for (const id of toCloseIds) {
+      const closedRow = current.find((c) => c.id === id)!;
       await tx
         .update(serviceProviderAvailability)
         .set({ isActive: false, validUntil: today })
@@ -87,7 +88,12 @@ export async function setWeeklyAvailability(
         changeType: "updated",
         tableAffected: "service_provider_availability",
         recordIdChanged: id,
-        oldValues: { isActive: true },
+        oldValues: {
+          isActive: true,
+          dayOfWeek: closedRow.dayOfWeek,
+          workStartTime: closedRow.workStartTime,
+          workEndTime: closedRow.workEndTime,
+        },
         newValues: { isActive: false, validUntil: today },
       });
     }
