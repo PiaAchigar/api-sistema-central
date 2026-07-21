@@ -158,6 +158,42 @@ export async function getAppointmentById(db: Db, id: string) {
   return rows[0] ?? null;
 }
 
+/** Mismo shape que `listAppointmentsByRange` (con nombres de cliente/servicio/proveedora), para un solo turno. */
+export async function getAppointmentDetail(db: Db, id: string) {
+  const rows = await db
+    .select({
+      id: appointments.id,
+      appointmentStart: appointments.appointmentStart,
+      appointmentEnd: appointments.appointmentEnd,
+      durationMinutes: appointments.durationMinutes,
+      servicePrice: appointments.servicePrice,
+      status: appointments.status,
+      reservationExpiresAt: appointments.reservationExpiresAt,
+      notes: appointments.notes,
+      providerPaymentType: appointments.providerPaymentType,
+      providerRate: appointments.providerRate,
+      providerEarning: appointments.providerEarning,
+      customerId: appointments.customerId,
+      customerName: contacts.name,
+      customerPhone: contacts.phone,
+      serviceId: appointments.serviceId,
+      serviceName: service.name,
+      providerId: appointments.serviceProviderId,
+      providerName: serviceProviders.fullName,
+      machineId: appointments.machineId,
+      machineName: machines.name,
+    })
+    .from(appointments)
+    .leftJoin(customers, eq(customers.id, appointments.customerId))
+    .leftJoin(contacts, eq(contacts.id, customers.contactId))
+    .leftJoin(service, eq(service.id, appointments.serviceId))
+    .leftJoin(serviceProviders, eq(serviceProviders.id, appointments.serviceProviderId))
+    .leftJoin(machines, eq(machines.id, appointments.machineId))
+    .where(eq(appointments.id, id))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function insertAppointment(
   db: Tx,
   values: typeof appointments.$inferInsert,

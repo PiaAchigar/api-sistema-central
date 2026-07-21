@@ -1,8 +1,11 @@
 import { and, asc, eq, gte, lt } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "../db/client";
-import { contacts, customers, invoices, payments, serviceProviders } from "../db/schema";
+import { appointments, contacts, customers, invoices, payments, serviceProviders } from "../db/schema";
 
 type Tx = Pick<Db, "select" | "insert" | "update">;
+
+const appointmentProvider = alias(serviceProviders, "appointment_provider");
 
 export async function insertPayment(tx: Tx, values: typeof payments.$inferInsert) {
   const rows = await tx.insert(payments).values(values).returning();
@@ -34,12 +37,19 @@ export async function listPaymentsByRange(
       customerName: contacts.name,
       receivedByProviderId: payments.receivedByProviderId,
       receivedByProviderName: serviceProviders.fullName,
+      // Comisión de la proveedora en el turno que originó este pago (si vino de
+      // un checkout con appointmentId) — para desglosarla en la rendición de caja.
+      appointmentId: payments.appointmentId,
+      appointmentProviderName: appointmentProvider.fullName,
+      appointmentProviderEarning: appointments.providerEarning,
     })
     .from(payments)
     .leftJoin(invoices, eq(invoices.id, payments.invoiceId))
     .leftJoin(customers, eq(customers.id, invoices.customerId))
     .leftJoin(contacts, eq(contacts.id, customers.contactId))
     .leftJoin(serviceProviders, eq(serviceProviders.id, payments.receivedByProviderId))
+    .leftJoin(appointments, eq(appointments.id, payments.appointmentId))
+    .leftJoin(appointmentProvider, eq(appointmentProvider.id, appointments.serviceProviderId))
     .where(and(...conditions))
     .orderBy(asc(payments.paymentDate));
 }

@@ -64,6 +64,9 @@ export const payments = pgTable("payments", {
   isDeclared: boolean("is_declared"),
   // Si el cliente transfirió directo a la profesional (comisión), no se factura a PiuBella
   receivedByProviderId: uuid("received_by_provider_id"),
+  // Turno cobrado en este pago (si vino de un checkout con appointmentId) — permite
+  // mostrar en caja cuánto de este cobro es la comisión de la proveedora.
+  appointmentId: uuid("appointment_id"),
   confirmedByUserId: uuid("confirmed_by_user_id"),
   confirmedAt: timestamp("confirmed_at"),
   createdAt: createdAt(),
