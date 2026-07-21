@@ -200,6 +200,3 @@ export async function deleteSaturdaySchedule(db: Db, providerId: string, rowId: 
     return deleted;
   });
 }
-
-export { logAvailabilityChange };
-export type { Tx as AvailabilityTx };
