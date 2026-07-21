@@ -1,0 +1,119 @@
+import { and, asc, eq } from "drizzle-orm";
+import type { Db } from "../db/client";
+import { providerAvailabilityAudit, serviceProviderAvailability } from "../db/schema";
+import { diffWeeklyAvailability, type WeeklyAvailabilityInput } from "../lib/availability";
+
+/** Subconjunto de `Db` que también sirve dentro de una transacción (`tx`). */
+type Tx = Pick<Db, "select" | "insert" | "update" | "delete">;
+
+type AuditChangeType = "created" | "updated" | "deleted";
+type AuditTable =
+  | "service_provider_availability"
+  | "provider_saturday_schedule"
+  | "provider_availability_exceptions";
+
+/** Escribe una fila de auditoría (reglas_negocio §3.4). `changedByUserId` queda en
+ *  NULL: hoy no existe una resolución `auth.sub` (JWT) → `users.id` en ningún lado
+ *  del sistema (ver spec de esta pieza — gap conocido, punto 15 del plan maestro). */
+async function logAvailabilityChange(
+  tx: Tx,
+  params: {
+    serviceProviderId: string;
+    changeType: AuditChangeType;
+    tableAffected: AuditTable;
+    recordIdChanged: string;
+    oldValues: Record<string, unknown> | null;
+    newValues: Record<string, unknown> | null;
+  },
+) {
+  await tx.insert(providerAvailabilityAudit).values({
+    serviceProviderId: params.serviceProviderId,
+    changeType: params.changeType,
+    tableAffected: params.tableAffected,
+    recordIdChanged: params.recordIdChanged,
+    oldValues: params.oldValues,
+    newValues: params.newValues,
+    changedByUserId: null,
+    changeReason: null,
+  });
+}
+
+// ── Semanal (service_provider_availability) ─────────────────────────────────
+
+/** Filas activas vigentes hoy, para prefill del panel. */
+export async function listWeeklyAvailability(db: Tx, providerId: string) {
+  const rows = await db
+    .select({
+      id: serviceProviderAvailability.id,
+      dayOfWeek: serviceProviderAvailability.dayOfWeek,
+      workStartTime: serviceProviderAvailability.workStartTime,
+      workEndTime: serviceProviderAvailability.workEndTime,
+    })
+    .from(serviceProviderAvailability)
+    .where(
+      and(
+        eq(serviceProviderAvailability.serviceProviderId, providerId),
+        eq(serviceProviderAvailability.isActive, true),
+      ),
+    )
+    .orderBy(asc(serviceProviderAvailability.dayOfWeek));
+  return rows.map((r) => ({
+    id: r.id,
+    dayOfWeek: r.dayOfWeek as number,
+    workStartTime: r.workStartTime as string,
+    workEndTime: r.workEndTime as string,
+  }));
+}
+
+/** Reconcilia el horario semanal respetando §1.4 (cerrar viejo + crear nuevo).
+ *  Transaccional junto con el audit log: si falla el audit, se revierte todo. */
+export async function setWeeklyAvailability(
+  db: Db,
+  providerId: string,
+  desired: WeeklyAvailabilityInput[],
+  today: string,
+) {
+  return db.transaction(async (tx) => {
+    const current = await listWeeklyAvailability(tx, providerId);
+    const { toCreate, toCloseIds } = diffWeeklyAvailability(current, desired);
+
+    for (const id of toCloseIds) {
+      await tx
+        .update(serviceProviderAvailability)
+        .set({ isActive: false, validUntil: today })
+        .where(eq(serviceProviderAvailability.id, id));
+      await logAvailabilityChange(tx, {
+        serviceProviderId: providerId,
+        changeType: "updated",
+        tableAffected: "service_provider_availability",
+        recordIdChanged: id,
+        oldValues: { isActive: true },
+        newValues: { isActive: false, validUntil: today },
+      });
+    }
+
+    for (const d of toCreate) {
+      const rows = await tx
+        .insert(serviceProviderAvailability)
+        .values({
+          serviceProviderId: providerId,
+          dayOfWeek: d.dayOfWeek,
+          workStartTime: d.workStartTime,
+          workEndTime: d.workEndTime,
+          validFrom: today,
+          isActive: true,
+        })
+        .returning({ id: serviceProviderAvailability.id });
+      await logAvailabilityChange(tx, {
+        serviceProviderId: providerId,
+        changeType: "created",
+        tableAffected: "service_provider_availability",
+        recordIdChanged: rows[0]!.id,
+        oldValues: null,
+        newValues: d,
+      });
+    }
+
+    return listWeeklyAvailability(tx, providerId);
+  });
+}
