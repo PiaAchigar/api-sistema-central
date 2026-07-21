@@ -1,6 +1,6 @@
 import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { providerAvailabilityAudit, serviceProviderAvailability } from "../db/schema";
+import { providerAvailabilityAudit, providerSaturdaySchedule, serviceProviderAvailability } from "../db/schema";
 import { diffWeeklyAvailability, type WeeklyAvailabilityInput } from "../lib/availability";
 
 /** Subconjunto de `Db` que también sirve dentro de una transacción (`tx`). */
@@ -123,3 +123,83 @@ export async function setWeeklyAvailability(
     return listWeeklyAvailability(tx, providerId);
   });
 }
+
+// ── Sábados puntuales (provider_saturday_schedule) ──────────────────────────
+
+export async function listSaturdaySchedule(db: Tx, providerId: string) {
+  return db
+    .select({
+      id: providerSaturdaySchedule.id,
+      saturdayDate: providerSaturdaySchedule.saturdayDate,
+      isWorking: providerSaturdaySchedule.isWorking,
+      workStartTime: providerSaturdaySchedule.workStartTime,
+      workEndTime: providerSaturdaySchedule.workEndTime,
+      notes: providerSaturdaySchedule.notes,
+    })
+    .from(providerSaturdaySchedule)
+    .where(eq(providerSaturdaySchedule.serviceProviderId, providerId))
+    .orderBy(asc(providerSaturdaySchedule.saturdayDate));
+}
+
+export type SaturdayInput = {
+  saturdayDate: string;
+  isWorking: boolean;
+  workStartTime?: string | null;
+  workEndTime?: string | null;
+  notes?: string | null;
+};
+
+export async function addSaturdaySchedule(db: Db, providerId: string, data: SaturdayInput) {
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .insert(providerSaturdaySchedule)
+      .values({
+        serviceProviderId: providerId,
+        saturdayDate: data.saturdayDate,
+        isWorking: data.isWorking,
+        workStartTime: data.workStartTime ?? null,
+        workEndTime: data.workEndTime ?? null,
+        notes: data.notes ?? null,
+      })
+      .returning();
+    const created = rows[0]!;
+    await logAvailabilityChange(tx, {
+      serviceProviderId: providerId,
+      changeType: "created",
+      tableAffected: "provider_saturday_schedule",
+      recordIdChanged: created.id,
+      oldValues: null,
+      newValues: data,
+    });
+    return created;
+  });
+}
+
+export async function deleteSaturdaySchedule(db: Db, providerId: string, rowId: string) {
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .delete(providerSaturdaySchedule)
+      .where(
+        and(
+          eq(providerSaturdaySchedule.id, rowId),
+          eq(providerSaturdaySchedule.serviceProviderId, providerId),
+        ),
+      )
+      .returning();
+    const deleted = rows[0] ?? null;
+    if (deleted) {
+      await logAvailabilityChange(tx, {
+        serviceProviderId: providerId,
+        changeType: "deleted",
+        tableAffected: "provider_saturday_schedule",
+        recordIdChanged: rowId,
+        oldValues: deleted,
+        newValues: null,
+      });
+    }
+    return deleted;
+  });
+}
+
+export { logAvailabilityChange };
+export type { Tx as AvailabilityTx };
