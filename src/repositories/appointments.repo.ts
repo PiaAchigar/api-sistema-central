@@ -109,7 +109,7 @@ export async function getOverlappingAppointments(
 export async function listAppointmentsByRange(
   db: Db,
   range: { start: Date; end: Date },
-  filters: { providerId?: string; status?: string },
+  filters: { providerId?: string; status?: string | string[] },
 ) {
   const conditions = [
     gte(appointments.appointmentStart, range.start),
@@ -118,7 +118,13 @@ export async function listAppointmentsByRange(
   if (filters.providerId) {
     conditions.push(eq(appointments.serviceProviderId, filters.providerId));
   }
-  if (filters.status) conditions.push(eq(appointments.status, filters.status));
+  if (filters.status) {
+    conditions.push(
+      Array.isArray(filters.status)
+        ? inArray(appointments.status, filters.status)
+        : eq(appointments.status, filters.status),
+    );
+  }
 
   return db
     .select({

@@ -1,6 +1,11 @@
 import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { providerAvailabilityAudit, providerSaturdaySchedule, serviceProviderAvailability } from "../db/schema";
+import {
+  providerAvailabilityAudit,
+  providerAvailabilityExceptions,
+  providerSaturdaySchedule,
+  serviceProviderAvailability,
+} from "../db/schema";
 import { diffWeeklyAvailability, type WeeklyAvailabilityInput } from "../lib/availability";
 
 /** Subconjunto de `Db` que también sirve dentro de una transacción (`tx`). */
@@ -192,6 +197,92 @@ export async function deleteSaturdaySchedule(db: Db, providerId: string, rowId: 
         serviceProviderId: providerId,
         changeType: "deleted",
         tableAffected: "provider_saturday_schedule",
+        recordIdChanged: rowId,
+        oldValues: deleted,
+        newValues: null,
+      });
+    }
+    return deleted;
+  });
+}
+
+// ── Excepciones (provider_availability_exceptions) ──────────────────────────
+
+export async function listExceptions(db: Tx, providerId: string) {
+  return db
+    .select({
+      id: providerAvailabilityExceptions.id,
+      dateException: providerAvailabilityExceptions.dateException,
+      dateStart: providerAvailabilityExceptions.dateStart,
+      dateEnd: providerAvailabilityExceptions.dateEnd,
+      timeOverrideStart: providerAvailabilityExceptions.timeOverrideStart,
+      timeOverrideEnd: providerAvailabilityExceptions.timeOverrideEnd,
+      exceptionType: providerAvailabilityExceptions.exceptionType,
+      reason: providerAvailabilityExceptions.reason,
+      isWorking: providerAvailabilityExceptions.isWorking,
+    })
+    .from(providerAvailabilityExceptions)
+    .where(eq(providerAvailabilityExceptions.serviceProviderId, providerId))
+    .orderBy(asc(providerAvailabilityExceptions.createdAt));
+}
+
+export type ExceptionInput = {
+  exceptionType: string;
+  dateException?: string | null;
+  dateStart?: string | null;
+  dateEnd?: string | null;
+  timeOverrideStart?: string | null;
+  timeOverrideEnd?: string | null;
+  reason?: string | null;
+  isWorking: boolean;
+};
+
+export async function addException(db: Db, providerId: string, data: ExceptionInput) {
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .insert(providerAvailabilityExceptions)
+      .values({
+        serviceProviderId: providerId,
+        exceptionType: data.exceptionType,
+        dateException: data.dateException ?? null,
+        dateStart: data.dateStart ?? null,
+        dateEnd: data.dateEnd ?? null,
+        timeOverrideStart: data.timeOverrideStart ?? null,
+        timeOverrideEnd: data.timeOverrideEnd ?? null,
+        reason: data.reason ?? null,
+        isWorking: data.isWorking,
+      })
+      .returning();
+    const created = rows[0]!;
+    await logAvailabilityChange(tx, {
+      serviceProviderId: providerId,
+      changeType: "created",
+      tableAffected: "provider_availability_exceptions",
+      recordIdChanged: created.id,
+      oldValues: null,
+      newValues: data,
+    });
+    return created;
+  });
+}
+
+export async function deleteException(db: Db, providerId: string, rowId: string) {
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .delete(providerAvailabilityExceptions)
+      .where(
+        and(
+          eq(providerAvailabilityExceptions.id, rowId),
+          eq(providerAvailabilityExceptions.serviceProviderId, providerId),
+        ),
+      )
+      .returning();
+    const deleted = rows[0] ?? null;
+    if (deleted) {
+      await logAvailabilityChange(tx, {
+        serviceProviderId: providerId,
+        changeType: "deleted",
+        tableAffected: "provider_availability_exceptions",
         recordIdChanged: rowId,
         oldValues: deleted,
         newValues: null,
