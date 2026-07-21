@@ -39,7 +39,20 @@ cashRouter.post("/", zValidator("json", createBody), async (c) => {
 cashRouter.get("/daily-report", zValidator("query", dateQuery), async (c) => {
   const db = createDb(c.env);
   const { date } = c.req.valid("query");
-  return c.json(await getDailyReport(db, date ?? todayLocal()));
+  const report = await getDailyReport(db, date ?? todayLocal());
+  return c.json({
+    ...report,
+    payments: report.payments.map((p) => ({
+      ...p,
+      amount: p.amount != null ? Number(p.amount) : null,
+      appointmentProviderEarning:
+        p.appointmentProviderEarning != null ? Number(p.appointmentProviderEarning) : null,
+    })),
+    cashMovements: report.cashMovements.map((m) => ({
+      ...m,
+      amount: m.amount != null ? Number(m.amount) : null,
+    })),
+  });
 });
 
 export { cashRouter };

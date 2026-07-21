@@ -3,12 +3,13 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
 import {
+  computeProviderEarning,
   createAppointment,
   listAppointmentsByDay,
   rescheduleAppointment,
   updateAppointmentStatus,
 } from "../../services/appointments.service";
-import { getAppointmentDetail } from "../../repositories/appointments.repo";
+import { getAppointmentById, getAppointmentDetail } from "../../repositories/appointments.repo";
 import { requireAuth } from "../../middleware/auth";
 import { notFound } from "../../lib/errors";
 import type { AppBindings, Variables } from "../../env";
@@ -37,11 +38,32 @@ appointmentsRouter.get("/:id", requireAuth, async (c) => {
   const db = createDb(c.env);
   const appt = await getAppointmentDetail(db, c.req.param("id"));
   if (!appt) throw notFound("Appointment");
+
+  // Si todavía no se completó (y por lo tanto no hay comisión congelada), la
+  // calculamos en vivo con el acuerdo actual solo para mostrarla — no se
+  // persiste acá (eso lo hace el checkout al cobrar de verdad).
+  let providerPaymentType = appt.providerPaymentType;
+  let providerRate = appt.providerRate;
+  let providerEarning = appt.providerEarning;
+  let providerEarningIsPreview = false;
+  if (providerEarning == null && appt.providerId && appt.serviceId) {
+    const raw = await getAppointmentById(db, appt.id);
+    const preview = raw ? await computeProviderEarning(db, raw) : {};
+    if ("providerEarning" in preview) {
+      providerPaymentType = preview.providerPaymentType ?? null;
+      providerRate = preview.providerRate ?? null;
+      providerEarning = preview.providerEarning ?? null;
+      providerEarningIsPreview = true;
+    }
+  }
+
   return c.json({
     ...appt,
     servicePrice: appt.servicePrice != null ? Number(appt.servicePrice) : null,
-    providerRate: appt.providerRate != null ? Number(appt.providerRate) : null,
-    providerEarning: appt.providerEarning != null ? Number(appt.providerEarning) : null,
+    providerPaymentType,
+    providerRate: providerRate != null ? Number(providerRate) : null,
+    providerEarning: providerEarning != null ? Number(providerEarning) : null,
+    providerEarningIsPreview,
   });
 });
 

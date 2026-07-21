@@ -114,6 +114,7 @@ export async function checkout(db: Db, arca: ArcaConfig, input: CheckoutInput) {
 
     const payment = await insertPayment(tx, {
       invoiceId: invoice?.id ?? null,
+      appointmentId: input.appointmentId ?? null,
       amount: input.payment.amount.toFixed(2),
       paymentMethod: input.payment.method,
       status: "confirmed",
