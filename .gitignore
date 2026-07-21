@@ -10,6 +10,7 @@ dist
 
 # Wrangler autogenera este archivo desde `wrangler types`
 worker-configuration.d.ts
+.superpowers
 
 # Logs
 *.log
