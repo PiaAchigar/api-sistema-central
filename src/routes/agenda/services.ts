@@ -34,7 +34,18 @@ import {
   listMpAccountsByProvider,
   updateMpAccount,
 } from "../../repositories/mercadopago.repo";
-import { todayLocal } from "../../lib/time";
+import { listAppointmentsByRange } from "../../repositories/appointments.repo";
+import {
+  addException,
+  addSaturdaySchedule,
+  deleteException,
+  deleteSaturdaySchedule,
+  listExceptions,
+  listSaturdaySchedule,
+  listWeeklyAvailability,
+  setWeeklyAvailability,
+} from "../../repositories/provider-availability.repo";
+import { localDayRangeUtc, todayLocal } from "../../lib/time";
 import type { AppBindings, Variables } from "../../env";
 
 /** Roles con permiso de editar catálogo (nivel E de la matriz de reglas_negocio). */
@@ -384,5 +395,165 @@ providersRouter.delete("/mp-accounts/:accountId", auth, requireAuth, requirePerm
   if (!deleted) throw notFound("MercadopagoAccount");
   return c.json({ ok: true });
 });
+
+// ── Disponibilidad semanal (service_provider_availability) ──────────────────
+const weeklyRowSchema = z.object({
+  dayOfWeek: z.number().int().min(0).max(5), // sábado (6) se maneja en /availability/saturdays
+  workStartTime: z.string().regex(/^\d{2}:\d{2}$/),
+  workEndTime: z.string().regex(/^\d{2}:\d{2}$/),
+});
+
+providersRouter.get(
+  "/:id/availability/weekly",
+  auth,
+  requireAuth,
+  requirePermission("proveedoras", "view"),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json(await listWeeklyAvailability(db, c.req.param("id")));
+  },
+);
+
+providersRouter.put(
+  "/:id/availability/weekly",
+  auth,
+  requireAuth,
+  requirePermission("proveedoras", "edit"),
+  zValidator("json", z.object({ rows: z.array(weeklyRowSchema).default([]) })),
+  async (c) => {
+    const db = createDb(c.env);
+    const rows = await setWeeklyAvailability(
+      db,
+      c.req.param("id"),
+      c.req.valid("json").rows,
+      todayLocal(),
+    );
+    return c.json(rows);
+  },
+);
+
+// ── Sábados puntuales (provider_saturday_schedule) ──────────────────────────
+const saturdayBody = z.object({
+  saturdayDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  isWorking: z.boolean(),
+  workStartTime: z.string().regex(/^\d{2}:\d{2}$/).nullish(),
+  workEndTime: z.string().regex(/^\d{2}:\d{2}$/).nullish(),
+  notes: z.string().max(2000).nullish(),
+});
+
+providersRouter.get(
+  "/:id/availability/saturdays",
+  auth,
+  requireAuth,
+  requirePermission("proveedoras", "view"),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json(await listSaturdaySchedule(db, c.req.param("id")));
+  },
+);
+
+providersRouter.post(
+  "/:id/availability/saturdays",
+  auth,
+  requireAuth,
+  requirePermission("proveedoras", "edit"),
+  zValidator("json", saturdayBody),
+  async (c) => {
+    const db = createDb(c.env);
+    const created = await addSaturdaySchedule(db, c.req.param("id"), c.req.valid("json"));
+    return c.json(created, 201);
+  },
+);
+
+providersRouter.delete(
+  "/:id/availability/saturdays/:rowId",
+  auth,
+  requireAuth,
+  requirePermission("proveedoras", "edit"),
+  async (c) => {
+    const db = createDb(c.env);
+    const deleted = await deleteSaturdaySchedule(db, c.req.param("id"), c.req.param("rowId"));
+    if (!deleted) throw notFound("SaturdaySchedule");
+    return c.json({ ok: true });
+  },
+);
+
+// ── Excepciones (provider_availability_exceptions) ──────────────────────────
+const exceptionBody = z
+  .object({
+    exceptionType: z.enum([
+      "unavailable",
+      "sick_leave",
+      "vacation",
+      "reduced_hours",
+      "not_coming",
+      "other",
+    ]),
+    dateException: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+    dateStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+    dateEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+    timeOverrideStart: z.string().regex(/^\d{2}:\d{2}$/).nullish(),
+    timeOverrideEnd: z.string().regex(/^\d{2}:\d{2}$/).nullish(),
+    reason: z.string().max(2000).nullish(),
+    isWorking: z.boolean(),
+  })
+  .refine((b) => Boolean(b.dateException) !== Boolean(b.dateStart && b.dateEnd), {
+    message:
+      "Indicá una fecha única (dateException) o un rango (dateStart y dateEnd), no ambos ni ninguno.",
+  });
+
+providersRouter.get(
+  "/:id/availability/exceptions",
+  auth,
+  requireAuth,
+  requirePermission("proveedoras", "view"),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json(await listExceptions(db, c.req.param("id")));
+  },
+);
+
+providersRouter.post(
+  "/:id/availability/exceptions",
+  auth,
+  requireAuth,
+  requirePermission("proveedoras", "edit"),
+  zValidator("json", exceptionBody),
+  async (c) => {
+    const db = createDb(c.env);
+    const providerId = c.req.param("id");
+    const data = c.req.valid("json");
+    const created = await addException(db, providerId, data);
+
+    let conflictingAppointments: Awaited<ReturnType<typeof listAppointmentsByRange>> = [];
+    if (data.isWorking === false) {
+      const from = data.dateException ?? data.dateStart!;
+      const to = data.dateException ?? data.dateEnd!;
+      const range = {
+        start: localDayRangeUtc(from).start,
+        end: localDayRangeUtc(to).end,
+      };
+      conflictingAppointments = await listAppointmentsByRange(db, range, {
+        providerId,
+        status: ["scheduled", "reserved"],
+      });
+    }
+
+    return c.json({ ...created, conflictingAppointments }, 201);
+  },
+);
+
+providersRouter.delete(
+  "/:id/availability/exceptions/:rowId",
+  auth,
+  requireAuth,
+  requirePermission("proveedoras", "edit"),
+  async (c) => {
+    const db = createDb(c.env);
+    const deleted = await deleteException(db, c.req.param("id"), c.req.param("rowId"));
+    if (!deleted) throw notFound("AvailabilityException");
+    return c.json({ ok: true });
+  },
+);
 
 export { providersRouter };
