@@ -11,6 +11,7 @@ import {
   searchCustomers,
 } from "../../repositories/customers.repo";
 import { listInvoices } from "../../repositories/invoices.repo";
+import { getCustomerDayStatus } from "../../services/account-status.service";
 import type { AppBindings } from "../../env";
 
 const customersRouter = new Hono<{ Bindings: AppBindings }>();
@@ -23,6 +24,16 @@ customersRouter.get(
     const { q } = c.req.valid("query");
     const rows = q ? await searchCustomers(db, q) : await listRecentCustomers(db);
     return c.json(rows);
+  },
+);
+
+// OJO: registrado antes de "/:id" para que "day-status" no matchee como id.
+customersRouter.get(
+  "/day-status",
+  zValidator("query", z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json(await getCustomerDayStatus(db, c.req.valid("query").date));
   },
 );
 

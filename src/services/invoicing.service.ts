@@ -25,6 +25,8 @@ export type DraftItemInput = {
   /** Si no viene, se resuelve del catálogo. */
   unitPrice?: number;
   priceMode?: "list" | "cash";
+  /** false ⇒ este ítem NO va a la factura ARCA (cobro en negro). Default true. */
+  billable?: boolean;
 };
 
 type ResolvedItem = {
@@ -32,6 +34,7 @@ type ResolvedItem = {
   productId: string | null;
   quantity: number;
   unitPrice: number;
+  billable: boolean;
 };
 
 export async function resolveItems(db: Db, items: DraftItemInput[]): Promise<ResolvedItem[]> {
@@ -66,6 +69,7 @@ export async function resolveItems(db: Db, items: DraftItemInput[]): Promise<Res
       productId: item.productId ?? null,
       quantity: item.quantity,
       unitPrice,
+      billable: item.billable !== false,
     });
   }
   return resolved;

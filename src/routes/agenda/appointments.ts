@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
+import { createArcaClient } from "../../arca/factory";
 import { createDb } from "../../db/client";
 import {
   computeProviderEarning,
@@ -10,6 +11,7 @@ import {
   updateAppointmentStatus,
 } from "../../services/appointments.service";
 import { getAppointmentById, getAppointmentDetail } from "../../repositories/appointments.repo";
+import { getDealByAppointmentId } from "../../repositories/deals.repo";
 import { requireAuth } from "../../middleware/auth";
 import { notFound } from "../../lib/errors";
 import type { AppBindings, Variables } from "../../env";
@@ -57,6 +59,11 @@ appointmentsRouter.get("/:id", requireAuth, async (c) => {
     }
   }
 
+  // Seña a favor del cliente (si el turno se reservó con seña pagada)
+  const deal = await getDealByAppointmentId(db, appt.id);
+  const depositPaid =
+    deal?.seniaPaid && deal.seniaAmount != null ? Number(deal.seniaAmount) : 0;
+
   return c.json({
     ...appt,
     servicePrice: appt.servicePrice != null ? Number(appt.servicePrice) : null,
@@ -64,6 +71,7 @@ appointmentsRouter.get("/:id", requireAuth, async (c) => {
     providerRate: providerRate != null ? Number(providerRate) : null,
     providerEarning: providerEarning != null ? Number(providerEarning) : null,
     providerEarningIsPreview,
+    depositPaid,
   });
 });
 
@@ -77,11 +85,18 @@ const createBody = z.object({
   notes: z.string().max(1000).optional(),
   status: z.enum(["scheduled", "reserved"]).optional(),
   expiryMinutes: z.number().int().min(5).max(480).optional(),
+  deposit: z
+    .object({
+      amount: z.number().positive(),
+      method: z.enum(["cash", "bank_transfer", "mercadopago"]),
+    })
+    .optional(),
 });
 
 appointmentsRouter.post("/", zValidator("json", createBody), async (c) => {
   const db = createDb(c.env);
-  const appointment = await createAppointment(db, c.req.valid("json"));
+  const arca = createArcaClient(c.env);
+  const appointment = await createAppointment(db, c.req.valid("json"), arca);
   return c.json(appointment, 201);
 });
 

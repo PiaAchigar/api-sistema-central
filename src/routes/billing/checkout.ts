@@ -15,6 +15,7 @@ const itemSchema = z
     quantity: z.number().int().positive(),
     unitPrice: z.number().nonnegative().optional(),
     priceMode: z.enum(["list", "cash"]).optional(),
+    billable: z.boolean().optional(),
   })
   .refine((i) => Boolean(i.serviceId) !== Boolean(i.productId), {
     message: "Cada ítem necesita serviceId o productId (no ambos)",
