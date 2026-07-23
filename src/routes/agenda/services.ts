@@ -3,7 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
 import { badRequest, notFound } from "../../lib/errors";
-import { auth, requireAuth, requirePermission } from "../../middleware/auth";
+import { auth, requireAdmin, requireAuth, requirePermission } from "../../middleware/auth";
 import {
   createProvider,
   getActiveAgreementsForService,
@@ -21,6 +21,8 @@ import {
   getMachinesForService,
   getPrimaryMachinesForServices,
   getServiceById,
+  getServiceDeleteImpact,
+  hardDeleteService,
   listServices,
   listServicesForProvider,
   setServiceActive,
@@ -46,6 +48,7 @@ import {
   setWeeklyAvailability,
 } from "../../repositories/provider-availability.repo";
 import { localDayRangeUtc, todayLocal } from "../../lib/time";
+import { isForeignKeyViolation } from "../../lib/db-errors";
 import type { AppBindings, Variables } from "../../env";
 
 /** Roles con permiso de editar catálogo (nivel E de la matriz de reglas_negocio). */
@@ -188,6 +191,52 @@ services.post("/:id/restore", auth, requireAuth, requirePermission("catalogo", "
   if (!restored) throw notFound("Service");
   return c.json(serializeService(restored));
 });
+
+// Impacto de un hard-delete: qué se borraría en cascada y si está bloqueado
+// por turnos/facturas. Solo admin — es el paso previo al DELETE /:id/permanent.
+services.get(
+  "/:id/delete-impact",
+  auth,
+  requireAuth,
+  requireAdmin,
+  async (c) => {
+    const db = createDb(c.env);
+    const id = c.req.param("id");
+    const svc = await getServiceById(db, id);
+    if (!svc) throw notFound("Service");
+    return c.json(await getServiceDeleteImpact(db, id));
+  },
+);
+
+// Hard-delete real (no el soft-delete de DELETE /:id). Solo admin. Cascada sobre
+// datos operativos; bloquea si hay turnos o facturas asociados (reglas_negocio §1.3/§5.1).
+services.delete(
+  "/:id/permanent",
+  auth,
+  requireAuth,
+  requireAdmin,
+  async (c) => {
+    const db = createDb(c.env);
+    const id = c.req.param("id");
+    const svc = await getServiceById(db, id);
+    if (!svc) throw notFound("Service");
+
+    const impact = await getServiceDeleteImpact(db, id);
+    if (impact.blocked) throw badRequest(impact.blockReason!);
+
+    try {
+      await hardDeleteService(db, id);
+    } catch (err) {
+      if (isForeignKeyViolation(err)) {
+        throw badRequest(
+          "No se puede eliminar: apareció una referencia nueva justo ahora. Archivalo en su lugar.",
+        );
+      }
+      throw err;
+    }
+    return c.json({ deleted: true });
+  },
+);
 
 // ── Relaciones del servicio (categorías + acuerdos con proveedoras) ──────────
 
