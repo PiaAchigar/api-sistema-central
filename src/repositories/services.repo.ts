@@ -1,8 +1,11 @@
 import { and, asc, eq, ilike, inArray, type SQL } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
+  appointments,
   categories,
+  lineItems,
   machines,
+  promotionService,
   service,
   serviceCategory,
   serviceMachine,
@@ -224,4 +227,56 @@ export async function setServiceActive(db: Db, id: string, isActive: boolean) {
     .where(eq(service.id, id))
     .returning(serviceSummary);
   return rows[0] ?? null;
+}
+
+// ── Hard-delete (borrado permanente, admin-only) ────────────────────────────
+
+/** Cuenta referencias del servicio en tablas fiscales/operativas. Si hay turnos
+ *  o líneas de factura, el hard-delete se bloquea (reglas_negocio §1.3 y §5.1:
+ *  nunca se toca una factura ya emitida). El resto son datos de configuración
+ *  que sí se pueden borrar en cascada. */
+export async function getServiceDeleteImpact(db: Db, id: string) {
+  const [appts, items, agreements, cats, mach, promos] = await Promise.all([
+    db.select({ id: appointments.id }).from(appointments).where(eq(appointments.serviceId, id)),
+    db.select({ id: lineItems.id }).from(lineItems).where(eq(lineItems.serviceId, id)),
+    db
+      .select({ id: serviceProviderService.id })
+      .from(serviceProviderService)
+      .where(eq(serviceProviderService.serviceId, id)),
+    db.select({ id: serviceCategory.serviceId }).from(serviceCategory).where(eq(serviceCategory.serviceId, id)),
+    db.select({ id: serviceMachine.id }).from(serviceMachine).where(eq(serviceMachine.serviceId, id)),
+    db.select({ id: promotionService.id }).from(promotionService).where(eq(promotionService.serviceId, id)),
+  ]);
+
+  const parts: string[] = [];
+  if (appts.length > 0) parts.push(`${appts.length} turno(s)`);
+  if (items.length > 0) parts.push(`${items.length} línea(s) de factura`);
+
+  return {
+    blocked: parts.length > 0,
+    blockReason:
+      parts.length > 0
+        ? `Tiene ${parts.join(" y ")} asociado(s). Archivalo en su lugar.`
+        : undefined,
+    cascade: {
+      agreements: agreements.length,
+      categories: cats.length,
+      machines: mach.length,
+      promotions: promos.length,
+    },
+  };
+}
+
+/** Borra el servicio y su configuración asociada en una sola transacción.
+ *  El caller (ruta) debe haber verificado que `getServiceDeleteImpact` no esté
+ *  `blocked` antes de llamar esta función. */
+export async function hardDeleteService(db: Db, id: string): Promise<boolean> {
+  const deleted = await db.transaction(async (tx) => {
+    await tx.delete(serviceCategory).where(eq(serviceCategory.serviceId, id));
+    await tx.delete(serviceMachine).where(eq(serviceMachine.serviceId, id));
+    await tx.delete(serviceProviderService).where(eq(serviceProviderService.serviceId, id));
+    await tx.delete(promotionService).where(eq(promotionService.serviceId, id));
+    return tx.delete(service).where(eq(service.id, id)).returning({ id: service.id });
+  });
+  return deleted.length > 0;
 }
