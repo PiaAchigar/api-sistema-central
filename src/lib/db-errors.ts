@@ -1,4 +1,4 @@
-import { PostgresError } from "postgres";
+import postgres from "postgres";
 
 /** Código SQLSTATE de "foreign_key_violation". */
 const FK_VIOLATION = "23503";
@@ -7,5 +7,5 @@ const FK_VIOLATION = "23503";
  *  borrar un registro referenciado por otra tabla). Se usa para distinguir esto
  *  de otros errores de DB y devolver un mensaje amigable en vez de un 500. */
 export function isForeignKeyViolation(err: unknown): boolean {
-  return err instanceof PostgresError && err.code === FK_VIOLATION;
+  return err instanceof postgres.PostgresError && err.code === FK_VIOLATION;
 }
