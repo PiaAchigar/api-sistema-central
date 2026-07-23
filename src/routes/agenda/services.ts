@@ -7,6 +7,9 @@ import { auth, requireAdmin, requireAuth, requirePermission } from "../../middle
 import {
   createProvider,
   getActiveAgreementsForService,
+  getProviderById,
+  getProviderDeleteImpact,
+  hardDeleteProvider,
   listActiveProviders,
   listAgreementRowsForService,
   listProvidersAdmin,
@@ -371,6 +374,52 @@ providersRouter.post("/:id/restore", auth, requireAuth, requirePermission("prove
   if (!restored) throw notFound("Provider");
   return c.json(restored);
 });
+
+// Impacto de un hard-delete: qué se borraría en cascada y si está bloqueado
+// por turnos/pagos recibidos. Solo admin.
+providersRouter.get(
+  "/:id/delete-impact",
+  auth,
+  requireAuth,
+  requireAdmin,
+  async (c) => {
+    const db = createDb(c.env);
+    const id = c.req.param("id");
+    const provider = await getProviderById(db, id);
+    if (!provider) throw notFound("Provider");
+    return c.json(await getProviderDeleteImpact(db, id));
+  },
+);
+
+// Hard-delete real (no el soft-delete de DELETE /:id). Solo admin. Cascada sobre
+// datos operativos; bloquea si hay turnos o pagos asociados.
+providersRouter.delete(
+  "/:id/permanent",
+  auth,
+  requireAuth,
+  requireAdmin,
+  async (c) => {
+    const db = createDb(c.env);
+    const id = c.req.param("id");
+    const provider = await getProviderById(db, id);
+    if (!provider) throw notFound("Provider");
+
+    const impact = await getProviderDeleteImpact(db, id);
+    if (impact.blocked) throw badRequest(impact.blockReason!);
+
+    try {
+      await hardDeleteProvider(db, id);
+    } catch (err) {
+      if (isForeignKeyViolation(err)) {
+        throw badRequest(
+          "No se puede eliminar: apareció una referencia nueva justo ahora. Archivalo en su lugar.",
+        );
+      }
+      throw err;
+    }
+    return c.json({ deleted: true });
+  },
+);
 
 providersRouter.get(
   "/schedule",
