@@ -13,6 +13,8 @@ import { getCustomerById } from "../repositories/customers.repo";
 import { getActiveAgreement } from "../repositories/providers.repo";
 import { getServiceById } from "../repositories/services.repo";
 import { loadAvailabilityContext } from "./availability.service";
+import { registerDeposit, type DepositInput } from "./deposits.service";
+import type { ArcaConfig } from "../arca/factory";
 
 export type CreateAppointmentInput = {
   customerId: string;
@@ -24,9 +26,16 @@ export type CreateAppointmentInput = {
   notes?: string;
   status?: "scheduled" | "reserved";
   expiryMinutes?: number; // solo para status='reserved'; default 60
+  /** Seña cobrada al reservar: se factura a ARCA y queda a favor del cliente. */
+  deposit?: DepositInput;
 };
 
-export async function createAppointment(db: Db, input: CreateAppointmentInput) {
+export async function createAppointment(
+  db: Db,
+  input: CreateAppointmentInput,
+  arca?: ArcaConfig,
+) {
+  if (input.deposit && !arca) throw badRequest("Config ARCA requerida para señas");
   const startDate = new Date(input.start);
   if (Number.isNaN(startDate.getTime())) throw badRequest("Fecha de inicio inválida");
   if (startDate.getTime() < Date.now()) throw badRequest("El turno no puede ser en el pasado");
@@ -110,7 +119,7 @@ export async function createAppointment(db: Db, input: CreateAppointmentInput) {
         ? new Date(Date.now() + (input.expiryMinutes ?? 60) * 60_000)
         : null;
 
-    return insertAppointment(tx, {
+    const appointment = await insertAppointment(tx, {
       customerId: input.customerId,
       serviceProviderId: input.providerId,
       serviceId: input.serviceId,
@@ -123,6 +132,21 @@ export async function createAppointment(db: Db, input: CreateAppointmentInput) {
       reservationExpiresAt,
       notes: input.notes ?? null,
     });
+
+    if (input.deposit && arca) {
+      await registerDeposit(tx, arca, {
+        appointmentId: appointment.id,
+        customerId: input.customerId,
+        contactId: customer.contactId ?? null,
+        customerName: customer.name ?? null,
+        serviceId: input.serviceId,
+        serviceName: ctx.service.name ?? null,
+        servicePrice: Number(servicePrice ?? 0),
+        deposit: input.deposit,
+      });
+    }
+
+    return appointment;
   });
 }
 

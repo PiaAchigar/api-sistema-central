@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, lt } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "../db/client";
 import { appointments, contacts, customers, invoices, payments, serviceProviders } from "../db/schema";
@@ -52,4 +52,49 @@ export async function listPaymentsByRange(
     .leftJoin(appointmentProvider, eq(appointmentProvider.id, appointments.serviceProviderId))
     .where(and(...conditions))
     .orderBy(asc(payments.paymentDate));
+}
+
+/** Total pagado (confirmado) por turno — incluye señas y cobros parciales. */
+export async function sumPaymentsByAppointmentIds(db: Db, appointmentIds: string[]) {
+  if (appointmentIds.length === 0) return [];
+  return db
+    .select({
+      appointmentId: payments.appointmentId,
+      total: sql<string>`coalesce(sum(${payments.amount}), 0)`,
+    })
+    .from(payments)
+    .where(
+      and(
+        inArray(payments.appointmentId, appointmentIds),
+        eq(payments.status, "confirmed"),
+      ),
+    )
+    .groupBy(payments.appointmentId);
+}
+
+/**
+ * Total cobrado DIRECTO por cada proveedora en el rango (pagos que el cliente
+ * le transfirió a ella y nunca entraron a PiuBella). Para la rendición: ese
+ * dinero se descuenta de lo que PiuBella le debe por comisiones.
+ */
+export async function sumPaymentsReceivedByProvider(
+  db: Db,
+  range: { start: Date; end: Date },
+) {
+  return db
+    .select({
+      providerId: payments.receivedByProviderId,
+      providerName: serviceProviders.fullName,
+      total: sql<string>`coalesce(sum(${payments.amount}), 0)`,
+    })
+    .from(payments)
+    .leftJoin(serviceProviders, eq(serviceProviders.id, payments.receivedByProviderId))
+    .where(
+      and(
+        isNotNull(payments.receivedByProviderId),
+        gte(payments.paymentDate, range.start),
+        lt(payments.paymentDate, range.end),
+      ),
+    )
+    .groupBy(payments.receivedByProviderId, serviceProviders.fullName);
 }

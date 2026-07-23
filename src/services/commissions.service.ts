@@ -1,10 +1,13 @@
 import type { Db } from "../db/client";
 import { localDayRangeUtc } from "../lib/time";
 import { listAppointmentsByRange } from "../repositories/appointments.repo";
+import { sumPaymentsReceivedByProvider } from "../repositories/payments.repo";
 
 /**
  * Liquidación de comisiones: suma de provider_earning (snapshot congelado al
  * completar cada turno) por proveedora en un rango de fechas locales.
+ * Incluye la rendición: comisiones ganadas − cobrado directo por la
+ * profesional (transferencias que nunca entraron a PiuBella) = saldo a pagar.
  */
 export async function getCommissionsReport(
   db: Db,
@@ -48,13 +51,40 @@ export async function getCommissionsReport(
     byProvider.set(row.providerId, entry);
   }
 
+  // Rendición: lo cobrado directo por cada profesional en el mismo período se
+  // descuenta de sus comisiones. Saldo > 0 ⇒ PiuBella le paga; < 0 ⇒ la
+  // profesional cobró de más y debe la diferencia.
+  const received = await sumPaymentsReceivedByProvider(db, range);
+  if (providerId) {
+    // El filtro por profesional también aplica a la rendición
+    received.splice(0, received.length, ...received.filter((r) => r.providerId === providerId));
+  }
+  const round = (n: number) => Math.round(n * 100) / 100;
+  const settlementIds = new Set<string>([
+    ...byProvider.keys(),
+    ...received.map((r) => r.providerId).filter((id): id is string => id != null),
+  ]);
+  const settlement = [...settlementIds].map((id) => {
+    const commissions = byProvider.get(id)?.total ?? 0;
+    const receivedRow = received.find((r) => r.providerId === id);
+    const receivedDirect = Number(receivedRow?.total ?? 0);
+    return {
+      providerId: id,
+      name: byProvider.get(id)?.name ?? receivedRow?.providerName ?? "",
+      commissions: round(commissions),
+      receivedDirect: round(receivedDirect),
+      balance: round(commissions - receivedDirect),
+    };
+  });
+
   return {
     from,
     to,
     rows,
     totalsByProvider: [...byProvider.values()].map((t) => ({
       ...t,
-      total: Math.round(t.total * 100) / 100,
+      total: round(t.total),
     })),
+    settlement,
   };
 }

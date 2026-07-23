@@ -1,6 +1,7 @@
 import {
   boolean,
   date,
+  decimal,
   integer,
   jsonb,
   pgTable,
@@ -47,6 +48,28 @@ export const customers = pgTable("customers", {
   dni: varchar("dni", { length: 50 }),
   cuit: varchar("cuit", { length: 50 }),
   firstPurchaseDate: timestamp("first_purchase_date"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+// Se usa desde el facturador para las SEÑAS: al reservar un turno con seña se
+// crea un deal (senia_amount / senia_paid) vinculado al appointment. El resto
+// de las columnas del pipeline CRM (stage, probability, nps…) no se mapean acá.
+export const deals = pgTable("deals", {
+  id: id(),
+  contactId: uuid("contact_id"),
+  appointmentId: uuid("appointment_id"),
+  title: varchar("title", { length: 255 }),
+  serviceName: varchar("service_name", { length: 255 }),
+  servicePrice: decimal("service_price", { precision: 10, scale: 2 }),
+  seniaAmount: decimal("senia_amount", { precision: 10, scale: 2 }),
+  seniaPaid: boolean("senia_paid"),
+  seniaPaidDate: timestamp("senia_paid_date"),
+  totalAmount: decimal("total_amount", { precision: 10, scale: 2 }),
+  amountPaid: decimal("amount_paid", { precision: 10, scale: 2 }),
+  amountPending: decimal("amount_pending", { precision: 10, scale: 2 }),
+  paymentMethod: varchar("payment_method", { length: 50 }),
+  cancelled: boolean("cancelled"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
