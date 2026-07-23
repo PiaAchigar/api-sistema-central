@@ -2,7 +2,12 @@ import { and, asc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { type AgreementInput, diffAgreements } from "../lib/agreements";
 import {
+  appointments,
+  mercadopagoAccounts,
   openHours,
+  payments,
+  promotionService,
+  providerAvailabilityAudit,
   providerAvailabilityExceptions,
   providerSaturdaySchedule,
   serviceProviderAvailability,
@@ -367,4 +372,92 @@ export async function setServiceAgreements(
       })),
     );
   }
+}
+
+// ── Hard-delete (borrado permanente, admin-only) ────────────────────────────
+
+/** Cuenta referencias de la proveedora en tablas fiscales/operativas. Si hay
+ *  turnos o pagos recibidos directamente, el hard-delete se bloquea (mismo
+ *  criterio que Servicio — ver reglas_negocio §1.3/§5.1). El resto (acuerdos,
+ *  máquinas certificadas, disponibilidad, cuentas MP, promo-service) son datos
+ *  de configuración que sí se borran en cascada. */
+export async function getProviderDeleteImpact(db: Db, id: string) {
+  const [appts, pays, agreements, mach, avail, saturdays, exceptions, mp, promos] =
+    await Promise.all([
+      db.select({ id: appointments.id }).from(appointments).where(eq(appointments.serviceProviderId, id)),
+      db.select({ id: payments.id }).from(payments).where(eq(payments.receivedByProviderId, id)),
+      db
+        .select({ id: serviceProviderService.id })
+        .from(serviceProviderService)
+        .where(eq(serviceProviderService.serviceProviderId, id)),
+      db
+        .select({ id: serviceProviderMachine.id })
+        .from(serviceProviderMachine)
+        .where(eq(serviceProviderMachine.serviceProviderId, id)),
+      db
+        .select({ id: serviceProviderAvailability.id })
+        .from(serviceProviderAvailability)
+        .where(eq(serviceProviderAvailability.serviceProviderId, id)),
+      db
+        .select({ id: providerSaturdaySchedule.id })
+        .from(providerSaturdaySchedule)
+        .where(eq(providerSaturdaySchedule.serviceProviderId, id)),
+      db
+        .select({ id: providerAvailabilityExceptions.id })
+        .from(providerAvailabilityExceptions)
+        .where(eq(providerAvailabilityExceptions.serviceProviderId, id)),
+      db
+        .select({ id: mercadopagoAccounts.id })
+        .from(mercadopagoAccounts)
+        .where(eq(mercadopagoAccounts.serviceProviderId, id)),
+      db
+        .select({ id: promotionService.id })
+        .from(promotionService)
+        .where(eq(promotionService.serviceProviderId, id)),
+    ]);
+
+  const parts: string[] = [];
+  if (appts.length > 0) parts.push(`${appts.length} turno(s)`);
+  if (pays.length > 0) parts.push(`${pays.length} pago(s) recibido(s)`);
+
+  return {
+    blocked: parts.length > 0,
+    blockReason:
+      parts.length > 0
+        ? `Tiene ${parts.join(" y ")} asociado(s). Archivalo en su lugar.`
+        : undefined,
+    cascade: {
+      agreements: agreements.length,
+      machines: mach.length,
+      weeklyAvailability: avail.length,
+      saturdaySchedule: saturdays.length,
+      exceptions: exceptions.length,
+      mpAccounts: mp.length,
+      promotions: promos.length,
+    },
+  };
+}
+
+/** Borra la proveedora y su configuración asociada en una sola transacción.
+ *  El caller (ruta) debe haber verificado que `getProviderDeleteImpact` no esté
+ *  `blocked` antes de llamar esta función. Incluye `provider_availability_audit`
+ *  porque tiene una FK real a `service_providers` (init.sql fk_provaudit_provider)
+ *  aunque sea solo un log — si no se borra, el DELETE final falla por FK. */
+export async function hardDeleteProvider(db: Db, id: string): Promise<boolean> {
+  const deleted = await db.transaction(async (tx) => {
+    await tx.delete(serviceProviderService).where(eq(serviceProviderService.serviceProviderId, id));
+    await tx.delete(serviceProviderMachine).where(eq(serviceProviderMachine.serviceProviderId, id));
+    await tx
+      .delete(serviceProviderAvailability)
+      .where(eq(serviceProviderAvailability.serviceProviderId, id));
+    await tx.delete(providerSaturdaySchedule).where(eq(providerSaturdaySchedule.serviceProviderId, id));
+    await tx
+      .delete(providerAvailabilityExceptions)
+      .where(eq(providerAvailabilityExceptions.serviceProviderId, id));
+    await tx.delete(providerAvailabilityAudit).where(eq(providerAvailabilityAudit.serviceProviderId, id));
+    await tx.delete(mercadopagoAccounts).where(eq(mercadopagoAccounts.serviceProviderId, id));
+    await tx.delete(promotionService).where(eq(promotionService.serviceProviderId, id));
+    return tx.delete(serviceProviders).where(eq(serviceProviders.id, id)).returning({ id: serviceProviders.id });
+  });
+  return deleted.length > 0;
 }
