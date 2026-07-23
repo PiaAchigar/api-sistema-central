@@ -194,7 +194,8 @@ function toServiceSet(p: ServiceWritable) {
     }),
     ...(p.isVisible !== undefined && { isVisible: p.isVisible }),
     ...(p.isFeatured !== undefined && { isFeatured: p.isFeatured }),
-    ...(p.webSortOrder !== undefined && { webSortOrder: p.webSortOrder }),
+    // web_sort_order es NOT NULL DEFAULT 0 en la base; null explícito rompe el insert/update.
+    ...(p.webSortOrder !== undefined && { webSortOrder: p.webSortOrder ?? 0 }),
   };
 }
 
