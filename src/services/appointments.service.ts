@@ -196,8 +196,10 @@ export async function updateAppointmentStatus(
       const deal = await getDealByAppointmentId(db, id);
       if (deal?.seniaPaid && deal.seniaAmount && appt.customerId) {
         await db.transaction(async (tx) => {
-          await cancelDeal(tx, deal.id, { cancelReason: "Turno cancelado" });
-          await creditCustomer(tx, appt.customerId!, Number(deal.seniaAmount));
+          const cancelled = await cancelDeal(tx, deal.id, { cancelReason: "Turno cancelado" });
+          if (cancelled) {
+            await creditCustomer(tx, appt.customerId!, Number(deal.seniaAmount));
+          }
         });
       }
     }

@@ -9,6 +9,7 @@ import {
   assignDeal,
   cancelDeal,
   createDeal,
+  getDealById,
   getOpenDealByContactId,
   listDealsForPipeline,
   updateDealStage,
@@ -100,6 +101,14 @@ dealsRouter.patch(
     const id = c.req.param("id");
     const { cancelReason } = c.req.valid("json");
 
+    // Distinguir "no existe" (404) de "ya está cancelado" (no-op, 200) —
+    // cancelar dos veces no es un error. `cancelDeal` ahora es condicional
+    // (WHERE cancelled IS NOT TRUE) para blindar contra carreras, así que un
+    // segundo llamado devuelve `null` aunque el deal exista.
+    const existing = await getDealById(db, id);
+    if (!existing) throw notFound("Deal");
+    if (existing.cancelled) return c.json(existing);
+
     const cancelled = await db.transaction(async (tx) => {
       const deal = await cancelDeal(tx, id, { cancelReason });
       if (!deal) return null;
@@ -110,8 +119,13 @@ dealsRouter.patch(
       return deal;
     });
 
-    if (!cancelled) throw notFound("Deal");
-    return c.json(cancelled);
+    if (cancelled) return c.json(cancelled);
+
+    // Carrera: se canceló entre nuestro check y la transacción. El deal
+    // existe y ya está cancelado — no es un 404.
+    const current = await getDealById(db, id);
+    if (!current) throw notFound("Deal");
+    return c.json(current);
   },
 );
 

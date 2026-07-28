@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { contacts, deals } from "../db/schema";
 
@@ -15,6 +15,14 @@ export async function getDealByAppointmentId(db: Tx, appointmentId: string) {
     .from(deals)
     .where(eq(deals.appointmentId, appointmentId))
     .limit(1);
+  return rows[0] ?? null;
+}
+
+/** Busca un deal por su propio id — usado para distinguir "no existe" de
+ *  "ya está cancelado" antes de reintentar una cancelación (ver `/cancel`
+ *  en routes/crm/deals.ts). */
+export async function getDealById(db: Pick<Db, "select">, id: string) {
+  const rows = await db.select().from(deals).where(eq(deals.id, id)).limit(1);
   return rows[0] ?? null;
 }
 
@@ -102,7 +110,16 @@ export async function assignDeal(db: Db, id: string, assignedAgentId: string | n
 }
 
 /** Cancela el deal con motivo. No toca `credit_balance` — eso lo hace el
- *  caller (Task 8) en la misma transacción, junto con la cancelación del turno. */
+ *  caller (Task 8) en la misma transacción, junto con la cancelación del turno.
+ *
+ *  El WHERE incluye `cancelled IS NOT TRUE` (equivalente Postgres-nativo de
+ *  "no es explícitamente true", cubre NULL y false sin el footgun de
+ *  three-valued logic de `ne()`) para que el UPDATE sea un no-op si el deal
+ *  ya estaba cancelado. Esto hace la cancelación segura ante carreras: dos
+ *  UPDATEs concurrentes sobre la misma fila se serializan por el lock de fila
+ *  de Postgres; el primero en commitear pone `cancelled=true`, el segundo
+ *  reevalúa el WHERE, no matchea nada y devuelve `null` — el caller debe
+ *  tratar `null` como "no se acreditó nada" (ver appointments.service.ts). */
 export async function cancelDeal(
   tx: Pick<Db, "update">,
   id: string,
@@ -111,7 +128,7 @@ export async function cancelDeal(
   const rows = await tx
     .update(deals)
     .set({ cancelled: true, cancelReason: data.cancelReason })
-    .where(eq(deals.id, id))
+    .where(and(eq(deals.id, id), sql`${deals.cancelled} IS NOT TRUE`))
     .returning();
   return rows[0] ?? null;
 }
