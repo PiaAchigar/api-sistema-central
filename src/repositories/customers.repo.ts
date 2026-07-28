@@ -29,7 +29,7 @@ export async function searchCustomers(db: Db, q: string, limit = 20) {
     .limit(limit);
 }
 
-export async function getCustomerById(db: Db, id: string) {
+export async function getCustomerById(db: Pick<Db, "select">, id: string) {
   const rows = await db
     .select(customerSummary)
     .from(customers)

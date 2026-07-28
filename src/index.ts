@@ -17,6 +17,7 @@ app.use(
         origin === "http://localhost:5173" ||
         origin === "http://localhost:5174" ||
         origin === "http://localhost:5175" ||
+        origin === "http://localhost:5176" ||
         /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin) ||
         /^https:\/\/[a-z0-9-]+\.piubellaesteticapilates\.com\.ar$/.test(origin)
       ) {
