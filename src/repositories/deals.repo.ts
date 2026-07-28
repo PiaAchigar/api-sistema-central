@@ -72,17 +72,28 @@ export async function listDealsForPipeline(db: Db) {
  *  — lo usa `registerDeposit` para completarlo en vez de duplicarlo cuando por
  *  fin se cobra la seña del turno.
  *
- *  El match es deliberadamente angosto: `appointment_id IS NULL` **y**
- *  `senia_paid IS NOT TRUE`. Sin esas dos condiciones, la segunda seña de un
- *  cliente que vuelve pisaba el deal de su PRIMER turno (corrompiendo
- *  `appointments.deal_id`, rompiendo el seguimiento de señas y silenciando el
- *  crédito por cancelación del primer turno).
+ *  El match es deliberadamente angosto — las TRES condiciones son necesarias:
  *
- *  Sobre `IS NOT TRUE`: un deal recién creado a mano tiene `senia_paid = NULL`
- *  y SÍ queremos matchearlo (nadie pagó nada todavía). `ne(col, true)` en
- *  Postgres es `col <> true`, que da NULL para NULL y quedaría excluido por el
- *  WHERE — el mismo footgun de three-valued logic que tuvo `cancelled`. Acá se
- *  usa SQL crudo `IS NOT TRUE` para incluir explícitamente NULL y false. */
+ *  1. `appointment_id IS NULL` + 2. `senia_paid IS NOT TRUE`: sin esto, la
+ *     segunda seña de un cliente que vuelve pisaba el deal de su PRIMER turno
+ *     (corrompiendo `appointments.deal_id`, rompiendo el seguimiento de señas y
+ *     silenciando el crédito por cancelación del primer turno).
+ *
+ *  3. `cancelled IS NOT TRUE`: sin esto, un deal manual que se canceló desde el
+ *     kanban (sin plata de por medio, así que no se acreditó nada — correcto)
+ *     seguía matcheando, y `updateDealFromDeposit` lo "resucitaba" con la seña
+ *     nueva SIN limpiar `cancelled`/`cancel_reason`. Resultado: el deal pago
+ *     quedaba invisible en el kanban, y si después se cancelaba ese turno el
+ *     guard de `cancelDeal` (`WHERE cancelled IS NOT TRUE`) no matcheaba nada,
+ *     devolvía null y `creditCustomer` NUNCA corría — la seña del cliente se
+ *     perdía en silencio. Excluyéndolo, la seña cae a `insertDeal` y arranca un
+ *     deal nuevo con su propio ciclo de cancelación/crédito.
+ *
+ *  Sobre `IS NOT TRUE`: un deal recién creado a mano tiene `senia_paid` y
+ *  `cancelled` en NULL, y SÍ queremos matchearlo (nadie pagó ni canceló nada
+ *  todavía). `ne(col, true)` en Postgres es `col <> true`, que da NULL para NULL
+ *  y quedaría excluido por el WHERE — el footgun clásico de three-valued logic.
+ *  Por eso ambas usan SQL crudo `IS NOT TRUE`, que incluye NULL y false. */
 export async function getOpenDealByContactId(db: Pick<Db, "select">, contactId: string) {
   const rows = await db
     .select()
@@ -92,6 +103,7 @@ export async function getOpenDealByContactId(db: Pick<Db, "select">, contactId: 
         eq(deals.contactId, contactId),
         isNull(deals.appointmentId),
         sql`${deals.seniaPaid} IS NOT TRUE`,
+        sql`${deals.cancelled} IS NOT TRUE`,
       ),
     )
     .orderBy(desc(deals.createdAt))
