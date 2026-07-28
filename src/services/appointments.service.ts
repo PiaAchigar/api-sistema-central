@@ -172,6 +172,9 @@ export async function updateAppointmentStatus(
   const values: Record<string, unknown> = {};
   if (changes.notes !== undefined) values.notes = changes.notes;
 
+  /** Seña a devolver como saldo a favor al cancelar (null = no hay nada que acreditar). */
+  let dealToCancel: { id: string; amount: number; customerId: string } | null = null;
+
   if (changes.status) {
     if (!VALID_STATUSES.includes(changes.status)) throw badRequest("Estado inválido");
     if (appt.status === "completed" && changes.status !== "completed") {
@@ -192,20 +195,31 @@ export async function updateAppointmentStatus(
 
     // Al cancelar: si había una seña paga, se cancela el deal y se acredita
     // el saldo al cliente (no se pierde la plata — reglas_negocio §6.2).
+    // Solo se RESUELVE acá; los tres writes (cancelar deal, acreditar saldo y
+    // marcar el turno cancelado) se hacen abajo en una única transacción.
     if (changes.status === "cancelled" && appt.status !== "cancelled") {
       const deal = await getDealByAppointmentId(db, id);
       if (deal?.seniaPaid && deal.seniaAmount && appt.customerId) {
-        await db.transaction(async (tx) => {
-          const cancelled = await cancelDeal(tx, deal.id, { cancelReason: "Turno cancelado" });
-          if (cancelled) {
-            await creditCustomer(tx, appt.customerId!, Number(deal.seniaAmount));
-          }
-        });
+        dealToCancel = {
+          id: deal.id,
+          amount: Number(deal.seniaAmount),
+          customerId: appt.customerId,
+        };
       }
     }
   }
 
-  return updateAppointment(db, id, values);
+  if (!dealToCancel) return updateAppointment(db, id, values);
+
+  // Atómico: o se cancela el deal + se acredita el saldo + se cancela el turno,
+  // o no pasa nada. Si esto se partiera en dos transacciones podría quedar el
+  // saldo acreditado con el turno todavía activo (o al revés).
+  const pending = dealToCancel;
+  return db.transaction(async (tx) => {
+    const cancelled = await cancelDeal(tx, pending.id, { cancelReason: "Turno cancelado" });
+    if (cancelled) await creditCustomer(tx, pending.customerId, pending.amount);
+    return updateAppointment(tx, id, values);
+  });
 }
 
 export async function rescheduleAppointment(db: Db, id: string, newStart: string) {

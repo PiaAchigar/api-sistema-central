@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { contacts, deals } from "../db/schema";
 
@@ -68,13 +68,21 @@ export async function listDealsForPipeline(db: Db) {
     .orderBy(desc(deals.createdAt));
 }
 
-/** Deal "abierto" de un contacto (no cancelado, no completado) — lo usa
- *  `registerDeposit` para actualizar en vez de duplicar al cobrar una seña.
- *  `cancelled` es nullable (deals viejos y los creados manualmente no la
- *  setean), y en SQL `NULL <> true` da `NULL` — que en un WHERE se evalúa
- *  como falso y excluiría esas filas. Por eso se usa
- *  `or(isNull(...), ne(...))`: solo se excluyen los explícitamente
- *  cancelados (`cancelled = true`), no los que tienen `cancelled = NULL`. */
+/** Deal creado a mano en el pipeline del CRM que TODAVÍA no tiene turno ni seña
+ *  — lo usa `registerDeposit` para completarlo en vez de duplicarlo cuando por
+ *  fin se cobra la seña del turno.
+ *
+ *  El match es deliberadamente angosto: `appointment_id IS NULL` **y**
+ *  `senia_paid IS NOT TRUE`. Sin esas dos condiciones, la segunda seña de un
+ *  cliente que vuelve pisaba el deal de su PRIMER turno (corrompiendo
+ *  `appointments.deal_id`, rompiendo el seguimiento de señas y silenciando el
+ *  crédito por cancelación del primer turno).
+ *
+ *  Sobre `IS NOT TRUE`: un deal recién creado a mano tiene `senia_paid = NULL`
+ *  y SÍ queremos matchearlo (nadie pagó nada todavía). `ne(col, true)` en
+ *  Postgres es `col <> true`, que da NULL para NULL y quedaría excluido por el
+ *  WHERE — el mismo footgun de three-valued logic que tuvo `cancelled`. Acá se
+ *  usa SQL crudo `IS NOT TRUE` para incluir explícitamente NULL y false. */
 export async function getOpenDealByContactId(db: Pick<Db, "select">, contactId: string) {
   const rows = await db
     .select()
@@ -82,10 +90,11 @@ export async function getOpenDealByContactId(db: Pick<Db, "select">, contactId: 
     .where(
       and(
         eq(deals.contactId, contactId),
-        ne(deals.stage, "completado"),
-        or(isNull(deals.cancelled), ne(deals.cancelled, true)),
+        isNull(deals.appointmentId),
+        sql`${deals.seniaPaid} IS NOT TRUE`,
       ),
     )
+    .orderBy(desc(deals.createdAt))
     .limit(1);
   return rows[0] ?? null;
 }

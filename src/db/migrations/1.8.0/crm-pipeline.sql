@@ -6,6 +6,24 @@
 -- canales nuevos a contacts, y el saldo a favor del cliente (credit_balance) que
 -- se acredita cuando se cancela un turno con seña ya paga (ver reglas_negocio §6.2).
 -- Idempotente: se puede correr más de una vez sin romper.
+--
+-- ⚠️  ANTES DE APLICAR ESTO EN SUPABASE (PRODUCCIÓN), LEER ESTO ⚠️
+-- ────────────────────────────────────────────────────────────────────────────
+-- `deals.assigned_agent_id` YA EXISTE en el init.sql de producción, y allá la
+-- foreign key hacia `users(id)` se llama `fk_deal_agent` (singular), NO
+-- `fk_deals_assigned_agent`. El bloque DO de más abajo solo chequea el nombre
+-- NUEVO, así que si se corre tal cual en Supabase va a agregar una SEGUNDA FK
+-- REDUNDANTE sobre la misma columna.
+--
+-- Antes de correr esta migración en producción, verificar:
+--
+--   SELECT conname FROM pg_constraint
+--   WHERE conrelid = 'deals'::regclass AND contype = 'f';
+--
+-- Si aparece `fk_deal_agent` (o cualquier otra FK sobre `assigned_agent_id`),
+-- SALTEAR / COMENTAR el bloque DO $$ ... END $$ de la FK — el resto de la
+-- migración sí se aplica normalmente.
+-- ────────────────────────────────────────────────────────────────────────────
 
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS facebook_id VARCHAR(255);
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS telegram_id VARCHAR(255);

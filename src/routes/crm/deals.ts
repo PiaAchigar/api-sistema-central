@@ -3,17 +3,17 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
-import { notFound } from "../../lib/errors";
+import { badRequest, notFound } from "../../lib/errors";
 import { requireAuth, requirePermission } from "../../middleware/auth";
 import {
   assignDeal,
   cancelDeal,
   createDeal,
   getDealById,
-  getOpenDealByContactId,
   listDealsForPipeline,
   updateDealStage,
 } from "../../repositories/deals.repo";
+import { getAppointmentById } from "../../repositories/appointments.repo";
 import { creditCustomer, getCustomerByContactId } from "../../repositories/customers.repo";
 import { listActiveLocalUsers } from "../../repositories/users.repo";
 import type { AppBindings, Variables } from "../../env";
@@ -95,7 +95,9 @@ dealsRouter.patch(
   "/:id/cancel",
   requireAuth,
   requirePermission("crm", "edit"),
-  zValidator("json", z.object({ cancelReason: z.string().min(1) })),
+  // `deals.cancel_reason` es VARCHAR(255) en la base — el max acá evita que un
+  // motivo largo explote como error crudo de Postgres en vez de un 400 limpio.
+  zValidator("json", z.object({ cancelReason: z.string().min(1).max(255) })),
   async (c) => {
     const db = createDb(c.env);
     const id = c.req.param("id");
@@ -108,6 +110,19 @@ dealsRouter.patch(
     const existing = await getDealById(db, id);
     if (!existing) throw notFound("Deal");
     if (existing.cancelled) return c.json(existing);
+
+    // Si el deal está atado a un turno que sigue vivo, cancelarlo desde el
+    // kanban acreditaría la seña mientras el local sigue reservando el horario
+    // (doble conteo). La cancelación tiene que salir de la agenda, que además
+    // libera el turno y acredita el saldo en una sola transacción.
+    if (existing.appointmentId) {
+      const appt = await getAppointmentById(db, existing.appointmentId);
+      if (appt && appt.status !== "cancelled") {
+        throw badRequest(
+          "Este deal está vinculado a un turno activo — cancelá el turno desde la agenda primero.",
+        );
+      }
+    }
 
     const cancelled = await db.transaction(async (tx) => {
       const deal = await cancelDeal(tx, id, { cancelReason });
