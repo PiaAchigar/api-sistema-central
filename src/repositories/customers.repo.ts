@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, or } from "drizzle-orm";
+import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { contacts, customers } from "../db/schema";
 
@@ -7,6 +7,7 @@ const customerSummary = {
   contactId: customers.contactId,
   dni: customers.dni,
   cuit: customers.cuit,
+  creditBalance: customers.creditBalance,
   name: contacts.name,
   phone: contacts.phone,
   email: contacts.email,
@@ -86,4 +87,19 @@ export async function listRecentCustomers(db: Db, limit = 20) {
     .innerJoin(contacts, eq(contacts.id, customers.contactId))
     .orderBy(desc(customers.createdAt))
     .limit(limit);
+}
+
+/** Acredita `amount` al saldo a favor del cliente. Se llama dentro de la misma
+ *  transacción que cancela el deal (ver appointments.service.ts). `sql` suma
+ *  sobre el valor actual en la propia query — no hay condición de carrera entre
+ *  leer y escribir el balance. */
+export async function creditCustomer(
+  tx: Pick<Db, "update">,
+  customerId: string,
+  amount: number,
+) {
+  await tx
+    .update(customers)
+    .set({ creditBalance: sql`${customers.creditBalance} + ${amount}` })
+    .where(eq(customers.id, customerId));
 }

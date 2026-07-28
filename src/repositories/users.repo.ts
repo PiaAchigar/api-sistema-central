@@ -34,3 +34,13 @@ export async function setLocalUserRole(db: Db, authId: string, role: string) {
 export async function setLocalUserActive(db: Db, authId: string, isActive: boolean) {
   await db.update(users).set({ isActive }).where(eq(users.authId, authId));
 }
+
+/** Usuarios activos, para el dropdown de "asignar agente" en el pipeline del
+ *  CRM. Cualquier rol con acceso a `crm` puede verlo (no es admin-only como
+ *  /api/users, que expone datos de Supabase Auth). */
+export async function listActiveLocalUsers(db: Db) {
+  return db
+    .select({ id: users.id, fullName: users.fullName, email: users.email })
+    .from(users)
+    .where(eq(users.isActive, true));
+}
