@@ -2,7 +2,7 @@ import type { ArcaConfig } from "../arca/factory";
 import type { Db } from "../db/client";
 import { badRequest } from "../lib/errors";
 import { insertCashMovement } from "../repositories/cash.repo";
-import { insertDeal } from "../repositories/deals.repo";
+import { getOpenDealByContactId, insertDeal, updateDealFromDeposit } from "../repositories/deals.repo";
 import { insertInvoice, insertLineItems } from "../repositories/invoices.repo";
 import { insertPayment } from "../repositories/payments.repo";
 import { updateAppointment } from "../repositories/appointments.repo";
@@ -44,21 +44,36 @@ export async function registerDeposit(
 
   const now = new Date();
 
-  const deal = await insertDeal(tx, {
-    contactId: params.contactId,
-    appointmentId: params.appointmentId,
-    title: `Seña — ${params.serviceName ?? "servicio"}`,
-    serviceName: params.serviceName,
-    servicePrice: params.servicePrice.toFixed(2),
-    seniaAmount: deposit.amount.toFixed(2),
-    seniaPaid: true,
-    seniaPaidDate: now,
-    totalAmount: params.servicePrice.toFixed(2),
-    amountPaid: deposit.amount.toFixed(2),
-    amountPending: Math.max(0, params.servicePrice - deposit.amount).toFixed(2),
-    paymentMethod: deposit.method,
-    cancelled: false,
-  });
+  const existingDeal = params.contactId
+    ? await getOpenDealByContactId(tx, params.contactId)
+    : null;
+
+  const deal = existingDeal
+    ? await updateDealFromDeposit(tx, existingDeal.id, {
+        appointmentId: params.appointmentId,
+        serviceName: params.serviceName,
+        servicePrice: params.servicePrice.toFixed(2),
+        seniaAmount: deposit.amount.toFixed(2),
+        seniaPaid: true,
+        seniaPaidDate: now,
+        stage: "senia_pagada",
+      })
+    : await insertDeal(tx, {
+        contactId: params.contactId,
+        appointmentId: params.appointmentId,
+        title: `Seña — ${params.serviceName ?? "servicio"}`,
+        serviceName: params.serviceName,
+        servicePrice: params.servicePrice.toFixed(2),
+        seniaAmount: deposit.amount.toFixed(2),
+        seniaPaid: true,
+        seniaPaidDate: now,
+        totalAmount: params.servicePrice.toFixed(2),
+        amountPaid: deposit.amount.toFixed(2),
+        amountPending: Math.max(0, params.servicePrice - deposit.amount).toFixed(2),
+        paymentMethod: deposit.method,
+        cancelled: false,
+        stage: "senia_pagada",
+      });
 
   await updateAppointment(tx, params.appointmentId, { dealId: deal.id });
 

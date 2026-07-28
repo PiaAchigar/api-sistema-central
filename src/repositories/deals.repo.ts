@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { contacts, deals } from "../db/schema";
 
@@ -62,9 +62,11 @@ export async function listDealsForPipeline(db: Db) {
 
 /** Deal "abierto" de un contacto (no cancelado, no completado) — lo usa
  *  `registerDeposit` para actualizar en vez de duplicar al cobrar una seña.
- *  `ne(deals.cancelled, true)` incluye también las filas donde `cancelled` es
- *  `NULL` (deals viejos, la columna siempre fue nullable) — que es lo que se
- *  quiere: solo excluir los explícitamente cancelados. */
+ *  `cancelled` es nullable (deals viejos y los creados manualmente no la
+ *  setean), y en SQL `NULL <> true` da `NULL` — que en un WHERE se evalúa
+ *  como falso y excluiría esas filas. Por eso se usa
+ *  `or(isNull(...), ne(...))`: solo se excluyen los explícitamente
+ *  cancelados (`cancelled = true`), no los que tienen `cancelled = NULL`. */
 export async function getOpenDealByContactId(db: Pick<Db, "select">, contactId: string) {
   const rows = await db
     .select()
@@ -73,7 +75,7 @@ export async function getOpenDealByContactId(db: Pick<Db, "select">, contactId: 
       and(
         eq(deals.contactId, contactId),
         ne(deals.stage, "completado"),
-        ne(deals.cancelled, true),
+        or(isNull(deals.cancelled), ne(deals.cancelled, true)),
       ),
     )
     .limit(1);
@@ -112,4 +114,23 @@ export async function cancelDeal(
     .where(eq(deals.id, id))
     .returning();
   return rows[0] ?? null;
+}
+
+/** Actualiza un deal abierto existente con los datos de la seña recién cobrada,
+ *  en vez de crear uno nuevo (evita duplicar oportunidades en el kanban). */
+export async function updateDealFromDeposit(
+  tx: Pick<Db, "update">,
+  id: string,
+  data: {
+    appointmentId: string;
+    serviceName: string | null;
+    servicePrice: string;
+    seniaAmount: string;
+    seniaPaid: boolean;
+    seniaPaidDate: Date;
+    stage: string;
+  },
+) {
+  const rows = await tx.update(deals).set(data).where(eq(deals.id, id)).returning();
+  return rows[0]!;
 }
