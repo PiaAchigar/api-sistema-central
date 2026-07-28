@@ -13,7 +13,7 @@ import {
   listDealsForPipeline,
   updateDealStage,
 } from "../../repositories/deals.repo";
-import { creditCustomer, getCustomerById } from "../../repositories/customers.repo";
+import { creditCustomer, getCustomerByContactId } from "../../repositories/customers.repo";
 import { listActiveLocalUsers } from "../../repositories/users.repo";
 import type { AppBindings, Variables } from "../../env";
 
@@ -104,7 +104,7 @@ dealsRouter.patch(
       const deal = await cancelDeal(tx, id, { cancelReason });
       if (!deal) return null;
       if (deal.seniaPaid && deal.seniaAmount) {
-        const customer = await getCustomerById(tx, deal.contactId!);
+        const customer = await getCustomerByContactId(tx, deal.contactId!);
         if (customer) await creditCustomer(tx, customer.id, Number(deal.seniaAmount));
       }
       return deal;

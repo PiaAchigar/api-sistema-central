@@ -39,6 +39,19 @@ export async function getCustomerById(db: Pick<Db, "select">, id: string) {
   return rows[0] ?? null;
 }
 
+/** Igual que `getCustomerById` pero busca por CONTACT id en vez de CUSTOMER id —
+ *  usar cuando lo único disponible es el `contactId` (ej: `deals.contactId`),
+ *  que es una FK a `contacts`, no a `customers`. */
+export async function getCustomerByContactId(db: Pick<Db, "select">, contactId: string) {
+  const rows = await db
+    .select(customerSummary)
+    .from(customers)
+    .innerJoin(contacts, eq(contacts.id, customers.contactId))
+    .where(eq(customers.contactId, contactId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function findCustomerByDni(db: Db, dni: string) {
   const rows = await db
     .select({ id: customers.id })
