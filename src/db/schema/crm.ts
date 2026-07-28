@@ -25,6 +25,8 @@ export const contacts = pgTable("contacts", {
   phone: varchar("phone", { length: 50 }),
   whatsappId: varchar("whatsapp_id", { length: 255 }),
   instagramId: varchar("instagram_id", { length: 255 }),
+  facebookId: varchar("facebook_id", { length: 255 }),
+  telegramId: varchar("telegram_id", { length: 255 }),
   customFieldsJson: jsonb("custom_fields_json"),
   tags: text("tags").array(),
   isArchived: boolean("is_archived"),
@@ -48,6 +50,9 @@ export const customers = pgTable("customers", {
   dni: varchar("dni", { length: 50 }),
   cuit: varchar("cuit", { length: 50 }),
   firstPurchaseDate: timestamp("first_purchase_date"),
+  creditBalance: decimal("credit_balance", { precision: 10, scale: 2 })
+    .notNull()
+    .default("0"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -70,6 +75,9 @@ export const deals = pgTable("deals", {
   amountPending: decimal("amount_pending", { precision: 10, scale: 2 }),
   paymentMethod: varchar("payment_method", { length: 50 }),
   cancelled: boolean("cancelled"),
+  stage: varchar("stage", { length: 30 }).notNull().default("lead"),
+  assignedAgentId: uuid("assigned_agent_id"),
+  cancelReason: text("cancel_reason"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
