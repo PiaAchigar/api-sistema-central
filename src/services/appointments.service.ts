@@ -9,7 +9,8 @@ import {
   listAppointmentsByRange,
   updateAppointment,
 } from "../repositories/appointments.repo";
-import { getCustomerById } from "../repositories/customers.repo";
+import { creditCustomer, getCustomerById } from "../repositories/customers.repo";
+import { cancelDeal, getDealByAppointmentId } from "../repositories/deals.repo";
 import { getActiveAgreement } from "../repositories/providers.repo";
 import { getServiceById } from "../repositories/services.repo";
 import { loadAvailabilityContext } from "./availability.service";
@@ -187,6 +188,18 @@ export async function updateAppointmentStatus(
     if (changes.status === "completed" && appt.status !== "completed") {
       const snapshot = await computeProviderEarning(db, appt);
       Object.assign(values, snapshot);
+    }
+
+    // Al cancelar: si había una seña paga, se cancela el deal y se acredita
+    // el saldo al cliente (no se pierde la plata — reglas_negocio §6.2).
+    if (changes.status === "cancelled" && appt.status !== "cancelled") {
+      const deal = await getDealByAppointmentId(db, id);
+      if (deal?.seniaPaid && deal.seniaAmount && appt.customerId) {
+        await db.transaction(async (tx) => {
+          await cancelDeal(tx, deal.id, { cancelReason: "Turno cancelado" });
+          await creditCustomer(tx, appt.customerId!, Number(deal.seniaAmount));
+        });
+      }
     }
   }
 
