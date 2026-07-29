@@ -154,3 +154,27 @@ export const messages = pgTable("messages", {
   mediaUrl: varchar("media_url", { length: 255 }),
   createdAt: createdAt(),
 });
+
+export const automationRules = pgTable("automation_rules", {
+  id: id(),
+  name: varchar("name", { length: 255 }),
+  isActive: boolean("is_active"),
+  triggerType: varchar("trigger_type", { length: 50 }),
+  conditions: jsonb("conditions"),
+  actionType: varchar("action_type", { length: 50 }),
+  actionConfig: jsonb("action_config"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const automationRuns = pgTable("automation_runs", {
+  id: id(),
+  ruleId: uuid("rule_id"),
+  triggerType: varchar("trigger_type", { length: 50 }),
+  contactId: uuid("contact_id"),
+  conversationId: uuid("conversation_id"),
+  dealId: uuid("deal_id"),
+  status: varchar("status", { length: 50 }),
+  detail: text("detail"),
+  createdAt: createdAt(),
+});
