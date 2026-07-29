@@ -48,14 +48,14 @@ export const ruleBody = z
     actionConfig: z.record(z.unknown()),
   })
   .superRefine((r, ctx) => {
-    if (!VALID_ACTIONS[r.triggerType].includes(r.actionType)) {
+    if (!(VALID_ACTIONS[r.triggerType] ?? []).includes(r.actionType)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: `La acción "${r.actionType}" no es válida para ese disparador`,
       });
     }
     for (const cond of r.conditions) {
-      if (!VALID_CONDITIONS[r.triggerType].includes(cond.type)) {
+      if (!(VALID_CONDITIONS[r.triggerType] ?? []).includes(cond.type)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `La condición "${cond.type}" no aplica a ese disparador`,
