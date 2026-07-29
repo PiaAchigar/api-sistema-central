@@ -12,6 +12,7 @@ import {
   getDealById,
   listDealsForPipeline,
   updateDealStage,
+  updateDealTitle,
 } from "../../repositories/deals.repo";
 import { getAppointmentById } from "../../repositories/appointments.repo";
 import { creditCustomer, getCustomerByContactId } from "../../repositories/customers.repo";
@@ -73,6 +74,7 @@ dealsRouter.patch(
   zValidator(
     "json",
     z.object({
+      title: z.string().min(1).optional(),
       stage: z.enum(STAGES).optional(),
       assignedAgentId: z.string().uuid().nullable().optional(),
     }),
@@ -82,6 +84,7 @@ dealsRouter.patch(
     const id = c.req.param("id");
     const body = c.req.valid("json");
     let updated = null;
+    if (body.title) updated = await updateDealTitle(db, id, body.title);
     if (body.stage) updated = await updateDealStage(db, id, body.stage);
     if (body.assignedAgentId !== undefined) {
       updated = await assignDeal(db, id, body.assignedAgentId);

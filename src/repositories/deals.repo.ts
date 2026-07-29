@@ -116,6 +116,11 @@ export async function createDeal(db: Db, data: typeof deals.$inferInsert) {
   return rows[0]!;
 }
 
+export async function updateDealTitle(db: Db, id: string, title: string) {
+  const rows = await db.update(deals).set({ title }).where(eq(deals.id, id)).returning();
+  return rows[0] ?? null;
+}
+
 export async function updateDealStage(db: Db, id: string, stage: string) {
   const rows = await db.update(deals).set({ stage }).where(eq(deals.id, id)).returning();
   return rows[0] ?? null;
