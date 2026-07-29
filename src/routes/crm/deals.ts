@@ -17,6 +17,7 @@ import {
 import { getAppointmentById } from "../../repositories/appointments.repo";
 import { creditCustomer, getCustomerByContactId } from "../../repositories/customers.repo";
 import { listActiveLocalUsers } from "../../repositories/users.repo";
+import { runAutomations } from "../../services/automation.service";
 import type { AppBindings, Variables } from "../../env";
 
 const dealsRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
@@ -90,6 +91,14 @@ dealsRouter.patch(
       updated = await assignDeal(db, id, body.assignedAgentId);
     }
     if (!updated) throw notFound("Deal");
+    if (body.stage) {
+      await runAutomations(db, {
+        type: "deal_stage_changed",
+        dealId: id,
+        contactId: updated.contactId,
+        toStage: body.stage,
+      });
+    }
     return c.json(updated);
   },
 );

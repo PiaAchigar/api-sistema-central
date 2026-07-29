@@ -146,6 +146,45 @@ export async function addAgentMessage(db: Db, conversationId: string, content: s
   });
 }
 
+/** Igual que addAgentMessage pero del lado del contacto (para simular entrantes
+ *  / Fase 6 webhooks). Persiste el mensaje y bumpea contadores. */
+export async function addContactMessage(db: Db, conversationId: string, content: string) {
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .insert(messages)
+      .values({ conversationId, senderType: "contact", content })
+      .returning({
+        id: messages.id,
+        senderType: messages.senderType,
+        content: messages.content,
+        mediaUrl: messages.mediaUrl,
+        createdAt: messages.createdAt,
+      });
+    await tx
+      .update(conversations)
+      .set({
+        messageCount: sql`COALESCE(${conversations.messageCount}, 0) + 1`,
+        lastMessageAt: new Date(),
+      })
+      .where(eq(conversations.id, conversationId));
+    return rows[0]!;
+  });
+}
+
+/** Campos mínimos de la conversación para armar el evento del motor. */
+export async function getConversationCore(db: Db, id: string) {
+  const rows = await db
+    .select({
+      id: conversations.id,
+      contactId: conversations.contactId,
+      channel: conversations.channel,
+    })
+    .from(conversations)
+    .where(eq(conversations.id, id))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function updateConversation(
   db: Db,
   id: string,
