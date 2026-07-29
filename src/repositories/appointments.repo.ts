@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, gte, inArray, isNotNull, lt, not, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, not, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   appointments,
@@ -8,6 +8,7 @@ import {
   service,
   serviceProviders,
 } from "../db/schema";
+import { getCustomerByContactId } from "./customers.repo";
 
 /** Estados que nunca bloquean disponibilidad. */
 export const NON_BLOCKING_STATUSES = ["cancelled", "no_show"];
@@ -219,4 +220,24 @@ export async function updateAppointment(
     .where(eq(appointments.id, id))
     .returning();
   return rows[0] ?? null;
+}
+
+/** Turnos de un contacto (para la ficha). Resuelve contacto→cliente y lista sus
+ *  turnos con el nombre del servicio. Si el contacto no es cliente, devuelve []. */
+export async function listAppointmentsByContactId(db: Db, contactId: string) {
+  const customer = await getCustomerByContactId(db, contactId);
+  if (!customer) return [];
+  return db
+    .select({
+      id: appointments.id,
+      serviceName: service.name,
+      appointmentStart: appointments.appointmentStart,
+      appointmentEnd: appointments.appointmentEnd,
+      servicePrice: appointments.servicePrice,
+      status: appointments.status,
+    })
+    .from(appointments)
+    .leftJoin(service, eq(service.id, appointments.serviceId))
+    .where(eq(appointments.customerId, customer.id))
+    .orderBy(desc(appointments.appointmentStart));
 }

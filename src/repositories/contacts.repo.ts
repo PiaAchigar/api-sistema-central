@@ -1,12 +1,13 @@
-import { and, desc, eq, ilike, or } from "drizzle-orm";
+import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { contacts } from "../db/schema";
 
 export async function listContacts(
   db: Db,
-  filters: { status?: string; q?: string; limit: number; offset: number },
+  filters: { status?: string; q?: string; limit: number; offset: number; includeArchived?: boolean },
 ) {
   const conditions = [];
+  if (!filters.includeArchived) conditions.push(sql`${contacts.isArchived} IS NOT TRUE`);
   if (filters.status) conditions.push(eq(contacts.status, filters.status));
   if (filters.q) {
     const pattern = `%${filters.q}%`;

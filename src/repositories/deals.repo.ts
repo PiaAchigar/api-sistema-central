@@ -172,3 +172,25 @@ export async function updateDealFromDeposit(
   const rows = await tx.update(deals).set(data).where(eq(deals.id, id)).returning();
   return rows[0]!;
 }
+
+/** Todos los deals de un contacto (para la ficha de contacto), más reciente primero. */
+export async function listDealsByContactId(db: Db, contactId: string) {
+  return db
+    .select({
+      id: deals.id,
+      title: deals.title,
+      serviceName: deals.serviceName,
+      servicePrice: deals.servicePrice,
+      seniaAmount: deals.seniaAmount,
+      seniaPaid: deals.seniaPaid,
+      stage: deals.stage,
+      cancelled: deals.cancelled,
+      totalAmount: deals.totalAmount,
+      amountPaid: deals.amountPaid,
+      amountPending: deals.amountPending,
+      createdAt: deals.createdAt,
+    })
+    .from(deals)
+    .where(eq(deals.contactId, contactId))
+    .orderBy(desc(deals.createdAt));
+}
