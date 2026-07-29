@@ -134,3 +134,23 @@ export const channelCredentials = pgTable("channel_credentials", {
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
+
+export const conversations = pgTable("conversations", {
+  id: id(),
+  contactId: uuid("contact_id"),
+  channel: varchar("channel", { length: 50 }),
+  status: varchar("status", { length: 50 }),
+  assignedAgentId: uuid("assigned_agent_id"),
+  messageCount: integer("message_count"),
+  lastMessageAt: timestamp("last_message_at"),
+  createdAt: createdAt(),
+});
+
+export const messages = pgTable("messages", {
+  id: id(),
+  conversationId: uuid("conversation_id"),
+  senderType: varchar("sender_type", { length: 50 }),
+  content: text("content"),
+  mediaUrl: varchar("media_url", { length: 255 }),
+  createdAt: createdAt(),
+});
