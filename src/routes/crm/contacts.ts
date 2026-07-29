@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
 import { createDb } from "../../db/client";
 import { notFound } from "../../lib/errors";
 import { requireAuth, requirePermission } from "../../middleware/auth";
@@ -11,25 +10,9 @@ import {
   updateContact,
 } from "../../repositories/contacts.repo";
 import type { AppBindings, Variables } from "../../env";
+import { contactInput, listQuery } from "./contacts.schema";
 
 const contactsRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
-
-const STATUS = ["prospect", "customer", "inactive"] as const;
-
-const listQuery = z.object({
-  status: z.enum(STATUS).optional(),
-  q: z.string().optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
-  offset: z.coerce.number().int().min(0).default(0),
-});
-
-const contactInput = z.object({
-  name: z.string().min(1),
-  email: z.string().email().optional(),
-  phone: z.string().optional(),
-  status: z.enum(STATUS).default("prospect"),
-  notes: z.string().optional(),
-});
 
 contactsRouter.get(
   "/",
