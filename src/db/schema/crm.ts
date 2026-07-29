@@ -122,3 +122,15 @@ export const faq = pgTable("faq", {
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
+
+// Fase 3: config no-secreta por canal. Los secretos (encrypted_credentials)
+// se dejan NULL hasta Fase 6. Una fila por channel_type (índice único).
+export const channelCredentials = pgTable("channel_credentials", {
+  id: id(),
+  channelType: varchar("channel_type", { length: 50 }),
+  encryptedCredentials: text("encrypted_credentials"),
+  configJson: jsonb("config_json"),
+  isActive: boolean("is_active"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
