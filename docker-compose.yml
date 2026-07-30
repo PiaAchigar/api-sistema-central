@@ -20,7 +20,11 @@ services:
       - ./src/db/migrations/1.7.0/payment-appointment.sql:/docker-entrypoint-initdb.d/08-payment-appointment.sql:ro
       - ./src/db/migrations/1.8.0/crm-pipeline.sql:/docker-entrypoint-initdb.d/09-crm-pipeline.sql:ro
       - ./src/db/migrations/1.9.0/arca-issuers.sql:/docker-entrypoint-initdb.d/10-arca-issuers.sql:ro
-      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/11-seed.sql:ro
+      - ./src/db/migrations/1.10.0/inbox.sql:/docker-entrypoint-initdb.d/11-inbox.sql:ro
+      - ./src/db/migrations/1.11.0/automation.sql:/docker-entrypoint-initdb.d/12-automation.sql:ro
+      - ./src/db/migrations/1.12.0/automation-faq.sql:/docker-entrypoint-initdb.d/13-automation-faq.sql:ro
+      - ./src/db/migrations/1.13.0/messages-external-id.sql:/docker-entrypoint-initdb.d/14-messages-external-id.sql:ro
+      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/15-seed.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]

@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
-import { notFound } from "../../lib/errors";
+import { conflict, notFound } from "../../lib/errors";
 import { requireAuth, requirePermission } from "../../middleware/auth";
 import {
   addAgentMessage,
@@ -96,6 +96,7 @@ conversationsRouter.post(
     const conv = await getConversationCore(db, id);
     if (!conv) throw notFound("Conversation");
     const msg = await addContactMessage(db, id, c.req.valid("json").content);
+    if (!msg) throw conflict("Mensaje duplicado");
     await runAutomations(db, {
       type: "incoming_message",
       conversationId: id,

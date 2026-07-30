@@ -152,6 +152,7 @@ export const messages = pgTable("messages", {
   senderType: varchar("sender_type", { length: 50 }),
   content: text("content"),
   mediaUrl: varchar("media_url", { length: 255 }),
+  externalId: varchar("external_id", { length: 255 }),
   createdAt: createdAt(),
 });
 

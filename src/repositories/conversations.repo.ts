@@ -147,12 +147,23 @@ export async function addAgentMessage(db: Db, conversationId: string, content: s
 }
 
 /** Igual que addAgentMessage pero del lado del contacto (para simular entrantes
- *  / Fase 6 webhooks). Persiste el mensaje y bumpea contadores. */
-export async function addContactMessage(db: Db, conversationId: string, content: string) {
+ *  / webhooks de Fase 6). Persiste el mensaje y bumpea contadores. Si viene
+ *  `externalId` (WAMID) y ya existe (mensaje reintentado por Meta), no hace
+ *  nada y devuelve null — el llamador no debe volver a disparar el motor. */
+export async function addContactMessage(
+  db: Db,
+  conversationId: string,
+  content: string,
+  externalId?: string,
+) {
   return db.transaction(async (tx) => {
     const rows = await tx
       .insert(messages)
-      .values({ conversationId, senderType: "contact", content })
+      .values({ conversationId, senderType: "contact", content, externalId: externalId ?? null })
+      .onConflictDoNothing({
+        target: messages.externalId,
+        where: sql`${messages.externalId} IS NOT NULL`,
+      })
       .returning({
         id: messages.id,
         senderType: messages.senderType,
@@ -160,6 +171,7 @@ export async function addContactMessage(db: Db, conversationId: string, content:
         mediaUrl: messages.mediaUrl,
         createdAt: messages.createdAt,
       });
+    if (rows.length === 0) return null;
     await tx
       .update(conversations)
       .set({
