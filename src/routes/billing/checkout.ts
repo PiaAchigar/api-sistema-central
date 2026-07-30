@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { createArcaClient } from "../../arca/factory";
+import { resolveArcaConfig } from "../../arca/factory";
 import { createDb } from "../../db/client";
 import { checkout } from "../../services/checkout.service";
 import type { AppBindings } from "../../env";
@@ -23,6 +23,8 @@ const itemSchema = z
 
 const body = z.object({
   customerId: z.string().uuid(),
+  /** Con qué identidad fiscal se factura. Si no viene, la marcada por defecto. */
+  issuerId: z.string().uuid().optional(),
   appointmentId: z.string().uuid().optional(),
   items: z.array(itemSchema),
   payment: z.object({
@@ -36,8 +38,9 @@ const body = z.object({
 
 checkoutRouter.post("/", zValidator("json", body), async (c) => {
   const db = createDb(c.env);
-  const arca = createArcaClient(c.env);
-  const result = await checkout(db, arca, c.req.valid("json"));
+  const input = c.req.valid("json");
+  const arca = await resolveArcaConfig(db, c.env, input.issuerId);
+  const result = await checkout(db, arca, input);
   return c.json(result, 201);
 });
 

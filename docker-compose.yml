@@ -19,7 +19,8 @@ services:
       - ./src/db/migrations/1.6.0/promotions.sql:/docker-entrypoint-initdb.d/07-promotions.sql:ro
       - ./src/db/migrations/1.7.0/payment-appointment.sql:/docker-entrypoint-initdb.d/08-payment-appointment.sql:ro
       - ./src/db/migrations/1.8.0/crm-pipeline.sql:/docker-entrypoint-initdb.d/09-crm-pipeline.sql:ro
-      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/10-seed.sql:ro
+      - ./src/db/migrations/1.9.0/arca-issuers.sql:/docker-entrypoint-initdb.d/10-arca-issuers.sql:ro
+      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/11-seed.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]

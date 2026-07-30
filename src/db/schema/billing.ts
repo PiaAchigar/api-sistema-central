@@ -17,10 +17,34 @@ const updatedAt = () =>
     .$defaultFn(() => new Date())
     .$onUpdate(() => new Date());
 
+/**
+ * Identidades fiscales que pueden emitir (una por persona/razón social + punto
+ * de venta). `sdkToken/cert/key` están CIFRADOS con AES-GCM — ver lib/secret-box.ts.
+ * Nunca se devuelven por la API ni se loguean.
+ */
+export const arcaIssuers = pgTable("arca_issuers", {
+  id: id(),
+  name: varchar("name", { length: 100 }),
+  cuit: varchar("cuit", { length: 20 }),
+  sdkTokenEnc: text("sdk_token_enc"),
+  certEnc: text("cert_enc"),
+  keyEnc: text("key_enc"),
+  environment: varchar("environment", { length: 10 }), // homo | prod
+  pointOfSale: integer("point_of_sale"),
+  invoiceType: varchar("invoice_type", { length: 10 }), // A | B | C
+  isActive: boolean("is_active"),
+  isDefault: boolean("is_default"),
+  notes: text("notes"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
 export const invoices = pgTable("invoices", {
   id: id(),
   customerId: uuid("customer_id"),
   issuedByUserId: uuid("issued_by_user_id"),
+  /** Facturador (identidad ARCA) con el que se emite. NULL = facturas previas al multi-facturador. */
+  issuerId: uuid("issuer_id"),
   invoiceNumber: integer("invoice_number"), // correlativo ARCA, se asigna al emitir
   invoiceType: varchar("invoice_type", { length: 10 }), // A | B | C
   subtotal: decimal("subtotal", { precision: 10, scale: 2 }),

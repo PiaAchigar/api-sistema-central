@@ -1,4 +1,5 @@
-import type { ArcaConfig } from "../arca/factory";
+import { resolveArcaConfig, type ArcaConfig } from "../arca/factory";
+import type { AppBindings } from "../env";
 import type { Db } from "../db/client";
 import { badGateway, badRequest, conflict, notFound } from "../lib/errors";
 import {
@@ -101,6 +102,7 @@ export async function createDraftInvoice(
   return db.transaction(async (tx) => {
     const invoice = await insertInvoice(tx, {
       customerId: input.customerId,
+      issuerId: arca.issuerId,
       invoiceType: arca.invoiceType,
       subtotal: subtotal.toFixed(2),
       taxAmount: "0.00",
@@ -128,14 +130,21 @@ export async function createDraftInvoice(
 }
 
 /** Pide CAE a ARCA y pasa la factura de draft a emitted. */
-export async function emitInvoice(db: Db, arca: ArcaConfig, invoiceId: string) {
+export async function emitInvoice(db: Db, env: AppBindings, invoiceId: string) {
   const invoice = await getInvoiceById(db, invoiceId);
   if (!invoice) throw notFound("Invoice");
   if (invoice.status !== "draft") {
     throw conflict(`Solo se emiten facturas en draft (actual: ${invoice.status})`);
   }
 
-  const invoiceNumber = await getNextInvoiceNumber(db, invoice.invoiceType ?? arca.invoiceType);
+  // Cada factura se emite con SU facturador (el elegido en la cobranza), no con
+  // uno global: distinto CUIT, certificado, punto de venta y numeración.
+  const arca = await resolveArcaConfig(db, env, invoice.issuerId);
+  const invoiceNumber = await getNextInvoiceNumber(
+    db,
+    invoice.invoiceType ?? arca.invoiceType,
+    invoice.issuerId,
+  );
   const result = await arca.client.emitInvoice({
     pointOfSale: arca.pointOfSale,
     invoiceType: invoice.invoiceType ?? arca.invoiceType,
@@ -186,12 +195,12 @@ export async function emitInvoice(db: Db, arca: ArcaConfig, invoiceId: string) {
  * Emisión en lote (ej: todos los drafts el viernes a la tarde).
  * Secuencial a propósito: mantiene la correlatividad de numeración.
  */
-export async function emitBatch(db: Db, arca: ArcaConfig, invoiceIds?: string[]) {
+export async function emitBatch(db: Db, env: AppBindings, invoiceIds?: string[]) {
   const ids = invoiceIds ?? (await listDraftInvoiceIds(db));
   const results: { invoiceId: string; ok: boolean; cae?: string; invoiceNumber?: number; error?: string }[] = [];
   for (const id of ids) {
     try {
-      const invoice = await emitInvoice(db, arca, id);
+      const invoice = await emitInvoice(db, env, id);
       const logs = await getArcaLogsForInvoice(db, id);
       const lastSuccess = logs.filter((l) => l.status === "success").pop();
       results.push({
@@ -217,7 +226,7 @@ export async function emitBatch(db: Db, arca: ArcaConfig, invoiceIds?: string[])
  */
 export async function cancelInvoice(
   db: Db,
-  arca: ArcaConfig,
+  env: AppBindings,
   invoiceId: string,
   reason?: string,
 ) {
@@ -228,6 +237,9 @@ export async function cancelInvoice(
   if (invoice.status === "draft") {
     return updateInvoice(db, invoiceId, { status: "cancelled" });
   }
+
+  // La nota de crédito la tiene que emitir el MISMO facturador que la factura.
+  const arca = await resolveArcaConfig(db, env, invoice.issuerId);
 
   const result = await arca.client.issueCreditNote({
     pointOfSale: arca.pointOfSale,

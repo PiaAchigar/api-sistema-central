@@ -14,6 +14,8 @@ import { resolveItems, type DraftItemInput } from "./invoicing.service";
 
 export type CheckoutInput = {
   customerId: string;
+  /** Facturador elegido para esta cobranza. Si no viene, el marcado por defecto. */
+  issuerId?: string;
   /** Turno que se está cobrando (se marca completed con snapshot de comisión). */
   appointmentId?: string;
   items: DraftItemInput[];
@@ -75,6 +77,7 @@ export async function checkout(db: Db, arca: ArcaConfig, input: CheckoutInput) {
       const subtotal = billableItems.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
       invoice = await insertInvoice(tx, {
         customerId: input.customerId,
+        issuerId: arca.issuerId,
         invoiceType: arca.invoiceType,
         subtotal: subtotal.toFixed(2),
         taxAmount: "0.00",

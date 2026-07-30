@@ -27,6 +27,14 @@ export type AppBindings = Omit<Env, "ARCA_MODE"> & {
   ARCA_POS?: string;
   /** Tipo de comprobante por default (monotributo → "C"). */
   ARCA_INVOICE_TYPE?: string;
+  /**
+   * Master key (32 bytes en base64) para cifrar/descifrar las credenciales ARCA
+   * de cada facturador guardadas en `arca_issuers` (AES-GCM, ver lib/secret-box.ts).
+   * Configurar con `wrangler secret put ARCA_SECRETS_KEY`. Sin esto no se pueden
+   * dar de alta ni usar facturadores (los endpoints responden 503).
+   * Rotarla invalida los secretos ya guardados: hay que recargar los certificados.
+   */
+  ARCA_SECRETS_KEY?: string;
   /** Credenciales Afip SDK (solo para ARCA_MODE="afip"). */
   AFIP_CUIT?: string;
   AFIP_SDK_TOKEN?: string;

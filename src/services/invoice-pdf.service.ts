@@ -1,6 +1,6 @@
 import type { Db } from "../db/client";
 import type { AppBindings } from "../env";
-import { badRequest, conflict, notFound } from "../lib/errors";
+import { conflict, notFound } from "../lib/errors";
 import { companyConfig } from "../db/schema";
 import {
   getArcaLogsForInvoice,
@@ -8,6 +8,7 @@ import {
   getInvoiceLineItems,
 } from "../repositories/invoices.repo";
 import { buildAfipQrUrl, createPdfViaAfipSdk, qrDataUrl } from "../arca/pdf";
+import { resolveArcaPdfCredentials } from "../arca/factory";
 
 const INVOICE_TYPE_CODES: Record<string, number> = { A: 1, B: 6, C: 11 };
 
@@ -22,10 +23,6 @@ const money = new Intl.NumberFormat("es-AR", {
  * Incluye el QR obligatorio de AFIP. Devuelve la URL del PDF (válida 24h).
  */
 export async function generateInvoicePdf(db: Db, env: AppBindings, invoiceId: string) {
-  if (!env.AFIP_SDK_TOKEN || !env.AFIP_CUIT) {
-    throw badRequest("El PDF requiere AFIP_SDK_TOKEN y AFIP_CUIT configurados");
-  }
-
   const invoice = await getInvoiceById(db, invoiceId);
   if (!invoice) throw notFound("Invoice");
   if (invoice.status === "draft") {
@@ -41,10 +38,13 @@ export async function generateInvoicePdf(db: Db, env: AppBindings, invoiceId: st
   const items = await getInvoiceLineItems(db, invoiceId);
   const [config] = await db.select().from(companyConfig).limit(1);
 
-  const invoiceType = invoice.invoiceType ?? env.ARCA_INVOICE_TYPE ?? "C";
+  // El QR y el encabezado llevan los datos del facturador que pidió el CAE.
+  const creds = await resolveArcaPdfCredentials(db, env, invoice.issuerId);
+
+  const invoiceType = invoice.invoiceType ?? creds.invoiceType;
   const tipoCmp = INVOICE_TYPE_CODES[invoiceType] ?? 11;
-  const ptoVta = Number(env.ARCA_POS ?? "2");
-  const cuit = Number(env.AFIP_CUIT.replace(/\D/g, ""));
+  const ptoVta = creds.pointOfSale;
+  const cuit = Number(creds.cuit.replace(/\D/g, ""));
   const total = Number(invoice.totalAmount ?? 0);
   const emitDate = invoice.emittedAt ?? invoice.invoiceDate ?? new Date();
   const fecha = formatDateIso(emitDate);
@@ -65,7 +65,7 @@ export async function generateInvoicePdf(db: Db, env: AppBindings, invoiceId: st
   const html = renderInvoiceHtml({
     companyName: config?.companyName ?? "PiuBella",
     address: config?.address ?? null,
-    cuit: env.AFIP_CUIT,
+    cuit: creds.cuit,
     invoiceType,
     ptoVta,
     number: invoice.invoiceNumber,
@@ -88,7 +88,7 @@ export async function generateInvoicePdf(db: Db, env: AppBindings, invoiceId: st
     invoice.invoiceNumber,
   ).padStart(8, "0")}`;
 
-  return createPdfViaAfipSdk(env.AFIP_SDK_TOKEN, env.ARCA_ENV === "prod", html, fileName);
+  return createPdfViaAfipSdk(creds.sdkToken, creds.production, html, fileName);
 }
 
 function formatDateIso(d: Date): string {

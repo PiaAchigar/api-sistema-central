@@ -79,6 +79,7 @@ export async function registerDeposit(
 
   const invoice = await insertInvoice(tx, {
     customerId: params.customerId,
+    issuerId: arca.issuerId,
     invoiceType: arca.invoiceType,
     subtotal: deposit.amount.toFixed(2),
     taxAmount: "0.00",

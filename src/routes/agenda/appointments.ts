@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { createArcaClient } from "../../arca/factory";
+import { resolveArcaConfig } from "../../arca/factory";
 import { createDb } from "../../db/client";
 import {
   computeProviderEarning,
@@ -89,14 +89,17 @@ const createBody = z.object({
     .object({
       amount: z.number().positive(),
       method: z.enum(["cash", "bank_transfer", "mercadopago"]),
+      /** Facturador de la seña. Si no viene, el marcado por defecto. */
+      issuerId: z.string().uuid().optional(),
     })
     .optional(),
 });
 
 appointmentsRouter.post("/", zValidator("json", createBody), async (c) => {
   const db = createDb(c.env);
-  const arca = createArcaClient(c.env);
-  const appointment = await createAppointment(db, c.req.valid("json"), arca);
+  const input = c.req.valid("json");
+  const arca = await resolveArcaConfig(db, c.env, input.deposit?.issuerId);
+  const appointment = await createAppointment(db, input, arca);
   return c.json(appointment, 201);
 });
 
