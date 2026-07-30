@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const TRIGGERS = ["incoming_message", "deal_stage_changed"] as const;
-export const ACTIONS = ["reply_text", "change_deal_stage", "assign_agent"] as const;
+export const ACTIONS = ["reply_text", "change_deal_stage", "assign_agent", "reply_faq"] as const;
 const CHANNELS = ["whatsapp", "instagram", "facebook", "email"] as const;
 const STAGES = [
   "lead",
@@ -26,11 +26,13 @@ export function actionConfigFor(actionType: (typeof ACTIONS)[number]) {
       return z.object({ stage: z.enum(STAGES) });
     case "assign_agent":
       return z.object({ agentId: z.string().uuid() });
+    case "reply_faq":
+      return z.object({});
   }
 }
 
 const VALID_ACTIONS: Record<string, string[]> = {
-  incoming_message: ["reply_text", "assign_agent"],
+  incoming_message: ["reply_text", "assign_agent", "reply_faq"],
   deal_stage_changed: ["change_deal_stage", "assign_agent"],
 };
 const VALID_CONDITIONS: Record<string, string[]> = {

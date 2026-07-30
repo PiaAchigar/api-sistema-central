@@ -40,4 +40,14 @@ describe("ruleBody", () => {
   it("rechaza name vacío", () => {
     expect(ruleBody.safeParse({ ...base, name: "" }).success).toBe(false);
   });
+  it("acepta incoming_message→reply_faq con actionConfig vacío", () => {
+    const r = ruleBody.safeParse({
+      name: "Autorespondedor FAQ",
+      triggerType: "incoming_message",
+      conditions: [],
+      actionType: "reply_faq",
+      actionConfig: {},
+    });
+    expect(r.success).toBe(true);
+  });
 });
