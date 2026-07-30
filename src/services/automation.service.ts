@@ -1,8 +1,14 @@
 import type { Db } from "../db/client";
+import { listActiveFaqs } from "../repositories/automation-faqs.repo";
 import { insertRun, listActiveRulesByTrigger } from "../repositories/automations.repo";
 import { assignDeal, updateDealStage } from "../repositories/deals.repo";
 import { addAgentMessage, updateConversation } from "../repositories/conversations.repo";
-import { matchesConditions, type AutomationEvent, type Condition } from "./automation.match";
+import {
+  matchesConditions,
+  matchFaq,
+  type AutomationEvent,
+  type Condition,
+} from "./automation.match";
 
 function ctxIds(event: AutomationEvent) {
   if (event.type === "incoming_message") {
@@ -11,11 +17,13 @@ function ctxIds(event: AutomationEvent) {
   return { contactId: event.contactId, conversationId: null, dealId: event.dealId };
 }
 
+type ActionResult = { status: "executed" | "skipped"; detail: string };
+
 async function executeAction(
   db: Db,
   rule: { actionType: string | null; actionConfig: unknown },
   event: AutomationEvent,
-) {
+): Promise<ActionResult | void> {
   const cfg = (rule.actionConfig as Record<string, unknown> | null) ?? {};
   switch (rule.actionType) {
     case "reply_text":
@@ -37,6 +45,21 @@ async function executeAction(
         await assignDeal(db, event.dealId, String(cfg.agentId));
       }
       return;
+    case "reply_faq": {
+      if (event.type !== "incoming_message") return;
+      const rawFaqs = await listActiveFaqs(db);
+      // Filtramos filas sin answer/keywords (columnas nullable en el schema):
+      // matchFaq requiere FaqRecord con ambos campos no-nulos.
+      const faqs = rawFaqs.flatMap((f) =>
+        f.answer !== null && f.keywords !== null
+          ? [{ id: f.id, answer: f.answer, keywords: f.keywords }]
+          : [],
+      );
+      const match = matchFaq(faqs, event.text);
+      if (!match) return { status: "skipped", detail: "reply_faq: sin FAQ coincidente" };
+      await addAgentMessage(db, event.conversationId, match.answer);
+      return { status: "executed", detail: `reply_faq: ${match.id}` };
+    }
   }
 }
 
@@ -54,13 +77,13 @@ export async function runAutomations(db: Db, event: AutomationEvent) {
     const conditions = (rule.conditions as Condition[] | null) ?? [];
     if (!matchesConditions(conditions, event)) continue;
     try {
-      await executeAction(db, rule, event);
+      const result = await executeAction(db, rule, event);
       await insertRun(db, {
         ruleId: rule.id,
         triggerType: event.type,
         ...ctxIds(event),
-        status: "executed",
-        detail: rule.actionType,
+        status: result?.status ?? "executed",
+        detail: result?.detail ?? rule.actionType,
       });
     } catch (e) {
       await insertRun(db, {
