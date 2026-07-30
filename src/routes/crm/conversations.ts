@@ -6,7 +6,6 @@ import { createDb } from "../../db/client";
 import { conflict, notFound } from "../../lib/errors";
 import { requireAuth, requirePermission } from "../../middleware/auth";
 import {
-  addAgentMessage,
   addContactMessage,
   getConversationById,
   getConversationCore,
@@ -16,6 +15,7 @@ import {
   upsertConversation,
 } from "../../repositories/conversations.repo";
 import { runAutomations } from "../../services/automation.service";
+import { sendAgentReply } from "../../services/messaging.service";
 import {
   createConversationBody,
   listConversationsQuery,
@@ -65,7 +65,7 @@ conversationsRouter.post(
     const db = createDb(c.env);
     const id = c.req.param("id");
     if (!(await getConversationById(db, id))) throw notFound("Conversation");
-    const msg = await addAgentMessage(db, id, c.req.valid("json").content);
+    const msg = await sendAgentReply(db, c.env, id, c.req.valid("json").content);
     return c.json(msg, 201);
   },
 );
