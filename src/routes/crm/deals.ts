@@ -92,7 +92,7 @@ dealsRouter.patch(
     }
     if (!updated) throw notFound("Deal");
     if (body.stage) {
-      await runAutomations(db, {
+      await runAutomations(db, c.env, {
         type: "deal_stage_changed",
         dealId: id,
         contactId: updated.contactId,

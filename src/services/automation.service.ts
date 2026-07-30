@@ -1,8 +1,11 @@
+// api-sistema-central/src/services/automation.service.ts
 import type { Db } from "../db/client";
+import type { AppBindings } from "../env";
 import { listActiveFaqs } from "../repositories/automation-faqs.repo";
 import { insertRun, listActiveRulesByTrigger } from "../repositories/automations.repo";
 import { assignDeal, updateDealStage } from "../repositories/deals.repo";
-import { addAgentMessage, updateConversation } from "../repositories/conversations.repo";
+import { updateConversation } from "../repositories/conversations.repo";
+import { sendAgentReply } from "./messaging.service";
 import {
   matchesConditions,
   matchFaq,
@@ -29,6 +32,7 @@ type ActionResult = { status: "executed" | "skipped"; detail: string };
 
 async function executeAction(
   db: Db,
+  env: AppBindings,
   rule: { actionType: string | null; actionConfig: unknown },
   event: AutomationEvent,
 ): Promise<ActionResult | void> {
@@ -37,7 +41,7 @@ async function executeAction(
     case "reply_text":
       if (event.type === "incoming_message") {
         await sleep(HUMAN_LIKE_REPLY_DELAY_MS);
-        await addAgentMessage(db, event.conversationId, String(cfg.text ?? ""));
+        await sendAgentReply(db, env, event.conversationId, String(cfg.text ?? ""));
       }
       return;
     case "change_deal_stage":
@@ -67,7 +71,7 @@ async function executeAction(
       const match = matchFaq(faqs, event.text);
       if (!match) return { status: "skipped", detail: "reply_faq: sin FAQ coincidente" };
       await sleep(HUMAN_LIKE_REPLY_DELAY_MS);
-      await addAgentMessage(db, event.conversationId, match.answer);
+      await sendAgentReply(db, env, event.conversationId, match.answer);
       return { status: "executed", detail: `reply_faq: ${match.id}` };
     }
   }
@@ -76,7 +80,7 @@ async function executeAction(
 /** Corre las reglas activas del disparador contra el evento. BEST-EFFORT:
  *  cualquier error se captura y (cuando se puede) se registra, sin romper el
  *  request que disparó el evento. */
-export async function runAutomations(db: Db, event: AutomationEvent) {
+export async function runAutomations(db: Db, env: AppBindings, event: AutomationEvent) {
   let rules;
   try {
     rules = await listActiveRulesByTrigger(db, event.type);
@@ -87,7 +91,7 @@ export async function runAutomations(db: Db, event: AutomationEvent) {
     const conditions = (rule.conditions as Condition[] | null) ?? [];
     if (!matchesConditions(conditions, event)) continue;
     try {
-      const result = await executeAction(db, rule, event);
+      const result = await executeAction(db, env, rule, event);
       await insertRun(db, {
         ruleId: rule.id,
         triggerType: event.type,

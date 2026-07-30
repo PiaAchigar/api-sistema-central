@@ -97,7 +97,7 @@ conversationsRouter.post(
     if (!conv) throw notFound("Conversation");
     const msg = await addContactMessage(db, id, c.req.valid("json").content);
     if (!msg) throw conflict("Mensaje duplicado");
-    await runAutomations(db, {
+    await runAutomations(db, c.env, {
       type: "incoming_message",
       conversationId: id,
       contactId: conv.contactId,
