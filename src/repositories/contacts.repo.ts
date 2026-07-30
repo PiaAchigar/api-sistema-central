@@ -30,6 +30,11 @@ export async function getContactById(db: Db, id: string) {
   return rows[0] ?? null;
 }
 
+export async function getContactByWhatsappId(db: Db, whatsappId: string) {
+  const rows = await db.select().from(contacts).where(eq(contacts.whatsappId, whatsappId)).limit(1);
+  return rows[0] ?? null;
+}
+
 export async function createContact(db: Db, data: typeof contacts.$inferInsert) {
   const rows = await db
     .insert(contacts)
