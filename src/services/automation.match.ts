@@ -16,6 +16,14 @@ export type AutomationEvent =
     }
   | { type: "deal_stage_changed"; dealId: string; contactId: string | null; toStage: string };
 
+/** minúsculas + sin acentos, para que "estan" matchee "están". */
+function normalize(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "");
+}
+
 function matchesOne(cond: Condition, event: AutomationEvent): boolean {
   switch (cond.type) {
     case "channel_is":
@@ -23,7 +31,7 @@ function matchesOne(cond: Condition, event: AutomationEvent): boolean {
     case "message_contains":
       return (
         event.type === "incoming_message" &&
-        event.text.toLowerCase().includes(cond.value.toLowerCase())
+        normalize(event.text).includes(normalize(cond.value))
       );
     case "deal_to_stage":
       return event.type === "deal_stage_changed" && event.toStage === cond.value;

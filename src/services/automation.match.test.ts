@@ -27,6 +27,20 @@ describe("matchesConditions", () => {
     expect(matchesConditions([{ type: "message_contains", value: "precio" }], msg)).toBe(true);
     expect(matchesConditions([{ type: "message_contains", value: "turno" }], msg)).toBe(false);
   });
+  it("message_contains ignora acentos en el mensaje y en la condición", () => {
+    const horario: AutomationEvent = {
+      type: "incoming_message",
+      conversationId: "c1",
+      contactId: "ct1",
+      channel: "whatsapp",
+      text: "¿Hasta qué hora están?",
+    };
+    expect(matchesConditions([{ type: "message_contains", value: "hora" }], horario)).toBe(true);
+    expect(matchesConditions([{ type: "message_contains", value: "estan" }], horario)).toBe(true);
+    expect(matchesConditions([{ type: "message_contains", value: "horário" }], horario)).toBe(
+      false,
+    );
+  });
   it("deal_to_stage matchea la etapa nueva", () => {
     expect(matchesConditions([{ type: "deal_to_stage", value: "senia_pagada" }], deal)).toBe(true);
     expect(matchesConditions([{ type: "deal_to_stage", value: "lead" }], deal)).toBe(false);
