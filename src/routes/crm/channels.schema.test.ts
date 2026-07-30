@@ -19,7 +19,7 @@ describe("putBodySchemaFor", () => {
   it("acepta config válida de whatsapp", () => {
     const r = putBodySchemaFor("whatsapp").safeParse({
       isActive: true,
-      config: { phoneNumber: "+54 9 11 1234", phoneNumberId: "123" },
+      config: { phoneNumber: "+54 9 11 1234" },
     });
     expect(r.success).toBe(true);
   });
@@ -60,5 +60,41 @@ describe("deriveStatus", () => {
   });
   it("null/undefined config → sin_configurar", () => {
     expect(deriveStatus("facebook", null, true)).toBe("sin_configurar");
+  });
+});
+
+describe("putBodySchemaFor credentials (whatsapp)", () => {
+  it("acepta sin credentials (edita config/isActive sin tocar secretos)", () => {
+    const r = putBodySchemaFor("whatsapp").safeParse({ isActive: true, config: {} });
+    expect(r.success).toBe(true);
+  });
+  it("acepta credentials completas", () => {
+    const r = putBodySchemaFor("whatsapp").safeParse({
+      isActive: true,
+      config: {},
+      credentials: {
+        accessToken: "tok",
+        phoneNumberId: "123",
+        appSecret: "secret",
+        verifyToken: "verify",
+      },
+    });
+    expect(r.success).toBe(true);
+  });
+  it("rechaza credentials parciales (todo o nada)", () => {
+    const r = putBodySchemaFor("whatsapp").safeParse({
+      isActive: true,
+      config: {},
+      credentials: { accessToken: "tok" },
+    });
+    expect(r.success).toBe(false);
+  });
+  it("un canal sin integración real (facebook) no acepta credentials", () => {
+    const r = putBodySchemaFor("facebook").safeParse({
+      isActive: true,
+      config: { pageId: "p1" },
+      credentials: { accessToken: "tok" },
+    });
+    expect(r.success).toBe(false);
   });
 });

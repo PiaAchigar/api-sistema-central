@@ -4,6 +4,7 @@ import { createDb } from "../../db/client";
 import { badRequest } from "../../lib/errors";
 import { requireAuth, requirePermission } from "../../middleware/auth";
 import { listChannels, upsertChannel } from "../../repositories/channels.repo";
+import { encrypt } from "../../services/crypto.service";
 import {
   CHANNEL_TYPES,
   deriveStatus,
@@ -42,7 +43,6 @@ channelsRouter.get("/", requireAuth, requirePermission("crm", "view"), async (c)
   return c.json(CHANNEL_TYPES.map((ct) => toResponse(ct, byType.get(ct))));
 });
 
-// Editar = solo admin (crm:manage). Valida el canal del path y la config del body.
 channelsRouter.put(
   "/:channelType",
   requireAuth,
@@ -56,9 +56,17 @@ channelsRouter.put(
       throw badRequest(parsed.error.issues[0]?.message ?? "Config inválida");
     }
     const db = createDb(c.env);
+    let encryptedCredentials: string | undefined;
+    if (parsed.data.credentials) {
+      encryptedCredentials = await encrypt(
+        JSON.stringify(parsed.data.credentials),
+        c.env.CREDENTIALS_ENCRYPTION_KEY,
+      );
+    }
     const row = await upsertChannel(db, ct, {
       config: parsed.data.config,
       isActive: parsed.data.isActive,
+      encryptedCredentials,
     });
     return c.json(toResponse(ct, row));
   },

@@ -9,11 +9,10 @@ export function isChannelType(v: string): v is ChannelType {
 }
 
 // Config NO-secreta por canal. Todos los campos opcionales: se permite guardar
-// parcial. Los secretos (tokens/passwords) NO viven acá (Fase 6).
+// parcial. Los secretos (tokens/passwords) viven en CREDENTIALS_SCHEMAS.
 const CONFIG_SCHEMAS = {
   whatsapp: z.object({
     phoneNumber: z.string().optional(),
-    phoneNumberId: z.string().optional(),
   }),
   instagram: z.object({
     accountId: z.string().optional(),
@@ -30,11 +29,32 @@ const CONFIG_SCHEMAS = {
   }),
 } as const;
 
-/** Body del PUT para un canal dado: activo + su config tipada. */
+// Credenciales secretas por canal (se encriptan antes de guardar, nunca se
+// devuelven). Todo-o-nada: si se manda `credentials`, deben venir completas.
+// Los canales sin entrada acá todavía no tienen integración real (Fase 6 v1
+// es solo WhatsApp) — para esos, el body no acepta `credentials`.
+const CREDENTIALS_SCHEMAS = {
+  whatsapp: z.object({
+    accessToken: z.string().min(1),
+    phoneNumberId: z.string().min(1),
+    appSecret: z.string().min(1),
+    verifyToken: z.string().min(1),
+  }),
+} as const;
+
+type CredentialsChannelType = keyof typeof CREDENTIALS_SCHEMAS;
+
+function hasCredentialsSchema(ct: ChannelType): ct is CredentialsChannelType {
+  return ct in CREDENTIALS_SCHEMAS;
+}
+
+/** Body del PUT para un canal dado: activo + su config tipada + (si aplica)
+ *  sus credenciales. Omitir `credentials` deja las ya guardadas sin tocar. */
 export function putBodySchemaFor(ct: ChannelType) {
   return z.object({
     isActive: z.boolean(),
     config: CONFIG_SCHEMAS[ct],
+    credentials: hasCredentialsSchema(ct) ? CREDENTIALS_SCHEMAS[ct].optional() : z.undefined(),
   });
 }
 
