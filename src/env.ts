@@ -35,6 +35,13 @@ export type AppBindings = Omit<Env, "ARCA_MODE"> & {
    * Rotarla invalida los secretos ya guardados: hay que recargar los certificados.
    */
   ARCA_SECRETS_KEY?: string;
+  /**
+   * Master key (32 bytes en base64) para cifrar/descifrar las credenciales de
+   * canal (WhatsApp, etc.) guardadas en `channel_credentials`. Configurar con
+   * `wrangler secret put CREDENTIALS_ENCRYPTION_KEY`. Rotarla invalida las
+   * credenciales ya guardadas: hay que recargarlas desde Canales.
+   */
+  CREDENTIALS_ENCRYPTION_KEY?: string;
   /** Credenciales Afip SDK (solo para ARCA_MODE="afip"). */
   AFIP_CUIT?: string;
   AFIP_SDK_TOKEN?: string;
