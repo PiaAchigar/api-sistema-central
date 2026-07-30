@@ -55,8 +55,11 @@ app.get("/", (c) =>
 
 app.route("/api", api);
 
-// Fuera de `api`: lo llama Meta, no un usuario logueado — sin el middleware
-// de auth ni las rutas del CRM.
+// Fuera de `api`: lo llama Meta, no un usuario logueado. El middleware `auth`
+// de `/api/*` sigue corriendo acá (porque el path calza con ese prefijo),
+// pero es no-bloqueante (solo decora userId/userRole si hay un token, nunca
+// rechaza) — lo que sí garantizamos es que este router no tiene
+// requireAuth/requirePermission, así que no hace falta estar logueado.
 app.route("/api/webhooks/whatsapp", whatsappWebhookRouter);
 
 export default app satisfies ExportedHandler<Env>;
