@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { requestLogger } from "./middleware/logger";
 import { api } from "./routes";
+import { whatsappWebhookRouter } from "./routes/webhooks/whatsapp";
 import type { AppBindings, Variables } from "./env";
 
 const app = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
@@ -53,5 +54,9 @@ app.get("/", (c) =>
 );
 
 app.route("/api", api);
+
+// Fuera de `api`: lo llama Meta, no un usuario logueado — sin el middleware
+// de auth ni las rutas del CRM.
+app.route("/api/webhooks/whatsapp", whatsappWebhookRouter);
 
 export default app satisfies ExportedHandler<Env>;
