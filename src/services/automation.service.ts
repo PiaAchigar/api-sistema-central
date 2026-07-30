@@ -10,6 +10,14 @@ import {
   type Condition,
 } from "./automation.match";
 
+/** Demora antes de enviar una respuesta automática, para que no se sienta
+ *  instantánea/robótica sino como si la estuviera tipeando una persona. */
+const HUMAN_LIKE_REPLY_DELAY_MS = 5000;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function ctxIds(event: AutomationEvent) {
   if (event.type === "incoming_message") {
     return { contactId: event.contactId, conversationId: event.conversationId, dealId: null };
@@ -28,6 +36,7 @@ async function executeAction(
   switch (rule.actionType) {
     case "reply_text":
       if (event.type === "incoming_message") {
+        await sleep(HUMAN_LIKE_REPLY_DELAY_MS);
         await addAgentMessage(db, event.conversationId, String(cfg.text ?? ""));
       }
       return;
@@ -57,6 +66,7 @@ async function executeAction(
       );
       const match = matchFaq(faqs, event.text);
       if (!match) return { status: "skipped", detail: "reply_faq: sin FAQ coincidente" };
+      await sleep(HUMAN_LIKE_REPLY_DELAY_MS);
       await addAgentMessage(db, event.conversationId, match.answer);
       return { status: "executed", detail: `reply_faq: ${match.id}` };
     }
