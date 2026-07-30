@@ -81,21 +81,19 @@ describe("extractIncomingMessage", () => {
         },
       ],
     };
-    expect(extractIncomingMessage(payload)).toEqual({
-      from: "5491112345678",
-      waId: "wamid.ABC123",
-      text: "hola",
-    });
+    expect(extractIncomingMessage(payload)).toEqual([
+      { from: "5491112345678", waId: "wamid.ABC123", text: "hola" },
+    ]);
   });
 
-  it("devuelve null para un payload de status (sin messages)", () => {
+  it("devuelve [] para un payload de status (sin messages)", () => {
     const payload = {
       entry: [{ changes: [{ value: { statuses: [{ status: "delivered" }] } }] }],
     };
-    expect(extractIncomingMessage(payload)).toBeNull();
+    expect(extractIncomingMessage(payload)).toEqual([]);
   });
 
-  it("devuelve null para un mensaje que no es de texto", () => {
+  it("devuelve [] para un mensaje que no es de texto", () => {
     const payload = {
       entry: [
         {
@@ -105,10 +103,33 @@ describe("extractIncomingMessage", () => {
         },
       ],
     };
-    expect(extractIncomingMessage(payload)).toBeNull();
+    expect(extractIncomingMessage(payload)).toEqual([]);
   });
 
-  it("devuelve null para un payload que no matchea la forma esperada", () => {
-    expect(extractIncomingMessage({ foo: "bar" })).toBeNull();
+  it("devuelve [] para un payload que no matchea la forma esperada", () => {
+    expect(extractIncomingMessage({ foo: "bar" })).toEqual([]);
+  });
+
+  it("extrae varios mensajes de texto batcheados en un solo value.messages[]", () => {
+    const payload = {
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                messages: [
+                  { from: "5491111111111", id: "wamid.A", type: "text", text: { body: "hola" } },
+                  { from: "5492222222222", id: "wamid.B", type: "text", text: { body: "chau" } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    expect(extractIncomingMessage(payload)).toEqual([
+      { from: "5491111111111", waId: "wamid.A", text: "hola" },
+      { from: "5492222222222", waId: "wamid.B", text: "chau" },
+    ]);
   });
 });

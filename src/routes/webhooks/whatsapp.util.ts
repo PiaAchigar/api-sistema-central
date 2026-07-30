@@ -78,15 +78,25 @@ const webhookPayloadSchema = z.object({
   ),
 });
 
-/** Extrae {from, waId, text} del primer mensaje de texto del payload de Meta.
- *  Null si el payload no tiene la forma esperada, no trae `messages` (ej. un
- *  callback de status/delivery), o el mensaje no es de tipo texto. */
+/** Extrae {from, waId, text} de TODOS los mensajes de texto del payload de
+ *  Meta — recorre entry[] → changes[] → value.messages[], porque Meta puede
+ *  batchear varios mensajes en un solo webhook call. Array vacío si el
+ *  payload no tiene la forma esperada, no trae `messages` (ej. un callback de
+ *  status/delivery), o ninguno de los mensajes es de tipo texto. */
 export function extractIncomingMessage(
   payload: unknown,
-): { from: string; waId: string; text: string } | null {
+): { from: string; waId: string; text: string }[] {
   const parsed = webhookPayloadSchema.safeParse(payload);
-  if (!parsed.success) return null;
-  const msg = parsed.data.entry[0]?.changes[0]?.value.messages?.[0];
-  if (!msg || msg.type !== "text" || !msg.text) return null;
-  return { from: msg.from, waId: msg.id, text: msg.text.body };
+  if (!parsed.success) return [];
+  const out: { from: string; waId: string; text: string }[] = [];
+  for (const entry of parsed.data.entry) {
+    for (const change of entry.changes) {
+      for (const msg of change.value.messages ?? []) {
+        if (msg.type === "text" && msg.text) {
+          out.push({ from: msg.from, waId: msg.id, text: msg.text.body });
+        }
+      }
+    }
+  }
+  return out;
 }
