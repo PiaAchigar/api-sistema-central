@@ -7,6 +7,20 @@ Pensada para **monotributo → Factura C**.
 > prueba, no emite facturas reales). Recién cuando emitís un CAE de prueba OK,
 > repetís los mismos pasos para **producción**. Son dos certificados distintos.
 
+> ### 📌 Dónde van las credenciales hoy
+> Los trámites en ARCA de esta guía (certificado, `wsfe`, punto de venta) siguen
+> siendo **exactamente los mismos**, y hay que hacerlos **una vez por cada CUIT**
+> que vaya a facturar.
+>
+> Lo que cambió es dónde se cargan: **ya no van en `.dev.vars` ni como secretos del
+> Worker**, sino en la pantalla **Configuración → Facturadores** del dashboard,
+> donde se guardan cifradas. Eso permite tener varios emisores y elegir cuál usar
+> en cada cobranza. → **[`FACTURADORES.md`](./FACTURADORES.md)**
+>
+> Las variables `AFIP_*` que se mencionan más abajo quedan como respaldo para
+> instalaciones que todavía no cargaron ningún facturador, y son las que lee
+> `POST /api/billing/issuers/import-from-env` para migrar el emisor original.
+
 ---
 
 ## Glosario rápido (qué es cada cosa)
@@ -78,7 +92,14 @@ Te quedan dos archivos: `piubella-homo.key` (secreto) y `piubella-homo.csr` (el 
 1. Entrá a **https://app.afipsdk.com** → tu cuenta.
 2. Copiá tu **Access Token** → ese es el `AFIP_SDK_TOKEN`.
 
-## 1.6 — Configurar el Worker para homologación
+## 1.6 — Configurar las credenciales de homologación
+
+> **Camino recomendado hoy:** cargar el certificado y la clave en
+> **Configuración → Facturadores** del dashboard (pegando el PEM tal cual, sin
+> convertir a base64) y elegir ambiente *Homologación*. Ver
+> [`FACTURADORES.md`](./FACTURADORES.md) §2.2. Lo que sigue en esta sección es el
+> camino viejo (un único emisor en variables del Worker), que se mantiene como
+> respaldo y para poder usar `import-from-env`.
 
 El cert y la key son PEM **multilínea**, que no entran cómodos en `.dev.vars`.
 Por eso los pasamos en **base64 (una sola línea)**. Generalos así:
@@ -163,9 +184,17 @@ El número que te asigne es tu **`ARCA_POS`** (ej: `2`).
 > Importante: el PV de "Comprobantes en línea" (web manual) **no** sirve para web service.
 > Tiene que ser uno de tipo Web Services, distinto número.
 
-## 2.5 — Configurar los secretos de producción y activar prod
+## 2.5 — Configurar las credenciales de producción y activar prod
 
-En producción el cert/key van como **secretos del Worker** (NO en `.dev.vars`).
+> **Camino recomendado hoy:** en **Configuración → Facturadores**, editar el
+> facturador, pegar el `.crt`/`.key` **de producción**, poner el punto de venta de
+> producción y cambiar el ambiente a *Producción*. No hace falta redeployar ni
+> tocar `wrangler.toml`. Ver [`FACTURADORES.md`](./FACTURADORES.md) §2.4.
+>
+> El único secreto que sí va en el Worker es `ARCA_SECRETS_KEY` (la llave maestra
+> que cifra las credenciales). Lo que sigue es el camino viejo de emisor único.
+
+En el esquema viejo, el cert/key van como **secretos del Worker** (NO en `.dev.vars`).
 `wrangler secret put` acepta el PEM multilínea directo desde el archivo:
 
 ```bash

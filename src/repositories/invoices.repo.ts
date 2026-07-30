@@ -1,6 +1,15 @@
-import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { arcaLogs, contacts, customers, invoices, lineItems, products, service } from "../db/schema";
+import {
+  arcaIssuers,
+  arcaLogs,
+  contacts,
+  customers,
+  invoices,
+  lineItems,
+  products,
+  service,
+} from "../db/schema";
 
 type Tx = Pick<Db, "select" | "insert" | "update">;
 
@@ -18,6 +27,10 @@ const invoiceSummary = {
   customerId: invoices.customerId,
   customerName: contacts.name,
   customerDni: customers.dni,
+  // Facturador con el que se emite (NULL en facturas previas al multi-facturador)
+  issuerId: invoices.issuerId,
+  issuerName: arcaIssuers.name,
+  issuerCuit: arcaIssuers.cuit,
 };
 
 export async function listInvoices(
@@ -35,6 +48,7 @@ export async function listInvoices(
     .from(invoices)
     .leftJoin(customers, eq(customers.id, invoices.customerId))
     .leftJoin(contacts, eq(contacts.id, customers.contactId))
+    .leftJoin(arcaIssuers, eq(arcaIssuers.id, invoices.issuerId))
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(invoices.invoiceDate))
     .limit(200);
@@ -46,6 +60,7 @@ export async function getInvoiceById(db: Db, id: string) {
     .from(invoices)
     .leftJoin(customers, eq(customers.id, invoices.customerId))
     .leftJoin(contacts, eq(contacts.id, customers.contactId))
+    .leftJoin(arcaIssuers, eq(arcaIssuers.id, invoices.issuerId))
     .where(eq(invoices.id, id))
     .limit(1);
   return rows[0] ?? null;
@@ -103,12 +118,26 @@ export async function insertArcaLog(tx: Tx, values: typeof arcaLogs.$inferInsert
   return rows[0]!;
 }
 
-/** Próximo número correlativo para un tipo de comprobante. */
-export async function getNextInvoiceNumber(tx: Tx, invoiceType: string): Promise<number> {
+/**
+ * Próximo correlativo propuesto para un tipo de comprobante, POR FACTURADOR:
+ * cada CUIT+punto de venta lleva su propia numeración ante ARCA, así que mezclar
+ * facturadores daría números disparatados. Igual es solo una propuesta — ante
+ * ARCA manda `FECompUltimoAutorizado` (ver afip-client.ts).
+ */
+export async function getNextInvoiceNumber(
+  tx: Tx,
+  invoiceType: string,
+  issuerId: string | null,
+): Promise<number> {
   const rows = await tx
     .select({ max: sql<number | null>`max(${invoices.invoiceNumber})` })
     .from(invoices)
-    .where(eq(invoices.invoiceType, invoiceType));
+    .where(
+      and(
+        eq(invoices.invoiceType, invoiceType),
+        issuerId ? eq(invoices.issuerId, issuerId) : isNull(invoices.issuerId),
+      ),
+    );
   return (rows[0]?.max ?? 0) + 1;
 }
 

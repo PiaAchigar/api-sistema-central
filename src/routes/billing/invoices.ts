@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { createArcaClient } from "../../arca/factory";
+import { resolveArcaConfig } from "../../arca/factory";
 import { createDb } from "../../db/client";
 import {
   cancelInvoice,
@@ -60,12 +60,15 @@ const createBody = z.object({
     .min(1),
   adjustmentAmount: z.number().optional(),
   description: z.string().max(1000).optional(),
+  /** Facturador con el que se va a emitir. Si no viene, el marcado por defecto. */
+  issuerId: z.string().uuid().optional(),
 });
 
 invoicesRouter.post("/", zValidator("json", createBody), async (c) => {
   const db = createDb(c.env);
-  const arca = createArcaClient(c.env);
-  const invoice = await createDraftInvoice(db, arca, c.req.valid("json"));
+  const body = c.req.valid("json");
+  const arca = await resolveArcaConfig(db, c.env, body.issuerId);
+  const invoice = await createDraftInvoice(db, arca, body);
   return c.json(invoice, 201);
 });
 
@@ -77,9 +80,8 @@ invoicesRouter.post(
   ),
   async (c) => {
     const db = createDb(c.env);
-    const arca = createArcaClient(c.env);
     const { invoiceIds } = c.req.valid("json");
-    return c.json(await emitBatch(db, arca, invoiceIds));
+    return c.json(await emitBatch(db, c.env, invoiceIds));
   },
 );
 
@@ -101,8 +103,7 @@ invoicesRouter.get("/:id", async (c) => {
 
 invoicesRouter.post("/:id/emit", async (c) => {
   const db = createDb(c.env);
-  const arca = createArcaClient(c.env);
-  return c.json(await emitInvoice(db, arca, c.req.param("id")));
+  return c.json(await emitInvoice(db, c.env, c.req.param("id")));
 });
 
 invoicesRouter.get("/:id/pdf", async (c) => {
@@ -115,9 +116,8 @@ invoicesRouter.post(
   zValidator("json", z.object({ reason: z.string().max(500).optional() }).optional().default({})),
   async (c) => {
     const db = createDb(c.env);
-    const arca = createArcaClient(c.env);
     const { reason } = c.req.valid("json");
-    return c.json(await cancelInvoice(db, arca, c.req.param("id"), reason));
+    return c.json(await cancelInvoice(db, c.env, c.req.param("id"), reason));
   },
 );
 

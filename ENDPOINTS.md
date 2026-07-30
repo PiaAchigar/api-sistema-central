@@ -102,14 +102,30 @@ Header requerido: `Authorization: Bearer <supabase_access_token>`
 | Método | Path | Query / Body |
 |--------|------|-------------|
 | GET | `/api/billing/invoices` | `?status` · `?customerId` · `?from` · `?to` (YYYY-MM-DD) |
-| POST | `/api/billing/invoices` | `{ customerId, items[], adjustmentAmount?, description? }` |
+| POST | `/api/billing/invoices` | `{ customerId, items[], adjustmentAmount?, description?, issuerId? }` |
 | GET | `/api/billing/invoices/:id` | — |
-| POST | `/api/billing/invoices/:id/emit` | — |
+| POST | `/api/billing/invoices/:id/emit` | — (usa el facturador de la factura) |
 | POST | `/api/billing/invoices/emit-batch` | `{ invoiceIds?: uuid[] }` (vacío = todos los drafts) |
 | POST | `/api/billing/invoices/:id/cancel` | `{ reason?: string }` |
 
 ### Status de factura
 `draft` → `emitted` → `paid` · `cancelled`
+
+### Facturadores ARCA (multi-emisor)
+
+Identidades fiscales: cada una con su CUIT, certificado, punto de venta y numeración.
+Las credenciales se guardan **cifradas** y **nunca** se devuelven — solo se reemplazan.
+Ver [`FACTURADORES.md`](./FACTURADORES.md).
+
+| Método | Path | Query / Body |
+|--------|------|-------------|
+| GET | `/api/billing/issuers` | `?onlyActive=true` — sin secretos |
+| POST | `/api/billing/issuers` | **admin** · `{ name, cuit, sdkToken, cert, key, environment?, pointOfSale?, invoiceType?, isActive?, isDefault?, notes? }` |
+| PATCH | `/api/billing/issuers/:id` | **admin** · todos opcionales; `sdkToken`/`cert`/`key` omitidos ⇒ se conservan |
+| DELETE | `/api/billing/issuers/:id` | **admin** · baja lógica (`isActive=false`) |
+| POST | `/api/billing/issuers/import-from-env` | **admin** · `{ name }` — migra las `AFIP_*` del Worker a la base. Idempotente |
+
+Requiere el secreto `ARCA_SECRETS_KEY` en el Worker (si falta → `503`).
 
 ### Pagos
 

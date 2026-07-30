@@ -264,7 +264,21 @@ Datos de empresa + horarios + gestión de usuarios. **Toda la sección es admin-
 
 ## ARCA
 
-`wrangler.toml` define `ARCA_MODE` (`mock` | `afip`), `ARCA_POS` (punto de venta) y `ARCA_INVOICE_TYPE` (`C` para monotributo). El modo `mock` genera CAE falsos y persiste todo en `ARCA_LOGS`, así el flujo completo funciona sin credenciales. Para pasar a real: cuenta en [afipsdk.com](https://docs.afipsdk.com), `wrangler secret put AFIP_CUIT` y `wrangler secret put AFIP_SDK_TOKEN`, y `ARCA_MODE = "afip"` (ver TODOs en `src/arca/afip-client.ts`).
+Guías paso a paso:
+
+- **[`FACTURADORES.md`](./FACTURADORES.md)** — multi-facturador: dar de alta varias identidades fiscales (cada una con su CUIT, certificado y numeración) y elegir cuál factura en cada cobranza. **Empezá por acá.**
+- **[`ARCA_SETUP.md`](./ARCA_SETUP.md)** — los trámites en ARCA para conseguir el certificado, autorizar `wsfe` y crear el punto de venta. Se hacen una vez por cada CUIT.
+
+`wrangler.toml` define `ARCA_MODE` (`mock` | `afip`), `ARCA_POS` (punto de venta) y `ARCA_INVOICE_TYPE` (`C` para monotributo). El modo `mock` genera CAE falsos y persiste todo en `ARCA_LOGS`, así el flujo completo funciona sin credenciales.
+
+Las credenciales de cada facturador viven **cifradas en la tabla `arca_issuers`** y se administran desde el dashboard (Configuración → Facturadores). El único secreto que hace falta en el Worker es `ARCA_SECRETS_KEY`, la llave maestra que las cifra:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+npx wrangler secret put ARCA_SECRETS_KEY
+```
+
+Las variables `AFIP_CUIT` / `AFIP_SDK_TOKEN` / `AFIP_CERT` / `AFIP_KEY` quedan como respaldo para instalaciones sin facturadores cargados, y son las que lee `POST /api/billing/issuers/import-from-env` para migrar el emisor original a la base.
 
 ## Migración pendiente en Supabase
 

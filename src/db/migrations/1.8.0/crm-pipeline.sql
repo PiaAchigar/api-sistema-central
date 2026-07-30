@@ -7,23 +7,13 @@
 -- se acredita cuando se cancela un turno con seña ya paga (ver reglas_negocio §6.2).
 -- Idempotente: se puede correr más de una vez sin romper.
 --
--- ⚠️  ANTES DE APLICAR ESTO EN SUPABASE (PRODUCCIÓN), LEER ESTO ⚠️
--- ────────────────────────────────────────────────────────────────────────────
--- `deals.assigned_agent_id` YA EXISTE en el init.sql de producción, y allá la
--- foreign key hacia `users(id)` se llama `fk_deal_agent` (singular), NO
--- `fk_deals_assigned_agent`. El bloque DO de más abajo solo chequea el nombre
--- NUEVO, así que si se corre tal cual en Supabase va a agregar una SEGUNDA FK
--- REDUNDANTE sobre la misma columna.
---
--- Antes de correr esta migración en producción, verificar:
---
---   SELECT conname FROM pg_constraint
---   WHERE conrelid = 'deals'::regclass AND contype = 'f';
---
--- Si aparece `fk_deal_agent` (o cualquier otra FK sobre `assigned_agent_id`),
--- SALTEAR / COMENTAR el bloque DO $$ ... END $$ de la FK — el resto de la
--- migración sí se aplica normalmente.
--- ────────────────────────────────────────────────────────────────────────────
+-- Sobre la FK de `assigned_agent_id`: la columna YA EXISTE en el init.sql, donde
+-- su foreign key hacia `users(id)` se llama `fk_deal_agent` (singular), NO
+-- `fk_deals_assigned_agent`. Por eso el guard de abajo NO chequea por nombre
+-- (chequear solo el nombre nuevo agregaría una SEGUNDA FK redundante sobre la
+-- misma columna en toda base creada desde init.sql), sino si ya existe
+-- CUALQUIER FK sobre esa columna. Así la migración es segura tal cual está,
+-- tanto en una base nueva como en Supabase, sin pasos manuales.
 
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS facebook_id VARCHAR(255);
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS telegram_id VARCHAR(255);
@@ -37,7 +27,14 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS cancel_reason TEXT;
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'fk_deals_assigned_agent'
+    SELECT 1
+    FROM pg_constraint c
+    WHERE c.conrelid = 'deals'::regclass
+      AND c.contype = 'f'
+      AND c.conkey = ARRAY[
+        (SELECT attnum FROM pg_attribute
+          WHERE attrelid = 'deals'::regclass AND attname = 'assigned_agent_id')
+      ]::smallint[]
   ) THEN
     ALTER TABLE deals
       ADD CONSTRAINT fk_deals_assigned_agent
