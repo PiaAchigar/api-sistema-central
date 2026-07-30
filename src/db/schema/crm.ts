@@ -178,3 +178,13 @@ export const automationRuns = pgTable("automation_runs", {
   detail: text("detail"),
   createdAt: createdAt(),
 });
+
+export const automationFaqs = pgTable("automation_faqs", {
+  id: id(),
+  question: varchar("question", { length: 255 }),
+  answer: text("answer"),
+  keywords: text("keywords").array(),
+  isActive: boolean("is_active"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
