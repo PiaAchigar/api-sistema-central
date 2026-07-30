@@ -1,5 +1,5 @@
 export type TriggerType = "incoming_message" | "deal_stage_changed";
-export type ActionType = "reply_text" | "change_deal_stage" | "assign_agent";
+export type ActionType = "reply_text" | "change_deal_stage" | "assign_agent" | "reply_faq";
 
 export type Condition =
   | { type: "channel_is"; value: string }
@@ -17,7 +17,7 @@ export type AutomationEvent =
   | { type: "deal_stage_changed"; dealId: string; contactId: string | null; toStage: string };
 
 /** minúsculas + sin acentos, para que "estan" matchee "están". */
-function normalize(s: string): string {
+export function normalize(s: string): string {
   return s
     .toLowerCase()
     .normalize("NFD")
@@ -43,4 +43,18 @@ function matchesOne(cond: Condition, event: AutomationEvent): boolean {
 /** Todas las condiciones deben cumplirse (AND). Sin condiciones → matchea. */
 export function matchesConditions(conditions: Condition[], event: AutomationEvent): boolean {
   return conditions.every((c) => matchesOne(c, event));
+}
+
+export type FaqRecord = { id: string; answer: string; keywords: string[] };
+
+/** Primera FAQ activa cuyas keywords aparecen en el texto (normalizado). El
+ *  orden de `faqs` decide el desempate si matchean varias: gana la primera. */
+export function matchFaq(faqs: FaqRecord[], text: string): { id: string; answer: string } | null {
+  const normalizedText = normalize(text);
+  for (const faq of faqs) {
+    if (faq.keywords.some((k) => normalizedText.includes(normalize(k)))) {
+      return { id: faq.id, answer: faq.answer };
+    }
+  }
+  return null;
 }

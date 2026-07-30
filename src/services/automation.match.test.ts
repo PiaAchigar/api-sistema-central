@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesConditions, type AutomationEvent } from "./automation.match";
+import { matchesConditions, matchFaq, type AutomationEvent } from "./automation.match";
 
 const msg: AutomationEvent = {
   type: "incoming_message",
@@ -62,5 +62,38 @@ describe("matchesConditions", () => {
   it("condición de otro tipo de evento → no matchea", () => {
     expect(matchesConditions([{ type: "channel_is", value: "whatsapp" }], deal)).toBe(false);
     expect(matchesConditions([{ type: "deal_to_stage", value: "senia_pagada" }], msg)).toBe(false);
+  });
+});
+
+describe("matchFaq", () => {
+  const faqs = [
+    { id: "f1", answer: "L-V de 9 a 20", keywords: ["hora", "horario", "abren"] },
+    { id: "f2", answer: "Los precios varían según el servicio", keywords: ["precio", "cuanto sale"] },
+  ];
+
+  it("sin FAQs → null", () => {
+    expect(matchFaq([], "hola")).toBeNull();
+  });
+  it("matchea por la primera keyword de una FAQ", () => {
+    expect(matchFaq(faqs, "¿qué hora es?")).toEqual({ id: "f1", answer: "L-V de 9 a 20" });
+  });
+  it("matchea por una keyword que no es la primera de la lista", () => {
+    expect(matchFaq(faqs, "no se si abren los domingos")).toEqual({
+      id: "f1",
+      answer: "L-V de 9 a 20",
+    });
+  });
+  it("es insensible a mayúsculas y acentos", () => {
+    expect(matchFaq(faqs, "HASTA QUE HORA ESTAN")).toEqual({ id: "f1", answer: "L-V de 9 a 20" });
+  });
+  it("ninguna keyword matchea → null", () => {
+    expect(matchFaq(faqs, "quiero cancelar mi turno")).toBeNull();
+  });
+  it("si dos FAQs matchean, gana la primera del array (la más antigua)", () => {
+    const both = [
+      { id: "old", answer: "Respuesta vieja", keywords: ["turno"] },
+      { id: "new", answer: "Respuesta nueva", keywords: ["turno"] },
+    ];
+    expect(matchFaq(both, "quiero un turno")).toEqual({ id: "old", answer: "Respuesta vieja" });
   });
 });
