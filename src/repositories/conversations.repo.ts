@@ -1,6 +1,29 @@
 import { and, asc, desc, eq, ilike, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { contacts, conversations, messages } from "../db/schema";
+import { decodeMessageCursor, encodeMessageCursor } from "../lib/message-cursor";
+
+export const MESSAGES_PAGE_SIZE = 50;
+
+const messageColumns = {
+  id: messages.id,
+  senderType: messages.senderType,
+  content: messages.content,
+  mediaUrl: messages.mediaUrl,
+  createdAt: messages.createdAt,
+};
+
+type MessageRow = {
+  id: string;
+  senderType: string | null;
+  content: string | null;
+  mediaUrl: string | null;
+  createdAt: Date | null;
+};
+
+function cursorOf(row: MessageRow): string {
+  return encodeMessageCursor({ createdAt: row.createdAt!, id: row.id });
+}
 
 export type ConversationFilters = {
   channel?: string;
@@ -71,22 +94,88 @@ export async function getConversationById(db: Db, id: string) {
   return rows[0] ?? null;
 }
 
-/** Detalle: la conversación (con nombre de contacto) + sus mensajes cronológicos. */
+/** Detalle: la conversación (con nombre de contacto) + su última tanda de
+ *  mensajes (los más recientes), en orden cronológico ascendente. */
 export async function getConversationWithMessages(db: Db, id: string) {
   const conversation = await selectListItemById(db, id);
   if (!conversation) return null;
-  const msgs = await db
-    .select({
-      id: messages.id,
-      senderType: messages.senderType,
-      content: messages.content,
-      mediaUrl: messages.mediaUrl,
-      createdAt: messages.createdAt,
-    })
+
+  const rows = await db
+    .select(messageColumns)
     .from(messages)
     .where(eq(messages.conversationId, id))
-    .orderBy(asc(messages.createdAt));
-  return { conversation, messages: msgs };
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(MESSAGES_PAGE_SIZE + 1);
+
+  const hasMoreOlder = rows.length > MESSAGES_PAGE_SIZE;
+  const page = rows.slice(0, MESSAGES_PAGE_SIZE).reverse();
+
+  return {
+    conversation,
+    messages: page,
+    oldestCursor: page.length > 0 ? cursorOf(page[0]!) : null,
+    newestCursor: page.length > 0 ? cursorOf(page[page.length - 1]!) : null,
+    hasMoreOlder,
+  };
+}
+
+/** Tanda de mensajes anteriores al cursor (para "cargar anteriores"), en
+ *  orden cronológico ascendente. */
+export async function listMessagesBefore(
+  db: Db,
+  conversationId: string,
+  cursor: string,
+  limit = MESSAGES_PAGE_SIZE,
+) {
+  const { createdAt, id } = decodeMessageCursor(cursor);
+  const rows = await db
+    .select(messageColumns)
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        sql`(${messages.createdAt}, ${messages.id}) < (${createdAt}, ${id})`,
+      ),
+    )
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(limit + 1);
+
+  const hasMoreOlder = rows.length > limit;
+  const page = rows.slice(0, limit).reverse();
+
+  return {
+    messages: page,
+    oldestCursor: page.length > 0 ? cursorOf(page[0]!) : null,
+    hasMoreOlder,
+  };
+}
+
+/** Mensajes nuevos desde el cursor (para el polling del hilo abierto), en
+ *  orden cronológico ascendente. `cursor` null = todavía no hay ningún
+ *  mensaje conocido por el cliente (conversación recién creada). */
+export async function listMessagesAfter(
+  db: Db,
+  conversationId: string,
+  cursor: string | null,
+  limit = MESSAGES_PAGE_SIZE,
+) {
+  const conds = [eq(messages.conversationId, conversationId)];
+  if (cursor !== null) {
+    const { createdAt, id } = decodeMessageCursor(cursor);
+    conds.push(sql`(${messages.createdAt}, ${messages.id}) > (${createdAt}, ${id})`);
+  }
+
+  const rows = await db
+    .select(messageColumns)
+    .from(messages)
+    .where(and(...conds))
+    .orderBy(asc(messages.createdAt), asc(messages.id))
+    .limit(limit);
+
+  return {
+    messages: rows,
+    newestCursor: rows.length > 0 ? cursorOf(rows[rows.length - 1]!) : null,
+  };
 }
 
 /** Crea o reusa el hilo de (contactId, channel). El índice único garantiza uno solo. */
