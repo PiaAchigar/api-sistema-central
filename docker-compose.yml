@@ -25,7 +25,8 @@ services:
       - ./src/db/migrations/1.11.0/automation.sql:/docker-entrypoint-initdb.d/12-automation.sql:ro
       - ./src/db/migrations/1.12.0/automation-faq.sql:/docker-entrypoint-initdb.d/13-automation-faq.sql:ro
       - ./src/db/migrations/1.13.0/messages-external-id.sql:/docker-entrypoint-initdb.d/14-messages-external-id.sql:ro
-      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/15-seed.sql:ro
+      - ./src/db/migrations/1.14.0/messages-conversation-index.sql:/docker-entrypoint-initdb.d/15-messages-conversation-index.sql:ro
+      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/16-seed.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]
