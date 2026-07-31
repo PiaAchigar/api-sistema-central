@@ -27,3 +27,13 @@ export const listConversationsQuery = z.object({
   assignedAgentId: z.string().optional(), // uuid | "unassigned"
   q: z.string().optional(),
 });
+
+export const listMessagesQuery = z
+  .object({
+    before: z.string().optional(),
+    after: z.string().optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+  })
+  .refine((d) => (d.before !== undefined) !== (d.after !== undefined), {
+    message: "Debe venir exactamente uno de 'before' o 'after'",
+  });

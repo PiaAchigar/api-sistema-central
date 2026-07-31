@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createConversationBody,
   listConversationsQuery,
+  listMessagesQuery,
   patchConversationBody,
   sendMessageBody,
 } from "./conversations.schema";
@@ -57,5 +58,30 @@ describe("listConversationsQuery", () => {
   });
   it("rechaza channel inválido", () => {
     expect(listConversationsQuery.safeParse({ channel: "sms" }).success).toBe(false);
+  });
+});
+
+describe("listMessagesQuery", () => {
+  it("acepta solo before", () => {
+    expect(
+      listMessagesQuery.safeParse({ before: "2026-07-15T12:00:00.000Z_uuid" }).success,
+    ).toBe(true);
+  });
+  it("acepta solo after, incluso vacío", () => {
+    expect(listMessagesQuery.safeParse({ after: "" }).success).toBe(true);
+  });
+  it("rechaza los dos juntos", () => {
+    expect(listMessagesQuery.safeParse({ before: "x", after: "y" }).success).toBe(false);
+  });
+  it("rechaza ninguno de los dos", () => {
+    expect(listMessagesQuery.safeParse({}).success).toBe(false);
+  });
+  it("default de limit es 50", () => {
+    const r = listMessagesQuery.safeParse({ after: "" });
+    expect(r.success && r.data.limit).toBe(50);
+  });
+  it("rechaza limit fuera de rango", () => {
+    expect(listMessagesQuery.safeParse({ after: "", limit: 0 }).success).toBe(false);
+    expect(listMessagesQuery.safeParse({ after: "", limit: 101 }).success).toBe(false);
   });
 });

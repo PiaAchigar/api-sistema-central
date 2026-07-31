@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
-import { conflict, notFound } from "../../lib/errors";
+import { badRequest, conflict, notFound } from "../../lib/errors";
 import { requireAuth, requirePermission } from "../../middleware/auth";
 import {
   addContactMessage,
@@ -11,6 +11,8 @@ import {
   getConversationCore,
   getConversationWithMessages,
   listConversations,
+  listMessagesAfter,
+  listMessagesBefore,
   updateConversation,
   upsertConversation,
 } from "../../repositories/conversations.repo";
@@ -19,6 +21,7 @@ import { sendAgentReply } from "../../services/messaging.service";
 import {
   createConversationBody,
   listConversationsQuery,
+  listMessagesQuery,
   patchConversationBody,
   sendMessageBody,
 } from "./conversations.schema";
@@ -67,6 +70,31 @@ conversationsRouter.post(
     if (!(await getConversationById(db, id))) throw notFound("Conversation");
     const msg = await sendAgentReply(db, c.env, id, c.req.valid("json").content);
     return c.json(msg, 201);
+  },
+);
+
+conversationsRouter.get(
+  "/:id/messages",
+  requireAuth,
+  requirePermission("crm", "view"),
+  zValidator("query", listMessagesQuery),
+  async (c) => {
+    const db = createDb(c.env);
+    const id = c.req.param("id");
+    if (!(await getConversationById(db, id))) throw notFound("Conversation");
+    const { before, after, limit } = c.req.valid("query");
+    try {
+      if (before !== undefined) {
+        return c.json(await listMessagesBefore(db, id, before, limit));
+      }
+      // El refine de listMessagesQuery garantiza que acá `after` está
+      // definido (antes vino undefined). Puede venir vacío ("") para
+      // "sin cursor todavía" — se trata como null.
+      const afterCursor = after ?? "";
+      return c.json(await listMessagesAfter(db, id, afterCursor === "" ? null : afterCursor, limit));
+    } catch (err) {
+      throw badRequest("Cursor inválido", err);
+    }
   },
 );
 
