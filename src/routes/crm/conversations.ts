@@ -16,6 +16,7 @@ import {
   updateConversation,
   upsertConversation,
 } from "../../repositories/conversations.repo";
+import { decodeMessageCursor } from "../../lib/message-cursor";
 import { runAutomations } from "../../services/automation.service";
 import { sendAgentReply } from "../../services/messaging.service";
 import {
@@ -83,18 +84,30 @@ conversationsRouter.get(
     const id = c.req.param("id");
     if (!(await getConversationById(db, id))) throw notFound("Conversation");
     const { before, after, limit } = c.req.valid("query");
-    try {
-      if (before !== undefined) {
-        return c.json(await listMessagesBefore(db, id, before, limit));
+    // Se valida el formato del cursor acá, aparte, para no envolver la
+    // llamada al repositorio en el mismo try/catch — si no, un error real
+    // de base de datos quedaría enmascarado como "Cursor inválido" (400)
+    // en vez de propagarse como el 500 que realmente es.
+    if (before !== undefined) {
+      try {
+        decodeMessageCursor(before);
+      } catch {
+        throw badRequest("Cursor inválido");
       }
-      // El refine de listMessagesQuery garantiza que acá `after` está
-      // definido (antes vino undefined). Puede venir vacío ("") para
-      // "sin cursor todavía" — se trata como null.
-      const afterCursor = after ?? "";
-      return c.json(await listMessagesAfter(db, id, afterCursor === "" ? null : afterCursor, limit));
-    } catch (err) {
-      throw badRequest("Cursor inválido", err);
+      return c.json(await listMessagesBefore(db, id, before, limit));
     }
+    // El refine de listMessagesQuery garantiza que acá `after` está
+    // definido (antes vino undefined). Puede venir vacío ("") para "sin
+    // cursor todavía" — se trata como null.
+    const afterCursor = after ?? "";
+    if (afterCursor !== "") {
+      try {
+        decodeMessageCursor(afterCursor);
+      } catch {
+        throw badRequest("Cursor inválido");
+      }
+    }
+    return c.json(await listMessagesAfter(db, id, afterCursor === "" ? null : afterCursor, limit));
   },
 );
 

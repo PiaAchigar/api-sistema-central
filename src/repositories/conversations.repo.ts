@@ -128,13 +128,15 @@ export async function listMessagesBefore(
   limit = MESSAGES_PAGE_SIZE,
 ) {
   const { createdAt, id } = decodeMessageCursor(cursor);
+  // .toISOString(): el driver postgres-js no sabe bindear un Date crudo
+  // dentro de un sql`` raw (solo lo hace vía las columnas tipadas de Drizzle).
   const rows = await db
     .select(messageColumns)
     .from(messages)
     .where(
       and(
         eq(messages.conversationId, conversationId),
-        sql`(${messages.createdAt}, ${messages.id}) < (${createdAt}, ${id})`,
+        sql`(${messages.createdAt}, ${messages.id}) < (${createdAt.toISOString()}, ${id})`,
       ),
     )
     .orderBy(desc(messages.createdAt), desc(messages.id))
@@ -162,7 +164,7 @@ export async function listMessagesAfter(
   const conds = [eq(messages.conversationId, conversationId)];
   if (cursor !== null) {
     const { createdAt, id } = decodeMessageCursor(cursor);
-    conds.push(sql`(${messages.createdAt}, ${messages.id}) > (${createdAt}, ${id})`);
+    conds.push(sql`(${messages.createdAt}, ${messages.id}) > (${createdAt.toISOString()}, ${id})`);
   }
 
   const rows = await db
