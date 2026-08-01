@@ -70,7 +70,7 @@ async function testAnthropicKey(apiKey: string, model: string): Promise<Validati
 
 async function testOpenAIKey(apiKey: string, model: string): Promise<ValidationResult> {
   try {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    const res = await fetch("https://api.openai.com/v1/embeddings", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -78,8 +78,7 @@ async function testOpenAIKey(apiKey: string, model: string): Promise<ValidationR
       },
       body: JSON.stringify({
         model,
-        max_tokens: 10,
-        messages: [{ role: "user", content: "test" }],
+        input: "test",
       }),
     });
     if (res.ok) return { valid: true };
