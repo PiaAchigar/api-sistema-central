@@ -37,9 +37,12 @@ export type AppBindings = Omit<Env, "ARCA_MODE"> & {
   ARCA_SECRETS_KEY?: string;
   /**
    * Master key (32 bytes en base64) para cifrar/descifrar las credenciales de
-   * canal (WhatsApp, etc.) guardadas en `channel_credentials`. Configurar con
-   * `wrangler secret put CREDENTIALS_ENCRYPTION_KEY`. Rotarla invalida las
-   * credenciales ya guardadas: hay que recargarlas desde Canales.
+   * canal (WhatsApp, etc.) guardadas en `channel_credentials`, y también las
+   * api_key de proveedores de IA guardadas en `ai_provider_credentials`
+   * (mismo secreto, dos tablas — ver services/crypto.service.ts). Configurar
+   * con `wrangler secret put CREDENTIALS_ENCRYPTION_KEY`. Rotarla invalida
+   * las credenciales ya guardadas: hay que recargarlas desde Canales /
+   * Automatización → Proveedores IA.
    */
   CREDENTIALS_ENCRYPTION_KEY?: string;
   /** Credenciales Afip SDK (solo para ARCA_MODE="afip"). */

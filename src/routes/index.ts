@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { agenda } from "./agenda";
+import { aiConfigRouter } from "./ai-config";
 import { billing } from "./billing";
 import { crm } from "./crm";
 import { health } from "./health";
@@ -16,6 +17,7 @@ api.route("/agenda", agenda);
 api.route("/billing", billing);
 api.route("/crm", crm);
 api.route("/users", usersRouter);
+api.route("/ai-config", aiConfigRouter);
 
 export { api };
 export type ApiType = typeof api;

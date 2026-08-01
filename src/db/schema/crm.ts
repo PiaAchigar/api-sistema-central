@@ -135,6 +135,23 @@ export const channelCredentials = pgTable("channel_credentials", {
   updatedAt: updatedAt(),
 });
 
+// Credenciales de proveedores de IA (Anthropic, OpenAI) para uso de otros
+// sistemas (cloud function RAG, script Python, chatbot n8n). `apiKey` se
+// guarda encriptada (AES-GCM vía crypto.service, misma master key que
+// channel_credentials: CREDENTIALS_ENCRYPTION_KEY) — nunca se expone cruda en
+// una respuesta HTTP. Índice único (provider) WHERE is_active definido en la
+// migración 1.4.0/rag-infrastructure.sql: solo una credencial activa por
+// proveedor a la vez.
+export const aiProviderCredentials = pgTable("ai_provider_credentials", {
+  id: id(),
+  provider: varchar("provider", { length: 50 }),
+  apiKey: text("api_key"),
+  model: varchar("model", { length: 100 }),
+  isActive: boolean("is_active"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
 export const conversations = pgTable("conversations", {
   id: id(),
   contactId: uuid("contact_id"),
