@@ -103,5 +103,5 @@ export async function getActiveCredential(
   if (!row || !row.apiKey) return null;
 
   const apiKey = await decrypt(row.apiKey, encryptionKey);
-  return { apiKey, model: row.model ?? DEFAULT_MODEL };
+  return { apiKey, model: row.model ?? DEFAULT_OPENAI_MODEL };
 }
