@@ -68,7 +68,38 @@ async function testAnthropicKey(apiKey: string, model: string): Promise<Validati
   }
 }
 
+// async function testOpenAIKey(apiKey: string, model: string): Promise<ValidationResult> {
+//   try {
+//     console.log({
+//     provider: "openai",
+//     model,
+// });
+//     const res = await fetch("https://api.openai.com/v1/embeddings", {
+//       method: "POST",
+//       headers: {
+//         Authorization: `Bearer ${apiKey}`,
+//         "content-type": "application/json",
+//       },
+//       body: JSON.stringify({
+//         model,
+//         input: "test",
+//       }),
+//     });
+//     if (res.ok) return { valid: true };
+//     const body = await res.json().catch(() => null);
+//     const message =
+//       (body as { error?: { message?: string } } | null)?.error?.message ??
+//       `OpenAI respondió ${res.status}`;
+//     return { valid: false, error: message };
+//   } catch (err) {
+//     console.log("Dio error...")
+//     return { valid: false, error: err instanceof Error ? err.message : "Error de red" };
+//   }
+// }
 async function testOpenAIKey(apiKey: string, model: string): Promise<ValidationResult> {
+  console.log("===== OPENAI VALIDATION =====");
+  console.log("model:", model);
+
   try {
     const res = await fetch("https://api.openai.com/v1/embeddings", {
       method: "POST",
@@ -81,17 +112,29 @@ async function testOpenAIKey(apiKey: string, model: string): Promise<ValidationR
         input: "test",
       }),
     });
-    if (res.ok) return { valid: true };
-    const body = await res.json().catch(() => null);
-    const message =
-      (body as { error?: { message?: string } } | null)?.error?.message ??
-      `OpenAI respondió ${res.status}`;
-    return { valid: false, error: message };
+
+    const text = await res.text();
+
+    console.log("status:", res.status);
+    console.log("body:", text);
+
+    if (res.ok) {
+      return { valid: true };
+    }
+
+    return {
+      valid: false,
+      error: text,
+    };
   } catch (err) {
-    return { valid: false, error: err instanceof Error ? err.message : "Error de red" };
+    console.error(err);
+
+    return {
+      valid: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
-
 const VALIDATORS: Record<AIProvider, (apiKey: string, model: string) => Promise<ValidationResult>> =
   {
     anthropic: testAnthropicKey,
