@@ -3,6 +3,9 @@ import { cors } from "hono/cors";
 import { requestLogger } from "./middleware/logger";
 import { api } from "./routes";
 import { whatsappWebhookRouter } from "./routes/webhooks/whatsapp";
+import { requireAuth, requirePermission } from "./middleware/auth";
+import { createDb } from "./db/client";
+import { recalculateEmbeddings, recalculateEmbeddingsWorker } from "./workers/embedding-calculator";
 import type { AppBindings, Variables } from "./env";
 
 const app = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
@@ -62,4 +65,36 @@ app.route("/api", api);
 // requireAuth/requirePermission, así que no hace falta estar logueado.
 app.route("/api/webhooks/whatsapp", whatsappWebhookRouter);
 
-export default app satisfies ExportedHandler<Env>;
+// A diferencia de /api/webhooks/whatsapp (que Meta llama sin login), este
+// endpoint no tiene ningún caller externo legítimo sin autenticar — dejarlo
+// público permitiría a cualquiera disparar llamadas a la API de Anthropic
+// (con costo real) usando la credencial guardada. Se exige login + el mismo
+// permiso que ya protege /api/ai-config (gestión de credenciales de IA).
+// Ver src/workers/embedding-calculator.ts para la lógica y la advertencia
+// sobre qué tan "reales" son estos embeddings.
+app.post(
+  "/api/webhooks/recalculate-embeddings",
+  requireAuth,
+  requirePermission("crm", "manage"),
+  recalculateEmbeddingsWorker,
+);
+
+export default {
+  fetch: app.fetch,
+  // Cron trigger opcional (ver wrangler.toml — comentado por default: cada
+  // corrida gasta la credencial de Anthropic y, tal como está hoy,
+  // "embedding" no es semánticamente real — ver embedding.ts). Si se
+  // habilita el cron en wrangler.toml, esto es lo que Cloudflare invoca.
+  async scheduled(_event, env, ctx) {
+    // `env` acá viene tipado como `Env` (generado por `wrangler types`);
+    // `AppBindings` es ese mismo shape con ARCA_MODE acotado a un literal
+    // union — mismo objeto en runtime, solo más estrecho en compile-time,
+    // igual que `c.env` en cualquier route handler.
+    const db = createDb(env as unknown as AppBindings);
+    ctx.waitUntil(
+      recalculateEmbeddings(db, env as unknown as AppBindings).then((result) => {
+        console.log("[embedding-calculator] cron run:", result);
+      }),
+    );
+  },
+} satisfies ExportedHandler<Env>;

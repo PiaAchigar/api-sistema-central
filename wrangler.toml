@@ -25,6 +25,17 @@ ARCA_INVOICE_TYPE = "C"     # monotributo emite Factura C
 # contra el JWKS público. No es secreto. Setear el mismo valor en producción.
 SUPABASE_URL = "https://pfemndbftxhlcvyhpbfg.supabase.co"
 
+# Cron trigger para recalcular embeddings pendientes (service_embeddings.embedding
+# IS NULL) — ver src/workers/embedding-calculator.ts. Comentado por default:
+# cada corrida gasta la credencial de Anthropic activa en ai_provider_credentials,
+# y tal como está implementado hoy el "embedding" generado NO es un embedding
+# semántico real (Claude no tiene endpoint de embeddings, ver advertencia en
+# src/lib/embedding.ts) — habilitarlo antes de resolver ese punto solo gasta
+# plata sin acercar la búsqueda semántica a funcionar. Descomentar cuando se
+# migre a un proveedor con embeddings reales (Voyage AI u OpenAI):
+# [triggers]
+# crons = ["*/5 * * * *"]
+
 # Secretos — NO van en este archivo. Configurar con:
 #   wrangler secret put API_KEY               ← API key estática (para backend-to-backend / dev)
 #   wrangler secret put AFIP_CUIT             ← solo si ARCA_MODE="afip"
