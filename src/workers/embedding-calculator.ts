@@ -4,21 +4,15 @@
 // trigger `trg_service_embeddings_sync` (migración 1.4.0) resetea `content`
 // y deja `embedding = NULL` cada vez que se crea/edita un `service`. Este
 // worker toma hasta 10 filas pendientes por invocación (para no acercarse al
-// límite de tiempo de un Worker) y les calcula el vector.
-//
-// ⚠️ Ver la advertencia en `lib/embedding.ts`: lo que este worker guarda en
-// `embedding` NO es un embedding semántico real (Claude no tiene endpoint de
-// embeddings) — es un array de 1536 números que Claude "inventa" por chat.
-// La tabla queda poblada, pero una búsqueda por similitud coseno sobre estos
-// vectores no va a devolver resultados semánticamente relevantes. No cablear
-// el Task 5 (búsqueda) sobre esto sin resolver antes ese punto — ver detalle
-// en `lib/embedding.ts`.
+// límite de tiempo de un Worker) y les calcula el vector usando OpenAI
+// text-embedding-3-small (embeddings semánticos reales).
 //
 // Se puede disparar de dos formas (misma lógica, `recalculateEmbeddings`):
 //   1. HTTP: POST /api/webhooks/recalculate-embeddings (requiere auth, ver
 //      index.ts) — para correrlo a mano o desde otro sistema interno.
 //   2. Cron: Cloudflare Cron Trigger → `scheduled()` en index.ts (opcional,
-//      comentado en wrangler.toml — ver nota ahí antes de habilitarlo).
+//      comentado en wrangler.toml — puede habilitarse una vez confirmado que
+//      funciona con OpenAI).
 
 import type { Context } from "hono";
 import { sql } from "drizzle-orm";
@@ -47,9 +41,9 @@ export async function recalculateEmbeddings(
   db: Db,
   env: Pick<AppBindings, "CREDENTIALS_ENCRYPTION_KEY">,
 ): Promise<RecalculateOutcome> {
-  const credential = await getActiveCredential(db, env.CREDENTIALS_ENCRYPTION_KEY, "anthropic");
+  const credential = await getActiveCredential(db, env.CREDENTIALS_ENCRYPTION_KEY, "openai");
   if (!credential) {
-    return { error: "No hay credencial de Anthropic activa configurada en ai_provider_credentials." };
+    return { error: "No hay credencial de OpenAI activa configurada en ai_provider_credentials. Ve a /automatizacion/llm-config en front-crm para agregar una." };
   }
 
   const rows = await db.execute<PendingEmbeddingRow>(
@@ -67,7 +61,7 @@ export async function recalculateEmbeddings(
 
   for (const row of rows) {
     try {
-      const embedding = await generateEmbedding(row.content, credential.apiKey, credential.model);
+      const embedding = await generateEmbedding(row.content, credential.apiKey, "openai", credential.model);
       // pgvector acepta el literal de texto "[n1,n2,...]" con cast a ::vector.
       const vectorLiteral = `[${embedding.join(",")}]`;
       await db.execute(

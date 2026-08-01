@@ -10,7 +10,7 @@ function jsonResponse(body: unknown, status = 200) {
 
 const VALID_VECTOR = Array.from({ length: 1536 }, (_, i) => (i % 2 === 0 ? 0.1 : -0.1));
 
-describe("generateEmbedding", () => {
+describe("generateEmbedding (OpenAI)", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn());
   });
@@ -19,46 +19,56 @@ describe("generateEmbedding", () => {
     vi.unstubAllGlobals();
   });
 
-  it("parsea un array JSON de 1536 números devuelto en un bloque de texto", async () => {
+  it("devuelve un embedding de 1536 dimensiones desde OpenAI", async () => {
     vi.mocked(fetch).mockResolvedValue(
       jsonResponse({
-        content: [{ type: "text", text: `Here you go:\n${JSON.stringify(VALID_VECTOR)}` }],
+        data: [{ embedding: VALID_VECTOR }],
       }),
     );
 
-    const result = await generateEmbedding("algún contenido", "sk-test", "claude-sonnet-5");
+    const result = await generateEmbedding("algún contenido", "sk-proj-test", "openai");
 
     expect(result).toHaveLength(1536);
     expect(result[0]).toBe(0.1);
   });
 
-  it("rechaza cuando la respuesta trae menos de 1536 números", async () => {
+  it("rechaza cuando la respuesta trae menos de 1536 dimensiones", async () => {
     vi.mocked(fetch).mockResolvedValue(
-      jsonResponse({ content: [{ type: "text", text: "[0.1, 0.2, 0.3]" }] }),
+      jsonResponse({
+        data: [{ embedding: [0.1, 0.2, 0.3] }],
+      }),
     );
 
-    await expect(generateEmbedding("x", "sk-test")).rejects.toThrow(EmbeddingError);
+    await expect(generateEmbedding("x", "sk-proj-test", "openai")).rejects.toThrow(
+      EmbeddingError,
+    );
   });
 
-  it("rechaza cuando stop_reason es 'refusal'", async () => {
-    vi.mocked(fetch).mockResolvedValue(jsonResponse({ stop_reason: "refusal", content: [] }));
-
-    await expect(generateEmbedding("x", "sk-test")).rejects.toThrow(/refusal/);
-  });
-
-  it("rechaza cuando la API responde con un error HTTP", async () => {
+  it("rechaza cuando la API responde con error HTTP", async () => {
     vi.mocked(fetch).mockResolvedValue(
-      jsonResponse({ error: { message: "invalid x-api-key" } }, 401),
+      jsonResponse({ error: { message: "invalid api key" } }, 401),
     );
 
-    await expect(generateEmbedding("x", "sk-bad")).rejects.toThrow(/invalid x-api-key/);
+    await expect(generateEmbedding("x", "sk-proj-bad", "openai")).rejects.toThrow(
+      /invalid api key/,
+    );
   });
 
-  it("rechaza cuando no hay ningún array JSON en el texto", async () => {
+  it("rechaza cuando no está el array de embedding en la respuesta", async () => {
     vi.mocked(fetch).mockResolvedValue(
-      jsonResponse({ content: [{ type: "text", text: "no puedo ayudar con eso" }] }),
+      jsonResponse({
+        data: [{}],
+      }),
     );
 
-    await expect(generateEmbedding("x", "sk-test")).rejects.toThrow(EmbeddingError);
+    await expect(generateEmbedding("x", "sk-proj-test", "openai")).rejects.toThrow(
+      EmbeddingError,
+    );
+  });
+
+  it("rechaza cuando se intenta usar un provider no soportado", async () => {
+    await expect(generateEmbedding("x", "sk-test", "anthropic")).rejects.toThrow(
+      /no soportado/,
+    );
   });
 });
