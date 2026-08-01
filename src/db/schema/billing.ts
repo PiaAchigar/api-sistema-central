@@ -63,6 +63,12 @@ export const invoices = pgTable("invoices", {
 export const lineItems = pgTable("line_items", {
   id: id(),
   invoiceId: uuid("invoice_id"),
+  /** Concepto propio de la línea (ej: "Seña de servicio: X"). Si es NULL se
+   *  muestra el nombre del servicio/producto asociado. */
+  description: varchar("description", { length: 255 }),
+  /** Cobro que pagó esta línea. Las líneas NO facturadas a ARCA viven solo acá
+   *  (invoiceId en NULL): son un recibo, no un comprobante fiscal. */
+  paymentId: uuid("payment_id"),
   serviceId: uuid("service_id"),
   productId: uuid("product_id"),
   trainingEnrollmentId: uuid("training_enrollment_id"),
@@ -78,6 +84,9 @@ export const lineItems = pgTable("line_items", {
 export const payments = pgTable("payments", {
   id: id(),
   invoiceId: uuid("invoice_id"),
+  /** De quién es el cobro. Se guarda siempre, haya factura o no (la parte no
+   *  declarada de una cobranza mixta no tiene factura de la cual deducirlo). */
+  customerId: uuid("customer_id"),
   paymentAccountId: uuid("payment_account_id"),
   amount: decimal("amount", { precision: 10, scale: 2 }),
   paymentMethod: varchar("payment_method", { length: 50 }), // cash | bank_transfer | mercadopago

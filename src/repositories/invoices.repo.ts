@@ -70,6 +70,7 @@ export async function getInvoiceLineItems(db: Db, invoiceId: string) {
   return db
     .select({
       id: lineItems.id,
+      description: lineItems.description,
       serviceId: lineItems.serviceId,
       productId: lineItems.productId,
       quantity: lineItems.quantity,

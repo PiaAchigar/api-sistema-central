@@ -86,19 +86,6 @@ export async function checkout(db: Db, arca: ArcaConfig, input: CheckoutInput) {
         status: "draft",
         invoiceDate: now,
       });
-      await insertLineItems(
-        tx,
-        billableItems.map((i) => ({
-          invoiceId: invoice!.id,
-          serviceId: i.serviceId,
-          productId: i.productId,
-          quantity: i.quantity,
-          unitPrice: i.unitPrice.toFixed(2),
-          taxAmount: "0.00",
-          subtotal: (i.unitPrice * i.quantity).toFixed(2),
-          totalAmount: (i.unitPrice * i.quantity).toFixed(2),
-        })),
-      );
     }
 
     // Split del pago: la parte facturada queda declarada; el resto (ítems sin
@@ -110,6 +97,7 @@ export async function checkout(db: Db, arca: ArcaConfig, input: CheckoutInput) {
     const insertPart = (amount: number, declared: boolean, inv: typeof invoice) =>
       insertPayment(tx, {
         invoiceId: inv?.id ?? null,
+        customerId: input.customerId,
         appointmentId: input.appointmentId ?? null,
         amount: amount.toFixed(2),
         paymentMethod: input.payment.method,
@@ -130,6 +118,34 @@ export async function checkout(db: Db, arca: ArcaConfig, input: CheckoutInput) {
         ? await insertPart(undeclaredAmount, false, null)
         : null;
 
+    // Detalle de lo cobrado. Lo facturable cuelga de la factura Y del pago
+    // declarado; lo no facturable existe solo como línea del pago (recibo), que
+    // antes no se guardaba en ningún lado y dejaba el cobro sin concepto.
+    const undeclaredLineTarget = undeclaredPayment ?? (declaredAmount > 0 ? null : payment);
+    const lineFor = (i: (typeof items)[number]) => ({
+      serviceId: i.serviceId,
+      productId: i.productId,
+      quantity: i.quantity,
+      unitPrice: i.unitPrice.toFixed(2),
+      taxAmount: "0.00",
+      subtotal: (i.unitPrice * i.quantity).toFixed(2),
+      totalAmount: (i.unitPrice * i.quantity).toFixed(2),
+    });
+    await insertLineItems(tx, [
+      ...(invoice
+        ? billableItems.map((i) => ({
+            ...lineFor(i),
+            invoiceId: invoice!.id,
+            paymentId: payment.id,
+          }))
+        : []),
+      ...(undeclaredLineTarget
+        ? items
+            .filter((i) => !i.billable || !invoice)
+            .map((i) => ({ ...lineFor(i), paymentId: undeclaredLineTarget.id }))
+        : []),
+    ]);
+
     const cashMovements = [];
     if (input.payment.method === "cash" && !paidToProvider) {
       for (const p of [payment, undeclaredPayment]) {
@@ -140,7 +156,9 @@ export async function checkout(db: Db, arca: ArcaConfig, input: CheckoutInput) {
             paymentId: p.id,
             amount: p.amount,
             source: "customer_payment",
-            description: `Cobro a ${customer.name ?? "cliente"}${declared ? " (facturable)" : ""}`,
+            description: declared
+              ? `Cobro a ${customer.name ?? "cliente"} (facturable)`
+              : `Recibo a ${customer.name ?? "cliente"}`,
             isDeclared: declared,
             status: "recorded",
             registrationDate: now,

@@ -73,7 +73,7 @@ export async function generateInvoicePdf(db: Db, env: AppBindings, invoiceId: st
     customerName: invoice.customerName ?? "Consumidor Final",
     customerDni: invoice.customerDni ?? null,
     items: items.map((i) => ({
-      description: i.serviceName ?? i.productName ?? "Ítem",
+      description: i.description ?? i.serviceName ?? i.productName ?? "Ítem",
       quantity: Number(i.quantity ?? 1),
       unitPrice: Number(i.unitPrice ?? 0),
       total: Number(i.totalAmount ?? 0),

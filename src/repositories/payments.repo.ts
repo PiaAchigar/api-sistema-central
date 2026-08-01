@@ -1,7 +1,17 @@
-import { and, asc, eq, gte, inArray, isNotNull, lt, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "../db/client";
-import { appointments, contacts, customers, invoices, payments, serviceProviders } from "../db/schema";
+import {
+  appointments,
+  contacts,
+  customers,
+  invoices,
+  lineItems,
+  payments,
+  products,
+  service,
+  serviceProviders,
+} from "../db/schema";
 
 type Tx = Pick<Db, "select" | "insert" | "update">;
 
@@ -34,6 +44,7 @@ export async function listPaymentsByRange(
       notes: payments.notes,
       invoiceId: payments.invoiceId,
       invoiceNumber: invoices.invoiceNumber,
+      customerId: sql<string | null>`coalesce(${payments.customerId}, ${invoices.customerId})`,
       customerName: contacts.name,
       receivedByProviderId: payments.receivedByProviderId,
       receivedByProviderName: serviceProviders.fullName,
@@ -45,13 +56,50 @@ export async function listPaymentsByRange(
     })
     .from(payments)
     .leftJoin(invoices, eq(invoices.id, payments.invoiceId))
-    .leftJoin(customers, eq(customers.id, invoices.customerId))
+    // El cobro no declarado de una cobranza mixta no tiene factura: su cliente
+    // sale de payments.customer_id. Los pagos previos a 1.16.0 caen a la factura.
+    .leftJoin(
+      customers,
+      eq(customers.id, sql`coalesce(${payments.customerId}, ${invoices.customerId})`),
+    )
     .leftJoin(contacts, eq(contacts.id, customers.contactId))
     .leftJoin(serviceProviders, eq(serviceProviders.id, payments.receivedByProviderId))
     .leftJoin(appointments, eq(appointments.id, payments.appointmentId))
     .leftJoin(appointmentProvider, eq(appointmentProvider.id, appointments.serviceProviderId))
     .where(and(...conditions))
     .orderBy(asc(payments.paymentDate));
+}
+
+/**
+ * Qué se cobró en cada pago, para nombrarlo en la rendición de caja.
+ * Se busca por `payment_id` (línea propia del cobro) y, para los pagos previos
+ * a 1.16.0 que no lo tienen, por la factura asociada.
+ */
+export async function listItemsForPayments(
+  db: Db,
+  paymentIds: string[],
+  invoiceIds: string[],
+) {
+  if (paymentIds.length === 0 && invoiceIds.length === 0) return [];
+  const byPayment = paymentIds.length ? inArray(lineItems.paymentId, paymentIds) : undefined;
+  const byInvoice = invoiceIds.length
+    ? and(isNull(lineItems.paymentId), inArray(lineItems.invoiceId, invoiceIds))
+    : undefined;
+  const where = byPayment && byInvoice ? or(byPayment, byInvoice) : (byPayment ?? byInvoice);
+
+  return db
+    .select({
+      paymentId: lineItems.paymentId,
+      invoiceId: lineItems.invoiceId,
+      description: lineItems.description,
+      quantity: lineItems.quantity,
+      serviceName: service.name,
+      productName: products.name,
+    })
+    .from(lineItems)
+    .leftJoin(service, eq(service.id, lineItems.serviceId))
+    .leftJoin(products, eq(products.id, lineItems.productId))
+    .where(where);
 }
 
 /** Total pagado (confirmado) por turno — incluye señas y cobros parciales. */

@@ -2,7 +2,7 @@ import type { Db } from "../db/client";
 import { badRequest } from "../lib/errors";
 import { localDayRangeUtc } from "../lib/time";
 import { insertCashMovement, listCashMovementsByRange } from "../repositories/cash.repo";
-import { listPaymentsByRange } from "../repositories/payments.repo";
+import { listItemsForPayments, listPaymentsByRange } from "../repositories/payments.repo";
 
 export async function listCashMovements(db: Db, date: string) {
   return listCashMovementsByRange(db, localDayRangeUtc(date));
@@ -40,6 +40,25 @@ export async function getDailyReport(db: Db, date: string) {
     listCashMovementsByRange(db, range),
   ]);
 
+  // Qué servicios/productos se cobraron en cada pago, para nombrarlos en la
+  // rendición (incluye los NO facturados, que solo viven como línea del cobro).
+  const itemRows = await listItemsForPayments(
+    db,
+    payments.map((p) => p.id),
+    payments.map((p) => p.invoiceId).filter((id): id is string => Boolean(id)),
+  );
+  const itemsByPayment = new Map<string, string[]>();
+  for (const p of payments) {
+    const mine = itemRows.filter((r) =>
+      r.paymentId ? r.paymentId === p.id : p.invoiceId && r.invoiceId === p.invoiceId,
+    );
+    const labels = mine.map((r) => {
+      const name = r.description ?? r.serviceName ?? r.productName ?? "Ítem";
+      return (r.quantity ?? 1) > 1 ? `${name} ×${r.quantity}` : name;
+    });
+    if (labels.length) itemsByPayment.set(p.id, labels);
+  }
+
   const totalsByMethod = { cash: 0, bank_transfer: 0, mercadopago: 0 };
   let declared = 0;
   let undeclared = 0;
@@ -70,7 +89,7 @@ export async function getDailyReport(db: Db, date: string) {
   const round = (n: number) => Math.round(n * 100) / 100;
   return {
     date,
-    payments,
+    payments: payments.map((p) => ({ ...p, items: itemsByPayment.get(p.id) ?? [] })),
     cashMovements,
     totalsByMethod: {
       cash: round(totalsByMethod.cash),

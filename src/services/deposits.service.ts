@@ -91,6 +91,9 @@ export async function registerDeposit(
   await insertLineItems(tx, [
     {
       invoiceId: invoice.id,
+      description: params.serviceName
+        ? `Seña de servicio: ${params.serviceName}`
+        : "Seña de servicio",
       serviceId: params.serviceId,
       quantity: 1,
       unitPrice: deposit.amount.toFixed(2),
@@ -102,6 +105,7 @@ export async function registerDeposit(
 
   const payment = await insertPayment(tx, {
     invoiceId: invoice.id,
+    customerId: params.customerId,
     appointmentId: params.appointmentId,
     amount: deposit.amount.toFixed(2),
     paymentMethod: deposit.method,
