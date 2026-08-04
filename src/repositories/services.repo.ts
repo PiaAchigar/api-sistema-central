@@ -28,6 +28,9 @@ const serviceSummary = {
   isFeatured: service.isFeatured,
   isVisible: service.isVisible,
   webSortOrder: service.webSortOrder,
+  benefits: service.benefits,
+  contraindications: service.contraindications,
+  specialAttentionNotes: service.specialAttentionNotes,
 };
 
 export async function listServices(
@@ -174,6 +177,9 @@ type ServiceWritable = {
   isVisible?: boolean | null;
   isFeatured?: boolean | null;
   webSortOrder?: number | null;
+  benefits?: string | null;
+  contraindications?: string | null;
+  specialAttentionNotes?: string | null;
 };
 
 /** Construye el `set` parcial; convierte decimales a string (lo que espera drizzle). */
@@ -199,6 +205,9 @@ function toServiceSet(p: ServiceWritable) {
     ...(p.isFeatured !== undefined && { isFeatured: p.isFeatured }),
     // web_sort_order es NOT NULL DEFAULT 0 en la base; null explícito rompe el insert/update.
     ...(p.webSortOrder !== undefined && { webSortOrder: p.webSortOrder ?? 0 }),
+    ...(p.benefits !== undefined && { benefits: p.benefits }),
+    ...(p.contraindications !== undefined && { contraindications: p.contraindications }),
+    ...(p.specialAttentionNotes !== undefined && { specialAttentionNotes: p.specialAttentionNotes }),
   };
 }
 

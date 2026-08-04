@@ -148,6 +148,10 @@ const serviceBody = z.object({
   webSortOrder: z.number().int().min(0).nullish(),
   /** Máquina principal del servicio (gestiona service_machine). null = quitar. */
   machineId: z.string().uuid().nullish(),
+  /** Contenido RAG: beneficios, contraindicaciones e instrucciones especiales */
+  benefits: z.string().max(2000).nullish(),
+  contraindications: z.string().max(2000).nullish(),
+  specialAttentionNotes: z.string().max(2000).nullish(),
 });
 
 /** Serializa decimales (string en DB) a number para el cliente. */

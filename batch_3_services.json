@@ -1,0 +1,182 @@
+[
+  {
+    "service_name": "Cavado y Axila / Bozo / Tira de cola",
+    "source_file": "depi_definitiva.md",
+    "match_score": 1,
+    "benefits": "Eliminación del 85-95% del vello en zonas íntimas. Mejora la calidad de la piel y contrarrestaba foliculitis.",
+    "contraindications": "Evitar sol 48 horas antes y después. No usar métodos de arranque durante tratamiento.",
+    "special_attention_notes": "Se recomienda 9-16 sesiones según zona íntima y paciente. Concurrir depilado con máquina. Sin crema.",
+    "id": "21e68820-849e-4044-a675-7dddc2e67a54"
+  },
+  {
+    "service_name": "Cavado, Axila, Abdomen o Rostro completo",
+    "source_file": "depi_definitiva.md",
+    "match_score": 1,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "c81281f3-922d-4356-afb5-df19ec7af27e"
+  },
+  {
+    "service_name": "Combo Cuerpo Full + 1 zona a elección (cod 438)",
+    "source_file": "depi_definitiva.md",
+    "match_score": 0.8571428571428571,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "094fe727-ccb4-4f88-8c28-463f7e1c09ed"
+  },
+  {
+    "service_name": "Combo Cuerpo Full + Rostro Mujer (sesión suelta promo)",
+    "source_file": "depi_definitiva.md",
+    "match_score": 0.75,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "a0bef46d-bcd5-44ff-9648-ec745ad57b38"
+  },
+  {
+    "service_name": "Combo Total Cuerpo + Rostro Completo (cod 575)",
+    "source_file": "depi_definitiva.md",
+    "match_score": 0.8571428571428571,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "193c0951-a913-4dd9-a72b-445ed1371da9"
+  },
+  {
+    "service_name": "Consulta de Cosmetología",
+    "source_file": "FAQ_alias_mp.md",
+    "match_score": 1,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "3e83a80d-ca98-45b3-8f2a-d9bd9fda8e01"
+  },
+  {
+    "service_name": "Consulta Dermatológica",
+    "source_file": "dermatologia.md",
+    "match_score": 1,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "10b1d47c-2f44-4c14-a110-8281a0facac8"
+  },
+  {
+    "service_name": "Crio-Radiofrecuencia - 1 zona",
+    "source_file": "FAQ_alias_mp.md",
+    "match_score": 1,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "c79ef812-da4c-4291-b6b9-057f2163d77d"
+  },
+  {
+    "service_name": "Crio-Radiofrecuencia - 2 zonas",
+    "source_file": "FAQ_alias_mp.md",
+    "match_score": 1,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "c6f99f00-2fb7-4467-bd0c-54d960d05edc"
+  },
+  {
+    "service_name": "Crio-Radiofrecuencia - Combo Zona Inferior",
+    "source_file": "estetica_corporal.md",
+    "match_score": 1,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "176eb6b7-8e40-4f3c-a95b-a720dfd5eb50"
+  },
+  {
+    "service_name": "Crio-Radiofrecuencia - Combo Zona Superior / Piernas completas",
+    "source_file": "estetica_corporal.md",
+    "match_score": 1,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "a5088542-812d-48ed-b575-7bf3081d4de0"
+  },
+  {
+    "service_name": "Criolipólisis - 1 zona",
+    "source_file": "estetica_corporal.md",
+    "match_score": 1,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "5ec3cf35-4e66-40d5-a237-c702ce424242"
+  },
+  {
+    "service_name": "Criolipólisis - 2 zonas",
+    "source_file": "estetica_corporal.md",
+    "match_score": 1,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "33bf0d09-344c-4131-a535-d1b74f81f0bd"
+  },
+  {
+    "service_name": "Criolipólisis - 3 zonas",
+    "source_file": "estetica_corporal.md",
+    "match_score": 1,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "decac1ab-fea2-432d-a2cc-444a7868b385"
+  },
+  {
+    "service_name": "Cuerpo Completo Hombre (cod 317)",
+    "source_file": "depi_definitiva.md",
+    "match_score": 0.8,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "34265fca-53f0-4dfe-a44a-594ca54e36d3"
+  },
+  {
+    "service_name": "Cuerpo Full + Rostro + Glúteos + 1 zona (cod 626)",
+    "source_file": "depi_definitiva.md",
+    "match_score": 0.8571428571428571,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "7182aa6f-9615-4ea1-9c1d-dd08175a081d"
+  },
+  {
+    "service_name": "Cuerpo Full Hombre (Promo más pedida)",
+    "source_file": "depi_definitiva.md",
+    "match_score": 0.8,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "1bc22c46-599e-49ce-8f8e-d23c9f4bb82c"
+  },
+  {
+    "service_name": "Decoración de uñas a mano alzada x2 (extra)",
+    "source_file": "manos_pies.md",
+    "match_score": 0.6,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "0f5eddef-4429-46c0-803e-4f1f4abb71c8"
+  },
+  {
+    "service_name": "Depilación facial con hilo",
+    "source_file": "FAQ_alias_mp.md",
+    "match_score": 1,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "1af2581f-662b-4a36-81de-baa02f915964"
+  },
+  {
+    "service_name": "Depilación facial con hilo - solo bozo",
+    "source_file": "ceja_pestanias.md",
+    "match_score": 1,
+    "benefits": null,
+    "contraindications": null,
+    "special_attention_notes": null,
+    "id": "1af8b8ee-135e-4db2-8025-22fe93c7ec4d"
+  }
+]
