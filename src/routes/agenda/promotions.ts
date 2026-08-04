@@ -6,6 +6,7 @@ import { notFound } from "../../lib/errors";
 import { auth, requireAuth, requirePermission } from "../../middleware/auth";
 import {
   createPromotion,
+  deletePromotionPermanently,
   listActivePromotions,
   listPromotions,
   setPromotionStatus,
@@ -122,6 +123,13 @@ promotionsRouter.post("/admin/:id/restore", auth, requireAuth, requirePermission
   const restored = await setPromotionStatus(db, c.req.param("id"), "active");
   if (!restored) throw notFound("Promotion");
   return c.json(serialize(restored));
+});
+
+promotionsRouter.delete("/admin/:id/delete", auth, requireAuth, requirePermission("catalogo", "manage"), async (c) => {
+  const db = createDb(c.env);
+  const deleted = await deletePromotionPermanently(db, c.req.param("id"));
+  if (!deleted) throw notFound("Promotion");
+  return c.json({ ok: true });
 });
 
 export { promotionsRouter };

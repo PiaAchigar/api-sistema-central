@@ -24,3 +24,4 @@ worker-configuration.d.ts
 pnpm-lock.yaml
 .dev.vars
 docker-compose.yml
+/scripts/*

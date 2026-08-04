@@ -262,3 +262,9 @@ export async function setPromotionStatus(db: Db, id: string, status: "active" | 
   if (rows.length === 0) return null;
   return getPromotionById(db, id);
 }
+
+export async function deletePromotionPermanently(db: Db, id: string) {
+  await db.delete(promotionService).where(eq(promotionService.promotionId, id));
+  const result = await db.delete(promotions).where(eq(promotions.id, id)).returning({ id: promotions.id });
+  return result.length > 0;
+}
