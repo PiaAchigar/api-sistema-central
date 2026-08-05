@@ -44,23 +44,23 @@ export class TrainingSubscriptionsRepository {
     notes?: string | null;
   }) {
     const db = this.getDb();
-    const now = new Date().toISOString();
+    const now = new Date();
     const rows = await db
       .insert(trainingSubscriptions)
       .values({
         id: crypto.randomUUID(),
         activityId: data.activityId,
         customerId: data.customerId,
-        subscriptionStartDate: data.subscriptionStartDate as any,
-        subscriptionEndDate: (data.subscriptionEndDate || null) as any,
+        subscriptionStartDate: data.subscriptionStartDate,
+        subscriptionEndDate: data.subscriptionEndDate || null,
         status: data.status,
         monthlyAmount:
           typeof data.monthlyAmount === "string"
             ? data.monthlyAmount
             : String(data.monthlyAmount),
         notes: data.notes || null,
-        createdAt: now as any,
-        updatedAt: now as any,
+        createdAt: now,
+        updatedAt: now,
       })
       .returning();
 
@@ -150,9 +150,9 @@ export class TrainingSubscriptionsRepository {
   ) {
     const db = this.getDb();
 
-    // Build date range for the month
-    const startDate = new Date(year, month - 1, 1).toISOString().split("T")[0];
-    const endDate = new Date(year, month, 0).toISOString().split("T")[0];
+    // Build date range for the month as YYYY-MM-DD strings (UTC)
+    const startDateStr = `${year}-${String(month).padStart(2, '0')}-01`;
+    const endDateStr = `${year}-${String(month).padStart(2, '0')}-${String(new Date(Date.UTC(year, month, 0)).getUTCDate()).padStart(2, '0')}`;
 
     return db
       .select()
@@ -160,8 +160,8 @@ export class TrainingSubscriptionsRepository {
       .where(
         and(
           eq(activityAttendance.subscriptionId, subscriptionId),
-          gte(activityAttendance.classDate, startDate as any),
-          lte(activityAttendance.classDate, endDate as any)
+          gte(activityAttendance.classDate, startDateStr),
+          lte(activityAttendance.classDate, endDateStr)
         )
       );
   }

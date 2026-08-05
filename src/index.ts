@@ -8,15 +8,31 @@ import { createDb } from "./db/client";
 import { recalculateEmbeddings, recalculateEmbeddingsWorker } from "./workers/embedding-calculator";
 import { processMessageQueue } from "./workers/queue-processor";
 import { cleanupOldBuckets } from "./services/rate-limiter.service";
+import { trainingSubscriptionsRepository } from "./repositories/trainingSubscriptionsRepository";
+import { activitiesRepository } from "./repositories/activitiesRepository";
+import { activitySchedulesRepository } from "./repositories/activitySchedulesRepository";
+import { trainingSubscriptionsService } from "./services/trainingSubscriptionsService";
 import type { AppBindings, Variables } from "./env";
 
-// Patrón cron de queue-processor.ts (Task 2 — procesa message_queue). Vive acá
+// Паттерн cron de queue-processor.ts (Task 2 — procesa message_queue). Vive acá
 // como constante porque `scheduled()` necesita comparar `event.cron` contra
 // este mismo string para decidir qué handler correr — ver wrangler.toml
 // ([triggers] crons) donde se registra el trigger real.
 const MESSAGE_QUEUE_CRON = "* * * * *";
 
 const app = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
+
+// Middleware: Inject database once at app startup for singleton repositories and services
+// This runs on the first request and caches the database connection per app instance
+app.use("*", async (c, next) => {
+  const db = createDb(c.env);
+  // Inject db into singleton repositories (idempotent — safe to call multiple times)
+  trainingSubscriptionsRepository.setDb(db);
+  activitiesRepository.setDb(db);
+  activitySchedulesRepository.setDb(db);
+  trainingSubscriptionsService.setDb(db);
+  await next();
+});
 
 app.use("*", requestLogger);
 app.use(

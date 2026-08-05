@@ -3,9 +3,6 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { AppError } from "../lib/errors";
 import { trainingSubscriptionsService } from "../services/trainingSubscriptionsService";
-import { trainingSubscriptionsRepository } from "../repositories/trainingSubscriptionsRepository";
-import { activitiesRepository } from "../repositories/activitiesRepository";
-import { createDb } from "../db/client";
 import type { AppBindings, Variables } from "../env";
 
 const trainingSubscriptionsRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
@@ -16,10 +13,6 @@ const trainingSubscriptionsRouter = new Hono<{ Bindings: AppBindings; Variables:
  */
 trainingSubscriptionsRouter.get("/training-subscriptions", async (c) => {
   try {
-    const db = createDb(c.env);
-    trainingSubscriptionsRepository.setDb(db);
-    activitiesRepository.setDb(db);
-
     const customerId = c.req.query("customerId");
     if (!customerId) {
       return c.json(
@@ -56,10 +49,6 @@ trainingSubscriptionsRouter.get("/training-subscriptions", async (c) => {
  */
 trainingSubscriptionsRouter.get("/training-subscriptions/:id", async (c) => {
   try {
-    const db = createDb(c.env);
-    trainingSubscriptionsRepository.setDb(db);
-    activitiesRepository.setDb(db);
-
     const id = c.req.param("id");
     const subscription = await trainingSubscriptionsService.getSubscription(id);
     return c.json({
@@ -116,10 +105,6 @@ trainingSubscriptionsRouter.post(
   ),
   async (c) => {
     try {
-      const db = createDb(c.env);
-      trainingSubscriptionsRepository.setDb(db);
-      activitiesRepository.setDb(db);
-
       const body = c.req.valid("json");
       const created = await trainingSubscriptionsService.createSubscription({
         activityId: body.activityId,
@@ -180,10 +165,6 @@ trainingSubscriptionsRouter.patch(
   ),
   async (c) => {
     try {
-      const db = createDb(c.env);
-      trainingSubscriptionsRepository.setDb(db);
-      activitiesRepository.setDb(db);
-
       const id = c.req.param("id");
       const body = c.req.valid("json");
       const updated = await trainingSubscriptionsService.updateSubscription(id, body);
@@ -216,10 +197,6 @@ trainingSubscriptionsRouter.patch(
  */
 trainingSubscriptionsRouter.get("/training-subscriptions/:id/attendance", async (c) => {
   try {
-    const db = createDb(c.env);
-    trainingSubscriptionsRepository.setDb(db);
-    activitiesRepository.setDb(db);
-
     const id = c.req.param("id");
     const yearParam = c.req.query("year");
     const monthParam = c.req.query("month");

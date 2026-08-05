@@ -1,5 +1,8 @@
 import { notFound, badRequest } from "../lib/errors";
 import { activitiesService } from "./activitiesService";
+import { eq } from "drizzle-orm";
+import { customers } from "../db/schema/crm";
+import type { Db } from "../db/client";
 import type { TrainingSubscriptionsRepository } from "../repositories/trainingSubscriptionsRepository";
 
 /**
@@ -8,7 +11,54 @@ import type { TrainingSubscriptionsRepository } from "../repositories/trainingSu
  * Singleton with repository dependency injection
  */
 export class TrainingSubscriptionsService {
+  private db: Db | null = null;
+
   constructor(private repository: TrainingSubscriptionsRepository) {}
+
+  /**
+   * Inject database connection (called once at app startup)
+   */
+  setDb(db: Db): void {
+    this.db = db;
+  }
+
+  /**
+   * Ensure db is available for customer validation
+   */
+  private getDb(): Db {
+    if (!this.db) {
+      throw new Error(
+        "TrainingSubscriptionsService db not initialized. Call trainingSubscriptionsService.setDb(db) at app startup."
+      );
+    }
+    return this.db;
+  }
+
+  /**
+   * Validate that a customer exists
+   * @param customerId Customer ID to validate
+   * @throws notFound if customer doesn't exist
+   */
+  private async validateCustomerExists(customerId: string): Promise<void> {
+    try {
+      const db = this.getDb();
+      const customer = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, customerId))
+        .limit(1);
+
+      if (!customer || customer.length === 0) {
+        throw notFound("Customer not found");
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("not found")) {
+        throw err;
+      }
+      // If db error, log but don't fail — customer validation is best-effort
+      console.warn("[customer-validation] Could not validate customer:", customerId);
+    }
+  }
 
   /**
    * Validate subscription dates
@@ -56,6 +106,9 @@ export class TrainingSubscriptionsService {
   }) {
     // Validate dates
     this.validateDates(data.subscriptionStartDate, data.subscriptionEndDate);
+
+    // Validate customer exists
+    await this.validateCustomerExists(data.customerId);
 
     // Validate activity exists
     try {
@@ -137,11 +190,26 @@ export class TrainingSubscriptionsService {
     }
 
     // Validate dates if subscriptionEndDate is being updated
-    if (data.subscriptionEndDate !== undefined) {
-      this.validateDates(
-        existing.subscriptionStartDate as any,
-        data.subscriptionEndDate
-      );
+    if (data.subscriptionEndDate !== undefined && existing.subscriptionStartDate) {
+      // Convert to YYYY-MM-DD string for validation
+      const startDate = existing.subscriptionStartDate;
+
+      // Handle both Date objects and strings
+      let existingStartDateStr: string = '';
+      if (typeof startDate === 'string') {
+        existingStartDateStr = startDate;
+      } else if (startDate && typeof startDate === 'object' && 'toISOString' in (startDate as any)) {
+        existingStartDateStr = ((startDate as any).toISOString() as string).split('T')[0] || '';
+      } else if (startDate) {
+        existingStartDateStr = String(startDate);
+      }
+
+      if (existingStartDateStr) {
+        this.validateDates(
+          existingStartDateStr,
+          data.subscriptionEndDate
+        );
+      }
     }
 
     // Validate monthlyAmount if being updated
@@ -205,11 +273,12 @@ export class TrainingSubscriptionsService {
     const attended = attendance.filter((a) => a.attended).length;
     const total = attendance.length;
 
-    // Format month name
-    const monthDate = new Date(year, month - 1, 1);
+    // Format month name using UTC to avoid timezone shifts
+    const monthDate = new Date(Date.UTC(year, month - 1, 1));
     const monthName = monthDate.toLocaleDateString("es-AR", {
       month: "long",
       year: "numeric",
+      timeZone: "UTC",
     });
 
     return {
