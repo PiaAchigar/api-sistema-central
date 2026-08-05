@@ -56,6 +56,9 @@ export const service = pgTable("service", {
   isFeatured: boolean("is_featured"),
   webImageR2Path: varchar("web_image_r2_path", { length: 500 }),
   webSortOrder: integer("web_sort_order"),
+  benefits: text("benefits"),
+  contraindications: text("contraindications"),
+  specialAttentionNotes: text("special_attention_notes"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
