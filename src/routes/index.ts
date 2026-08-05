@@ -8,6 +8,7 @@ import { usersRouter } from "./users";
 import { treatments } from "./treatments";
 import { activitiesRouter } from "./activities";
 import { activitySchedulesRouter } from "./activitySchedules";
+import { trainingSubscriptionsRouter } from "./trainingSubscriptions";
 import { auth } from "../middleware/auth";
 import type { AppBindings, Variables } from "../env";
 
@@ -24,6 +25,7 @@ api.route("/ai-config", aiConfigRouter);
 api.route("/treatments", treatments);
 api.route("/", activitiesRouter);
 api.route("/", activitySchedulesRouter);
+api.route("/", trainingSubscriptionsRouter);
 
 export { api };
 export type ApiType = typeof api;
