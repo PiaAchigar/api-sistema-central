@@ -44,7 +44,7 @@ export class TrainingSubscriptionsRepository {
     notes?: string | null;
   }) {
     const db = this.getDb();
-    const now = new Date();
+    const now = new Date().toISOString();
     const rows = await db
       .insert(trainingSubscriptions)
       .values({
@@ -59,8 +59,8 @@ export class TrainingSubscriptionsRepository {
             ? data.monthlyAmount
             : String(data.monthlyAmount),
         notes: data.notes || null,
-        createdAt: now,
-        updatedAt: now,
+        createdAt: now as any,
+        updatedAt: now as any,
       })
       .returning();
 
