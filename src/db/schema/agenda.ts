@@ -248,6 +248,7 @@ export const appointments = pgTable("appointments", {
   machineId: uuid("machine_id"),
   serviceId: uuid("service_id"),
   dealId: uuid("deal_id"),
+  activityId: uuid("activity_id"), // For activity-based bookings (Pilates, Thermo Bike)
   appointmentStart: timestamp("appointment_start"),
   appointmentEnd: timestamp("appointment_end"),
   durationMinutes: integer("duration_minutes"),
@@ -305,10 +306,11 @@ export const promotionService = pgTable("promotion_service", {
   createdAt: createdAt(),
 });
 
-// Suscripciones mensuales a actividades (trainings) — Migración 1.20.0
+// Suscripciones mensuales a actividades — Migración 1.20.0 + corrección 1.21.2
+// Referencia a ACTIVITIES (clases para clientes finales), no a TRAINING (capacitaciones profesionales)
 export const trainingSubscriptions = pgTable("training_subscriptions", {
   id: id(),
-  trainingId: uuid("training_id"),
+  activityId: uuid("activity_id"),
   customerId: uuid("customer_id"),
   subscriptionStartDate: date("subscription_start_date"),
   subscriptionEndDate: date("subscription_end_date"),
@@ -334,6 +336,50 @@ export const subscriptionBillingCycles = pgTable("subscription_billing_cycles", 
   paymentReminderSentAt: timestamp("payment_reminder_sent_at"),
   invoiceLineItemId: uuid("invoice_line_item_id"),
   notes: text("notes"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+// Actividades recurrentes ofrecidas a clientes finales — Migración 1.21.0
+// Diferenciadas de TRAINING (capacitaciones profesionales)
+// activity_type: 'class' (Pilates) o 'machine' (Thermo Bike)
+export const activities = pgTable("activities", {
+  id: id(),
+  name: varchar("name", { length: 255 }),
+  description: text("description"),
+  activityType: varchar("activity_type", { length: 50 }), // 'class' | 'machine'
+  serviceProviderId: uuid("service_provider_id"), // Nullable for machine-based
+  classesPerMonth: integer("classes_per_month").default(0), // Hard limit; 0 for machines
+  monthlyBasePrice: decimal("monthly_base_price", { precision: 10, scale: 2 }),
+  isActive: boolean("is_active").default(true),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+// Horarios disponibles para actividades — Migración 1.21.0
+// Soporta schedules recurrentes semanales con asignación opcional de máquina
+export const activitySchedules = pgTable("activity_schedules", {
+  id: id(),
+  activityId: uuid("activity_id"),
+  machineId: uuid("machine_id"), // Nullable; solo para machine-based activities
+  dayOfWeek: integer("day_of_week"), // 0=Domingo, ..., 6=Sábado
+  startTime: time("start_time"),
+  endTime: time("end_time"),
+  validFrom: date("valid_from"),
+  validUntil: date("valid_until"),
+  isActive: boolean("is_active").default(true),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+// Asistencia a clases — Migración 1.21.0
+// Registra cuáles clases asistió el cliente y decrementa cuota mensual
+export const activityAttendance = pgTable("activity_attendance", {
+  id: id(),
+  subscriptionId: uuid("subscription_id"),
+  activityId: uuid("activity_id"),
+  classDate: date("class_date"),
+  attended: boolean("attended").default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
