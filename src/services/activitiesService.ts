@@ -1,17 +1,13 @@
 import { notFound, badRequest } from "../lib/errors";
-import type { Db } from "../db/client";
-import { ActivitiesRepository } from "../repositories/activitiesRepository";
+import type { ActivitiesRepository } from "../repositories/activitiesRepository";
 
 /**
  * ActivitiesService — Business logic layer for activities
  * Validates business rules and delegates to repository
+ * Singleton with repository dependency injection
  */
 export class ActivitiesService {
-  private repository: ActivitiesRepository;
-
-  constructor(private db: Db) {
-    this.repository = new ActivitiesRepository(db);
-  }
+  constructor(private repository: ActivitiesRepository) {}
 
   /**
    * Validate activity_type constraints
@@ -69,7 +65,7 @@ export class ActivitiesService {
     // Create via repository
     const created = await this.repository.create(data);
     if (!created) {
-      throw new Error("Failed to create activity");
+      throw badRequest("Failed to create activity");
     }
 
     return created;
@@ -176,9 +172,10 @@ export class ActivitiesService {
 }
 
 /**
- * Factory function to create an ActivitiesService instance
- * Usage: const service = createActivitiesService(db)
+ * Singleton instance of ActivitiesService
+ * Initialized with the activitiesRepository singleton
+ * Usage: activitiesService.createActivity(...) after app startup
  */
-export function createActivitiesService(db: Db): ActivitiesService {
-  return new ActivitiesService(db);
-}
+import { activitiesRepository } from "../repositories/activitiesRepository";
+
+export const activitiesService = new ActivitiesService(activitiesRepository);

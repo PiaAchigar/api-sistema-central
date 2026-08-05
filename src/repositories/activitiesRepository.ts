@@ -5,9 +5,29 @@ import { activities } from "../db/schema/agenda";
 /**
  * ActivitiesRepository — Data access layer for activities
  * Handles CRUD operations on the activities table
+ * Singleton with optional db injection via setDb(db)
  */
 export class ActivitiesRepository {
-  constructor(private db: Db) {}
+  private db: Db | null = null;
+
+  /**
+   * Inject database connection (called once at app startup)
+   */
+  setDb(db: Db): void {
+    this.db = db;
+  }
+
+  /**
+   * Ensure db is available
+   */
+  private getDb(): Db {
+    if (!this.db) {
+      throw new Error(
+        "ActivitiesRepository db not initialized. Call activitiesRepository.setDb(db) at app startup."
+      );
+    }
+    return this.db;
+  }
 
   /**
    * Create a new activity
@@ -22,7 +42,9 @@ export class ActivitiesRepository {
     classesPerMonth: number;
     monthlyBasePrice: number | string;
   }) {
-    const rows = await this.db
+    const db = this.getDb();
+    const now = new Date().toISOString();
+    const rows = await db
       .insert(activities)
       .values({
         id: crypto.randomUUID(),
@@ -36,8 +58,8 @@ export class ActivitiesRepository {
             ? data.monthlyBasePrice
             : String(data.monthlyBasePrice),
         isActive: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        createdAt: now as any,
+        updatedAt: now as any,
       })
       .returning();
 
@@ -50,7 +72,8 @@ export class ActivitiesRepository {
    * @returns Activity record or null if not found
    */
   async getById(id: string) {
-    const rows = await this.db
+    const db = this.getDb();
+    const rows = await db
       .select()
       .from(activities)
       .where(eq(activities.id, id))
@@ -64,7 +87,8 @@ export class ActivitiesRepository {
    * @returns Array of active activities
    */
   async listActive() {
-    return this.db
+    const db = this.getDb();
+    return db
       .select()
       .from(activities)
       .where(eq(activities.isActive, true));
@@ -75,7 +99,8 @@ export class ActivitiesRepository {
    * @returns Array of all activities
    */
   async listAll() {
-    return this.db.select().from(activities);
+    const db = this.getDb();
+    return db.select().from(activities);
   }
 
   /**
@@ -95,6 +120,7 @@ export class ActivitiesRepository {
       monthlyBasePrice?: number | string;
     }
   ) {
+    const db = this.getDb();
     const updateData: Record<string, unknown> = {};
 
     if (data.name !== undefined) updateData.name = data.name;
@@ -110,9 +136,9 @@ export class ActivitiesRepository {
           ? data.monthlyBasePrice
           : String(data.monthlyBasePrice);
     }
-    updateData.updatedAt = new Date();
+    updateData.updatedAt = new Date().toISOString();
 
-    const rows = await this.db
+    const rows = await db
       .update(activities)
       .set(updateData)
       .where(eq(activities.id, id))
@@ -127,9 +153,10 @@ export class ActivitiesRepository {
    * @returns Updated activity record or null if not found
    */
   async softDelete(id: string) {
-    const rows = await this.db
+    const db = this.getDb();
+    const rows = await db
       .update(activities)
-      .set({ isActive: false, updatedAt: new Date() })
+      .set({ isActive: false, updatedAt: new Date().toISOString() as any })
       .where(eq(activities.id, id))
       .returning();
 
@@ -138,9 +165,8 @@ export class ActivitiesRepository {
 }
 
 /**
- * Factory function to create an ActivitiesRepository instance
- * Usage: const repo = createActivitiesRepository(db)
+ * Singleton instance of ActivitiesRepository
+ * Call activitiesRepository.setDb(db) at app startup to inject the database connection
+ * Usage: activitiesRepository.getById(...) after db is set
  */
-export function createActivitiesRepository(db: Db): ActivitiesRepository {
-  return new ActivitiesRepository(db);
-}
+export const activitiesRepository = new ActivitiesRepository();
