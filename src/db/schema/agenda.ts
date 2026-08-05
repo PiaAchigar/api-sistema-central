@@ -304,3 +304,36 @@ export const promotionService = pgTable("promotion_service", {
   notes: text("notes"),
   createdAt: createdAt(),
 });
+
+// Suscripciones mensuales a actividades (trainings) — Migración 1.20.0
+export const trainingSubscriptions = pgTable("training_subscriptions", {
+  id: id(),
+  trainingId: uuid("training_id"),
+  customerId: uuid("customer_id"),
+  subscriptionStartDate: date("subscription_start_date"),
+  subscriptionEndDate: date("subscription_end_date"),
+  status: varchar("status", { length: 20 }), // active, paused, cancelled
+  monthlyAmount: decimal("monthly_amount", { precision: 10, scale: 2 }),
+  notes: text("notes"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+// Historial de pagos mensuales — Auditoría de suscripciones
+export const subscriptionBillingCycles = pgTable("subscription_billing_cycles", {
+  id: id(),
+  subscriptionId: uuid("subscription_id"),
+  billingMonth: varchar("billing_month", { length: 7 }), // YYYY-MM
+  billingPeriodStart: date("billing_period_start"),
+  billingPeriodEnd: date("billing_period_end"),
+  isPaid: boolean("is_paid").default(false),
+  paymentDate: timestamp("payment_date"),
+  paymentMethod: varchar("payment_method", { length: 50 }),
+  amountPaid: decimal("amount_paid", { precision: 10, scale: 2 }),
+  isOverdue: boolean("is_overdue").default(false),
+  paymentReminderSentAt: timestamp("payment_reminder_sent_at"),
+  invoiceLineItemId: uuid("invoice_line_item_id"),
+  notes: text("notes"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
