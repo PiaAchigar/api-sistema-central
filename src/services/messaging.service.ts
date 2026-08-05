@@ -1,16 +1,16 @@
 // api-sistema-central/src/services/messaging.service.ts
 import type { Db } from "../db/client";
 import type { AppBindings } from "../env";
-import { getChannelByType } from "../repositories/channels.repo";
 import { addAgentMessage, getConversationCore } from "../repositories/conversations.repo";
-import { getContactById } from "../repositories/contacts.repo";
-import { decrypt } from "./crypto.service";
-import { sendWhatsAppText } from "./whatsapp.service";
+import { retryableWhatsAppSend } from "./whatsapp-retry.service";
 
 /** Persiste la respuesta del agente/motor (igual que antes) y, si el canal de
- *  la conversación es whatsapp, además la manda de verdad por el Graph API.
+ *  la conversación es whatsapp, además la manda de verdad por el Graph API
+ *  con reintentos (Task 1 — confiabilidad WhatsApp: 3 intentos, backoff
+ *  1s/5s/30s, solo errores temporales — ver whatsapp-retry.service).
  *  Best-effort: un fallo del envío real (token vencido, número no registrado,
- *  etc.) NO revierte el mensaje ya guardado ni se relanza — se loguea nomás. */
+ *  etc.) NO revierte el mensaje ya guardado ni se relanza — queda auditado en
+ *  delivery_logs y, si se agotan los 3 intentos, dispara una alerta. */
 export async function sendAgentReply(
   db: Db,
   env: AppBindings,
@@ -19,21 +19,22 @@ export async function sendAgentReply(
 ) {
   const message = await addAgentMessage(db, conversationId, text);
   const conversation = await getConversationCore(db, conversationId);
-  if (!conversation || conversation.channel !== "whatsapp") return message;
+  if (!conversation || conversation.channel !== "whatsapp" || !conversation.contactId) {
+    return message;
+  }
 
   try {
-    const contact = conversation.contactId
-      ? await getContactById(db, conversation.contactId)
-      : null;
-    const channel = await getChannelByType(db, "whatsapp");
-    if (!contact?.whatsappId || !channel?.encryptedCredentials) return message;
-    const credsJson = await decrypt(channel.encryptedCredentials, env.CREDENTIALS_ENCRYPTION_KEY);
-    const creds = JSON.parse(credsJson) as { accessToken: string; phoneNumberId: string };
-    await sendWhatsAppText(
-      { accessToken: creds.accessToken, phoneNumberId: creds.phoneNumberId },
-      contact.whatsappId,
+    const result = await retryableWhatsAppSend(
+      db,
+      env,
+      conversation.contactId,
+      conversationId,
       text,
+      message.id,
     );
+    if (!result.success) {
+      console.error("[whatsapp] envío real falló tras reintentos (best-effort)", result.error);
+    }
   } catch (err) {
     console.error("[whatsapp] envío real falló (best-effort)", err);
   }

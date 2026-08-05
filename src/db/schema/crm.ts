@@ -206,3 +206,25 @@ export const automationFaqs = pgTable("automation_faqs", {
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
+
+// Migración 1.21.0 (whatsapp-reliability.sql). Auditoría de cada intento de
+// envío de WhatsApp (éxito/fallo/reintento) — la usa whatsapp-retry.service
+// para loguear cada intento del backoff exponencial (1s/5s/30s, máx 3). Se
+// limpia semanalmente (7+ días) vía pg_cron en Supabase.
+// El CHECK real de `status` vive en la migración SQL, no acá: drizzle-orm
+// pg-core no expone un builder `.check()` en esta versión (0.36.4) — mismo
+// patrón que el resto de columnas "enum-string" del archivo (ver `status` en
+// deals/conversations/messages, todas varchar + comentario).
+export const deliveryLogs = pgTable("delivery_logs", {
+  id: id(),
+  messageId: uuid("message_id"),
+  conversationId: uuid("conversation_id").notNull(),
+  contactId: uuid("contact_id"),
+  channel: varchar("channel", { length: 20 }).notNull().default("whatsapp"),
+  status: varchar("status", { length: 20 }).notNull(), // success | failed | retry
+  metaErrorCode: integer("meta_error_code"),
+  metaErrorMessage: text("meta_error_message"),
+  retryAttempt: integer("retry_attempt").notNull().default(1),
+  httpStatusCode: integer("http_status_code"),
+  createdAt: createdAt(),
+});
