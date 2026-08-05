@@ -83,7 +83,21 @@ activitiesRouter.post(
       serviceProviderId: z.string().uuid().nullable().optional(),
       classesPerMonth: z.number().int().min(0),
       monthlyBasePrice: z.union([z.number(), z.string()]),
-    })
+    }).refine(
+      (data) => {
+        if (data.activityType === "class") {
+          return data.serviceProviderId != null && data.classesPerMonth > 0;
+        }
+        if (data.activityType === "machine") {
+          return data.classesPerMonth === 0;
+        }
+        return true;
+      },
+      {
+        message: "Invalid activity type constraints: class requires service_provider_id and classes_per_month > 0; machine requires classes_per_month = 0",
+        path: ["activityType"],
+      }
+    )
   ),
   async (c) => {
     try {
