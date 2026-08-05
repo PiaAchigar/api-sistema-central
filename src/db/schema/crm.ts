@@ -228,3 +228,26 @@ export const deliveryLogs = pgTable("delivery_logs", {
   httpStatusCode: integer("http_status_code"),
   createdAt: createdAt(),
 });
+
+// Migración 1.21.0 (whatsapp-reliability.sql, misma migración que
+// delivery_logs arriba). Cola interna de mensajes pendientes de enviar por
+// WhatsApp — la usan las automatizaciones masivas (ofertas, recordatorios a
+// muchos contactos) para no bloquear el request que las dispara: insertan acá
+// (rápido) y el worker background (queue-processor.ts) procesa la cola cada
+// corrida de cron, máx 10 mensajes por vez, para respetar el rate limit de
+// automatizaciones (10 msgs/min). Igual que deliveryLogs, el CHECK real de
+// `sender_type`/`status` vive en la migración SQL: drizzle-orm 0.36.4 no
+// expone un builder `.check()` en pg-core.
+export const messageQueue = pgTable("message_queue", {
+  id: id(),
+  conversationId: uuid("conversation_id").notNull(),
+  content: text("content").notNull(),
+  senderType: varchar("sender_type", { length: 20 }).notNull(), // agent | system
+  status: varchar("status", { length: 20 }).notNull().default("pending"), // pending | sent | failed | cancelled
+  retryCount: integer("retry_count").notNull().default(0),
+  lastError: text("last_error"),
+  externalMessageId: varchar("external_message_id", { length: 255 }),
+  createdAt: createdAt(),
+  processedAt: timestamp("processed_at"),
+  scheduledFor: timestamp("scheduled_for"),
+});

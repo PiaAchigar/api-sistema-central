@@ -6,7 +6,14 @@ import { whatsappWebhookRouter } from "./routes/webhooks/whatsapp";
 import { requireAuth, requirePermission } from "./middleware/auth";
 import { createDb } from "./db/client";
 import { recalculateEmbeddings, recalculateEmbeddingsWorker } from "./workers/embedding-calculator";
+import { processMessageQueue } from "./workers/queue-processor";
 import type { AppBindings, Variables } from "./env";
+
+// Patrón cron de queue-processor.ts (Task 2 — procesa message_queue). Vive acá
+// como constante porque `scheduled()` necesita comparar `event.cron` contra
+// este mismo string para decidir qué handler correr — ver wrangler.toml
+// ([triggers] crons) donde se registra el trigger real.
+const MESSAGE_QUEUE_CRON = "* * * * *";
 
 const app = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 
@@ -81,16 +88,33 @@ app.post(
 
 export default {
   fetch: app.fetch,
-  // Cron trigger opcional (ver wrangler.toml — comentado por default: cada
-  // corrida gasta la credencial de Anthropic y, tal como está hoy,
-  // "embedding" no es semánticamente real — ver embedding.ts). Si se
-  // habilita el cron en wrangler.toml, esto es lo que Cloudflare invoca.
-  async scheduled(_event, env, ctx) {
+  // Cloudflare invoca `scheduled()` para cada cron trigger definido en
+  // wrangler.toml ([triggers] crons); `event.cron` trae el patrón que disparó
+  // esta corrida puntual, así que hay que ramificar por él — si no,
+  // cualquier cron activo dispararía TODOS los jobs de acá abajo, incluido
+  // recalculateEmbeddings (que gasta la credencial de Anthropic activa y
+  // está deliberadamente deshabilitado — ver wrangler.toml).
+  async scheduled(event, env, ctx) {
     // `env` acá viene tipado como `Env` (generado por `wrangler types`);
     // `AppBindings` es ese mismo shape con ARCA_MODE acotado a un literal
     // union — mismo objeto en runtime, solo más estrecho en compile-time,
     // igual que `c.env` en cualquier route handler.
     const db = createDb(env as unknown as AppBindings);
+
+    if (event.cron === MESSAGE_QUEUE_CRON) {
+      ctx.waitUntil(
+        processMessageQueue(db, env as unknown as AppBindings).then((result) => {
+          console.log("[queue-processor] cron run:", result);
+        }),
+      );
+      return;
+    }
+
+    // Cron trigger opcional para recalcular embeddings pendientes (ver
+    // wrangler.toml — comentado por default: cada corrida gasta la
+    // credencial de Anthropic y, tal como está hoy, "embedding" no es
+    // semánticamente real — ver embedding.ts). Si se habilita ese cron en
+    // wrangler.toml, cae acá.
     ctx.waitUntil(
       recalculateEmbeddings(db, env as unknown as AppBindings).then((result) => {
         console.log("[embedding-calculator] cron run:", result);
