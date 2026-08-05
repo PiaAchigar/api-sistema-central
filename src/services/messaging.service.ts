@@ -10,7 +10,13 @@ import { retryableWhatsAppSend } from "./whatsapp-retry.service";
  *  1s/5s/30s, solo errores temporales — ver whatsapp-retry.service).
  *  Best-effort: un fallo del envío real (token vencido, número no registrado,
  *  etc.) NO revierte el mensaje ya guardado ni se relanza — queda auditado en
- *  delivery_logs y, si se agotan los 3 intentos, dispara una alerta. */
+ *  delivery_logs y, si se agotan los 3 intentos (y no fue 401), dispara un
+ *  email de alerta a complexa.ia@gmail.com (Task 3 — ver
+ *  email-alert.service.ts). Esa alerta se dispara DENTRO de
+ *  `retryableWhatsAppSend` (whatsapp-retry.service.ts), no acá: es el único
+ *  call site que comparten tanto este flujo como el de la cola de
+ *  automatizaciones (workers/queue-processor.ts, Task 2) — centralizarla ahí
+ *  evita mandar el email duplicado si se agregara también en cada caller. */
 export async function sendAgentReply(
   db: Db,
   env: AppBindings,

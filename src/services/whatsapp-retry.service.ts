@@ -5,11 +5,11 @@ import { getChannelByType } from "../repositories/channels.repo";
 import { getContactById } from "../repositories/contacts.repo";
 import { decrypt } from "./crypto.service";
 import { logDelivery } from "./delivery-logger.service";
+import { ALERT_EMAIL_ADDRESS, sendAlertEmail } from "./email-alert.service";
 import { sendWhatsAppText } from "./whatsapp.service";
 
 const RETRY_ATTEMPTS = 3;
 const BACKOFF_MS = [1000, 5000, 30000]; // 1s, 5s, 30s
-const ALERT_EMAIL = "complexa.ia@gmail.com";
 
 export interface RetryResult {
   success: boolean;
@@ -130,7 +130,7 @@ export async function retryableWhatsAppSend(
   }
 
   // Falló tras 3 reintentos.
-  await sendFailureAlert(contactId, conversationId, lastError, lastHttpStatus);
+  await sendFailureAlert(env, contactId, conversationId, lastError, lastHttpStatus);
 
   return {
     success: false,
@@ -149,20 +149,67 @@ function messageOf(err: unknown): string {
   return String(err);
 }
 
-/** Best-effort: este proyecto no tiene proveedor de email configurado todavía
- *  (sin Resend/SMTP/API key en env ni en .dev.vars — ver wrangler.toml). Hasta
- *  que se dé de alta un proveedor real, la alerta queda como log de servidor
- *  con tag [ALERT], grepeable en Cloudflare Worker logs, dirigida a
- *  complexa.ia@gmail.com. No relanza: un fallo de alerta no debe tumbar el
- *  request que la dispara. */
+/** Task 3 — confiabilidad WhatsApp: dispara la alerta por email cuando un
+ *  envío se agotó tras los 3 reintentos (nunca se llama para un 401 corto —
+ *  ver el `return` temprano más arriba: token vencido no alerta, el usuario
+ *  ya sabe que tiene que actualizar credenciales).
+ *
+ *  Único call site: tanto `sendAgentReply` (messaging.service.ts) como
+ *  `processMessageQueue` (workers/queue-processor.ts, Task 2) pasan por
+ *  `retryableWhatsAppSend`, así que centralizar la alerta acá evita
+ *  duplicarla en cada caller.
+ *
+ *  Best-effort vía `sendAlertEmail` (email-alert.service.ts) — no relanza:
+ *  un fallo de alerta no debe tumbar el request que la dispara. Sin
+ *  proveedor de email configurado (`env.RESEND_API_KEY`), cae a un log de
+ *  servidor con tag [ALERT]. */
 async function sendFailureAlert(
+  env: AppBindings,
   contactId: string,
   conversationId: string,
   error: string,
   lastHttpStatus: number,
 ): Promise<void> {
-  console.error(
-    `[whatsapp][ALERT] Envío falló tras ${RETRY_ATTEMPTS} intentos — notificar a ${ALERT_EMAIL}`,
-    { contactId, conversationId, error, lastHttpStatus, at: new Date().toISOString() },
+  await sendAlertEmail(
+    {
+      subject: "❌ WhatsApp Send Failed — Check Cloudflare Logs",
+      to: ALERT_EMAIL_ADDRESS,
+      html: `
+        <div style="font-family: sans-serif; padding: 20px;">
+          <h2>⚠️ WhatsApp Message Send Failed</h2>
+
+          <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0;">
+            <p><strong>Contact:</strong> ${contactId}</p>
+            <p><strong>Conversation:</strong> ${conversationId}</p>
+            <p><strong>HTTP Status:</strong> ${lastHttpStatus}</p>
+            <p><strong>Error:</strong> ${error}</p>
+          </div>
+
+          <h3>What happened?</h3>
+          <p>A message failed to send after ${RETRY_ATTEMPTS} retry attempts with exponential backoff (1s → 5s → 30s).</p>
+
+          <h3>Next steps:</h3>
+          <ol>
+            <li><strong>Check Cloudflare Worker logs:</strong>
+              <a href="https://dash.cloudflare.com/workers/view/piubella-worker/logs">Cloudflare Dashboard</a>
+            </li>
+            <li><strong>Verify Meta Cloud API credentials:</strong>
+              <a href="https://developers.facebook.com/apps">Facebook Developers</a>
+            </li>
+            <li><strong>Check rate limits:</strong>
+              Meta rate limits 50+ msgs/min per phone number. Is traffic spiking?
+            </li>
+          </ol>
+
+          <p style="color: #666; font-size: 12px; margin-top: 30px;">
+            Sent at ${new Date().toISOString()}
+          </p>
+        </div>
+      `,
+      contactId,
+      conversationId,
+      errorCode: lastHttpStatus,
+    },
+    env,
   );
 }

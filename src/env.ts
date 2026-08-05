@@ -53,4 +53,14 @@ export type AppBindings = Omit<Env, "ARCA_MODE"> & {
   AFIP_KEY?: string;
   /** Solo para tests: fuerza fallo del mock ARCA. */
   ARCA_MOCK_FAIL?: string;
+  /**
+   * API key de Resend (https://resend.com) para mandar alertas por email
+   * (ver services/email-alert.service.ts — Task 3, confiabilidad WhatsApp).
+   * Se usa la API HTTP de Resend, no SMTP: este Worker no tiene sockets TCP
+   * crudos disponibles. Configurar con `wrangler secret put RESEND_API_KEY`.
+   * Sin esto, las alertas quedan como log de servidor tag `[ALERT]`.
+   */
+  RESEND_API_KEY?: string;
+  /** Remitente de las alertas por email. Default: "Piubella CRM <onboarding@resend.dev>". */
+  ALERT_EMAIL_FROM?: string;
 };
