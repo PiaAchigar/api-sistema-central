@@ -7,6 +7,7 @@ import { requireAuth, requirePermission } from "./middleware/auth";
 import { createDb } from "./db/client";
 import { recalculateEmbeddings, recalculateEmbeddingsWorker } from "./workers/embedding-calculator";
 import { processMessageQueue } from "./workers/queue-processor";
+import { cleanupOldBuckets } from "./services/rate-limiter.service";
 import type { AppBindings, Variables } from "./env";
 
 // Patrón cron de queue-processor.ts (Task 2 — procesa message_queue). Vive acá
@@ -105,6 +106,16 @@ export default {
       ctx.waitUntil(
         processMessageQueue(db, env as unknown as AppBindings).then((result) => {
           console.log("[queue-processor] cron run:", result);
+        }),
+      );
+      // Task 4 — confiabilidad WhatsApp: limpia buckets de rate limit de más
+      // de 1 hora. Reutiliza este mismo cron (cada 1 min) en vez de agregar
+      // uno propio — es una `DELETE` barata (índice por `created_at`) y no
+      // depende de si el queue-processor de arriba falla o no, por eso va en
+      // su propio `waitUntil` en vez de encadenarse al `.then()` de arriba.
+      ctx.waitUntil(
+        cleanupOldBuckets(db).catch((err) => {
+          console.error("[rate-limiter] cleanup falló:", err);
         }),
       );
       return;

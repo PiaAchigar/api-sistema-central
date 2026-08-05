@@ -17,6 +17,7 @@ import {
   upsertConversation,
 } from "../../repositories/conversations.repo";
 import { decodeMessageCursor } from "../../lib/message-cursor";
+import { checkRateLimit } from "../../services/rate-limiter.service";
 import { runAutomations } from "../../services/automation.service";
 import { sendAgentReply } from "../../services/messaging.service";
 import {
@@ -68,6 +69,24 @@ conversationsRouter.post(
   async (c) => {
     const db = createDb(c.env);
     const id = c.req.param("id");
+
+    // Task 4 — confiabilidad WhatsApp: 50 msgs/min por usuario para envíos
+    // manuales (ver rate-limiter.service.ts). `requireAuth` ya garantiza que
+    // `userId` no es null acá. Se chequea antes de tocar la conversación para
+    // no gastar una query si el usuario ya está limitado.
+    const userId = c.get("userId")!;
+    const rateLimitCheck = await checkRateLimit(db, userId, "manual");
+    if (!rateLimitCheck.allowed) {
+      return c.json(
+        {
+          error: "Rate limit exceeded",
+          remaining: rateLimitCheck.remaining,
+          resetAt: rateLimitCheck.resetAt,
+        },
+        429,
+      );
+    }
+
     if (!(await getConversationById(db, id))) throw notFound("Conversation");
     const msg = await sendAgentReply(db, c.env, id, c.req.valid("json").content);
     return c.json(msg, 201);

@@ -5,6 +5,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uuid,
@@ -251,3 +252,27 @@ export const messageQueue = pgTable("message_queue", {
   processedAt: timestamp("processed_at"),
   scheduledFor: timestamp("scheduled_for"),
 });
+
+// Migración 1.21.0 (whatsapp-reliability.sql, misma migración que
+// deliveryLogs/messageQueue arriba). Contador de mensajes por usuario por
+// minuto — usado por rate-limiter.service.ts (Task 4) para no superar 50
+// msgs/min (envíos manuales, ver POST /crm/conversations/:id/messages) ni 10
+// msgs/min (automatizaciones). Un row = un minuto de actividad de un usuario;
+// `checkRateLimit` hace upsert manual (select + insert/update) en vez de un
+// `ON CONFLICT DO UPDATE` porque necesita leer el `count` actual antes de
+// decidir si permite el envío. La PK compuesta (user_id, minute_key) vive acá
+// Y en la migración SQL — a diferencia del CHECK de otras tablas (que sí solo
+// vive en SQL, ver comentario en deliveryLogs), Drizzle 0.36.4 sí expone
+// `primaryKey()` como segundo argumento de `pgTable`.
+export const rateLimitBuckets = pgTable(
+  "rate_limit_buckets",
+  {
+    userId: uuid("user_id").notNull(),
+    minuteKey: varchar("minute_key", { length: 50 }).notNull(),
+    count: integer("count").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.userId, table.minuteKey] }),
+  }),
+);
