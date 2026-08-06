@@ -28,12 +28,18 @@ services:
       - ./src/db/migrations/1.14.0/messages-conversation-index.sql:/docker-entrypoint-initdb.d/15-messages-conversation-index.sql:ro
       - ./src/db/migrations/1.15.0/line-item-description.sql:/docker-entrypoint-initdb.d/16-line-item-description.sql:ro
       - ./src/db/migrations/1.16.0/payment-items.sql:/docker-entrypoint-initdb.d/17-payment-items.sql:ro
-      # NOTA: 1.17.0-1.20.0 no están montadas acá (gap preexistente, no de esta
-      # migración) — service_embeddings/training_subscriptions no se crean en
-      # local via db:reset todavía. 1.21.0 sí se registra porque delivery_logs
-      # depende únicamente de conversations/contacts/users, que sí existen.
-      - ./src/db/migrations/1.21.0/whatsapp-reliability.sql:/docker-entrypoint-initdb.d/18-whatsapp-reliability.sql:ro
-      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/19-seed.sql:ro
+      - ./src/db/migrations/1.17.0/service-embeddings.sql:/docker-entrypoint-initdb.d/18-service-embeddings.sql:ro
+      - ./src/db/migrations/1.18.0/ai-provider-credentials.sql:/docker-entrypoint-initdb.d/19-ai-provider-credentials.sql:ro
+      - ./src/db/migrations/1.19.0/service-treatment-fields.sql:/docker-entrypoint-initdb.d/20-service-treatment-fields.sql:ro
+      - ./src/db/migrations/1.20.0/training-subscriptions.sql:/docker-entrypoint-initdb.d/21-training-subscriptions.sql:ro
+      - ./src/db/migrations/1.21.0/activities.sql:/docker-entrypoint-initdb.d/22-activities.sql:ro
+      - ./src/db/migrations/1.21.0/whatsapp-reliability.sql:/docker-entrypoint-initdb.d/23-whatsapp-reliability.sql:ro
+      - ./src/db/migrations/1.21.1/add-activity-id-to-appointments.sql:/docker-entrypoint-initdb.d/24-add-activity-id-to-appointments.sql:ro
+      - ./src/db/migrations/1.21.2/fix-training-subscriptions-activity-id.sql:/docker-entrypoint-initdb.d/25-fix-training-subscriptions-activity-id.sql:ro
+      - ./src/db/migrations/1.22.0/add-training-subscription-to-billing-cycles.sql:/docker-entrypoint-initdb.d/26-add-training-subscription-to-billing-cycles.sql:ro
+      - ./src/db/migrations/1.22.1/fix-billing-cycles-nullable-and-unique.sql:/docker-entrypoint-initdb.d/27-fix-billing-cycles-nullable-and-unique.sql:ro
+      - ./src/db/migrations/1.22.2/drop-dangling-training-fk.sql:/docker-entrypoint-initdb.d/28-drop-dangling-training-fk.sql:ro
+      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/29-seed.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]
