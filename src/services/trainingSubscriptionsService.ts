@@ -135,11 +135,29 @@ export class TrainingSubscriptionsService {
     // Validate customer exists
     await this.validateCustomerExists(data.customerId);
 
-    // Validate activity exists
+    // Validate activity exists and meets subscription requirements
+    let activity;
     try {
-      await activitiesService.getActivity(data.activityId);
+      activity = await activitiesService.getActivity(data.activityId);
     } catch (err) {
       throw badRequest("Activity not found or inactive");
+    }
+
+    // Validate activity type constraints:
+    // - If 'class': must have classesPerMonth > 0
+    // - If 'machine': must have classesPerMonth = 0
+    try {
+      activitiesService.validateActivityType(
+        activity.activityType as "class" | "machine",
+        activity.classesPerMonth || 0,
+        activity.serviceProviderId
+      );
+    } catch (err) {
+      throw badRequest(
+        `Activity "${activity.name}" does not meet subscription requirements: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
     }
 
     // Validate monthlyAmount is positive
