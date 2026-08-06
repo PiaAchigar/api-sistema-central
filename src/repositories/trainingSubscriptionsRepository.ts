@@ -1,6 +1,10 @@
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { trainingSubscriptions, activityAttendance } from "../db/schema/agenda";
+import {
+  trainingSubscriptions,
+  activityAttendance,
+  subscriptionBillingCycles,
+} from "../db/schema/agenda";
 
 /**
  * Raw row shape returned by the admin/list query (snake_case, as it comes
@@ -64,7 +68,11 @@ export class TrainingSubscriptionsRepository {
     notes?: string | null;
   }) {
     const db = this.getDb();
-    const now = new Date().toISOString();
+    // created_at/updated_at are `timestamp` columns in default (Date) mode — Drizzle's
+    // mapToDriverValue calls .toISOString() on the value itself, so it must be a Date
+    // instance, not an already-stringified ISO string (fixed alongside the identical bug
+    // in update() / upsertBillingCyclePaymentDate() below).
+    const now = new Date();
     const rows = await db
       .insert(trainingSubscriptions)
       .values({
@@ -79,8 +87,8 @@ export class TrainingSubscriptionsRepository {
             ? data.monthlyAmount
             : String(data.monthlyAmount),
         notes: data.notes || null,
-        createdAt: now as any,
-        updatedAt: now as any,
+        createdAt: now,
+        updatedAt: now,
       })
       .returning();
 
@@ -145,7 +153,8 @@ export class TrainingSubscriptionsRepository {
       updateData.subscriptionEndDate = data.subscriptionEndDate || null;
     }
     if (data.notes !== undefined) updateData.notes = data.notes;
-    updateData.updatedAt = new Date().toISOString();
+    // Date instance, not .toISOString() string — see note in create() above.
+    updateData.updatedAt = new Date();
 
     const rows = await db
       .update(trainingSubscriptions)
@@ -169,10 +178,11 @@ export class TrainingSubscriptionsRepository {
    * created_at are stored (see feedback_seed_timestamps memory: timestamps
    * are always UTC).
    *
-   * @param filters Optional filters: activityId, status, paidStatus
+   * @param filters Optional filters: id, activityId, status, paidStatus
    * @returns Array of raw rows (snake_case) — mapping to SubscriptionWithAttendance happens in the service
    */
   async listWithAttendance(filters: {
+    id?: string;
     activityId?: string;
     status?: string;
     paidStatus?: string;
@@ -180,6 +190,9 @@ export class TrainingSubscriptionsRepository {
     const db = this.getDb();
 
     const conditions = [];
+    if (filters.id) {
+      conditions.push(sql`ts.id = ${filters.id}`);
+    }
     if (filters.activityId) {
       conditions.push(sql`ts.activity_id = ${filters.activityId}`);
     }
@@ -242,6 +255,87 @@ export class TrainingSubscriptionsRepository {
     `);
 
     return rows as unknown as SubscriptionWithAttendanceRow[];
+  }
+
+  /**
+   * Get a single subscription with current-month attendance/payment info,
+   * for the admin PATCH endpoint response. Reuses listWithAttendance's id filter
+   * so the enrichment SQL (attendance count, billing cycle join) stays in one place.
+   * @param id Subscription ID
+   * @returns Raw row (snake_case) or null if not found
+   */
+  async getByIdWithAttendance(id: string): Promise<SubscriptionWithAttendanceRow | null> {
+    const rows = await this.listWithAttendance({ id });
+    return rows[0] || null;
+  }
+
+  /**
+   * Create or update this month's billing cycle row for a training subscription,
+   * setting payment_date (and is_paid accordingly). Used by the admin PATCH
+   * endpoint (PATCH /api/training-subscriptions/:id/admin) when paidDate is
+   * included in the request body.
+   *
+   * NOTE: there's no DB-level unique constraint on
+   * (training_subscription_id, billing_month) — the existing
+   * uq_billing_cycles_subscription_month index is keyed on the legacy
+   * subscription_id column, which stays NULL for training subscriptions going
+   * forward (see migration 1.22.0's comments). So this does a manual
+   * select-then-write instead of relying on ON CONFLICT.
+   *
+   * @param trainingSubscriptionId Training subscription ID
+   * @param paymentDate YYYY-MM-DD string to mark as paid, or null to clear payment
+   */
+  async upsertBillingCyclePaymentDate(
+    trainingSubscriptionId: string,
+    paymentDate: string | null
+  ): Promise<void> {
+    const db = this.getDb();
+
+    const now = new Date();
+    const billingMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+    const billingPeriodStart = `${billingMonth}-01`;
+    const billingPeriodEnd = `${billingMonth}-10`;
+    const isPaid = paymentDate !== null;
+    // payment_date/created_at/updated_at are `timestamp` columns in default (Date) mode —
+    // Drizzle's mapToDriverValue calls .toISOString() on the value itself, so it must be
+    // a Date instance, not an ISO string (an ISO string blows up with
+    // "value.toISOString is not a function").
+    const paymentDateValue = paymentDate ? new Date(paymentDate) : null;
+
+    const existing = await db
+      .select({ id: subscriptionBillingCycles.id })
+      .from(subscriptionBillingCycles)
+      .where(
+        and(
+          eq(subscriptionBillingCycles.trainingSubscriptionId, trainingSubscriptionId),
+          eq(subscriptionBillingCycles.billingMonth, billingMonth)
+        )
+      )
+      .limit(1);
+
+    if (existing[0]) {
+      await db
+        .update(subscriptionBillingCycles)
+        .set({
+          paymentDate: paymentDateValue,
+          isPaid,
+          updatedAt: now,
+        })
+        .where(eq(subscriptionBillingCycles.id, existing[0].id));
+      return;
+    }
+
+    await db.insert(subscriptionBillingCycles).values({
+      id: crypto.randomUUID(),
+      trainingSubscriptionId,
+      billingMonth,
+      billingPeriodStart,
+      billingPeriodEnd,
+      isPaid,
+      paymentDate: paymentDateValue,
+      createdAt: now,
+      updatedAt: now,
+    });
   }
 
   /**

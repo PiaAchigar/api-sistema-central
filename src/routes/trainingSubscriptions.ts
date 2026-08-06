@@ -232,6 +232,66 @@ trainingSubscriptionsRouter.patch(
 );
 
 /**
+ * PATCH /api/training-subscriptions/:id/admin
+ * Edit a subscription's status, notes, and/or payment date from the admin panel.
+ *
+ * Body (at least one field required):
+ * {
+ *   status?: "active" | "paused" | "cancelled";
+ *   notes?: string | null;
+ *   paidDate?: string | null (YYYY-MM-DD) — upserts this month's subscription_billing_cycles row
+ * }
+ *
+ * Does NOT allow editing activityId, customerId, subscriptionStartDate,
+ * subscriptionEndDate, or monthlyAmount — those are historical/billing data.
+ *
+ * Response: { success: true, data: SubscriptionWithAttendance }
+ */
+trainingSubscriptionsRouter.patch(
+  "/training-subscriptions/:id/admin",
+  zValidator(
+    "json",
+    z
+      .object({
+        status: z.enum(["active", "paused", "cancelled"]).optional(),
+        notes: z.string().nullable().optional(),
+        paidDate: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/, "paidDate must be in YYYY-MM-DD format")
+          .nullable()
+          .optional(),
+      })
+      .refine(
+        (data) =>
+          data.status !== undefined || data.notes !== undefined || data.paidDate !== undefined,
+        { message: "At least one of status, notes, or paidDate must be provided" }
+      )
+  ),
+  async (c) => {
+    try {
+      const id = c.req.param("id");
+      const body = c.req.valid("json");
+      const updated = await trainingSubscriptionsService.updateSubscriptionAdmin(id, body);
+      return c.json({
+        success: true,
+        data: updated,
+      });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return c.json(
+          {
+            success: false,
+            error: err.message,
+          },
+          err.status
+        );
+      }
+      throw err;
+    }
+  }
+);
+
+/**
  * GET /api/training-subscriptions/:id/attendance
  * Get monthly attendance for a subscription
  *

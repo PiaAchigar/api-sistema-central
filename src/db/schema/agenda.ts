@@ -324,7 +324,8 @@ export const trainingSubscriptions = pgTable("training_subscriptions", {
 // Historial de pagos mensuales — Auditoría de suscripciones
 export const subscriptionBillingCycles = pgTable("subscription_billing_cycles", {
   id: id(),
-  subscriptionId: uuid("subscription_id"),
+  subscriptionId: uuid("subscription_id"), // Legacy; NULL para suscripciones a ACTIVITIES (ver training_subscription_id)
+  trainingSubscriptionId: uuid("training_subscription_id"), // Migración 1.22.0 — FK a training_subscriptions
   billingMonth: varchar("billing_month", { length: 7 }), // YYYY-MM
   billingPeriodStart: date("billing_period_start"),
   billingPeriodEnd: date("billing_period_end"),

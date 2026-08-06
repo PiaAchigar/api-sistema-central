@@ -332,6 +332,77 @@ export class TrainingSubscriptionsService {
   }
 
   /**
+   * Get a single subscription enriched with current-month attendance/payment info,
+   * used as the response shape for the admin PATCH endpoint.
+   * @param id Subscription ID
+   * @throws notFound if subscription not found
+   */
+  async getSubscriptionWithAttendance(id: string): Promise<SubscriptionWithAttendance> {
+    const row = await this.repository.getByIdWithAttendance(id);
+    if (!row) {
+      throw notFound("Subscription");
+    }
+    return this.toSubscriptionWithAttendance(row);
+  }
+
+  /**
+   * Update a subscription from the admin panel — status, notes, and/or payment date.
+   *
+   * Intentionally does NOT accept activityId, customerId, subscriptionStartDate,
+   * subscriptionEndDate, or monthlyAmount: those fields are historical/billing
+   * data and editing them would break past billing cycles and attendance history.
+   *
+   * - status/notes (if provided) update training_subscriptions directly.
+   * - paidDate (if the key is present, including explicit null) upserts this
+   *   month's subscription_billing_cycles row: null clears payment_date/is_paid,
+   *   a date string sets them.
+   *
+   * @param id Subscription ID
+   * @param data Partial admin-editable fields
+   * @returns Updated SubscriptionWithAttendance
+   * @throws notFound if subscription not found
+   * @throws badRequest if no field is provided
+   */
+  async updateSubscriptionAdmin(
+    id: string,
+    data: {
+      status?: "active" | "paused" | "cancelled";
+      notes?: string | null;
+      paidDate?: string | null;
+    }
+  ): Promise<SubscriptionWithAttendance> {
+    // Verify subscription exists
+    const existing = await this.repository.getById(id);
+    if (!existing) {
+      throw notFound("Subscription");
+    }
+
+    // Require at least one editable field. Defense in depth — the route also
+    // enforces this via a Zod .refine on the request body.
+    if (data.status === undefined && data.notes === undefined && data.paidDate === undefined) {
+      throw badRequest("At least one of status, notes, or paidDate must be provided");
+    }
+
+    // Update status/notes on training_subscriptions when provided
+    if (data.status !== undefined || data.notes !== undefined) {
+      const updatePayload: {
+        status?: "active" | "paused" | "cancelled";
+        notes?: string | null;
+      } = {};
+      if (data.status !== undefined) updatePayload.status = data.status;
+      if (data.notes !== undefined) updatePayload.notes = data.notes;
+      await this.repository.update(id, updatePayload);
+    }
+
+    // paidDate key present (including explicit null) → upsert this month's billing cycle
+    if (data.paidDate !== undefined) {
+      await this.repository.upsertBillingCyclePaymentDate(id, data.paidDate);
+    }
+
+    return this.getSubscriptionWithAttendance(id);
+  }
+
+  /**
    * Map a raw SQL row (snake_case) to the SubscriptionWithAttendance shape,
    * computing classesRemainingThisMonth and paidStatus along the way.
    */
