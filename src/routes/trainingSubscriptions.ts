@@ -1,7 +1,7 @@
 import { Hono } from "hono";
-import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { AppError } from "../lib/errors";
+import { zv } from "../lib/validator";
 import { trainingSubscriptionsService } from "../services/trainingSubscriptionsService";
 import type { AppBindings, Variables } from "../env";
 
@@ -54,7 +54,7 @@ trainingSubscriptionsRouter.get("/training-subscriptions", async (c) => {
  */
 trainingSubscriptionsRouter.get(
   "/training-subscriptions/admin/list",
-  zValidator(
+  zv(
     "query",
     z.object({
       activityId: z.string().uuid("activityId must be a valid UUID").optional(),
@@ -129,7 +129,7 @@ trainingSubscriptionsRouter.get("/training-subscriptions/:id", async (c) => {
  */
 trainingSubscriptionsRouter.post(
   "/training-subscriptions",
-  zValidator(
+  zv(
     "json",
     z.object({
       activityId: z.string().uuid("activityId must be a valid UUID"),
@@ -194,7 +194,7 @@ trainingSubscriptionsRouter.post(
  */
 trainingSubscriptionsRouter.patch(
   "/training-subscriptions/:id",
-  zValidator(
+  zv(
     "json",
     z.object({
       status: z.enum(["active", "paused", "cancelled"]).optional(),
@@ -249,7 +249,7 @@ trainingSubscriptionsRouter.patch(
  */
 trainingSubscriptionsRouter.patch(
   "/training-subscriptions/:id/admin",
-  zValidator(
+  zv(
     "json",
     z
       .object({

@@ -13,6 +13,7 @@ import {
 export type SubscriptionWithAttendanceRow = {
   id: string;
   customer_id: string;
+  customer_name: string | null;
   activity_id: string;
   activity_name: string;
   activity_type: string;
@@ -224,6 +225,7 @@ export class TrainingSubscriptionsRepository {
       SELECT
         ts.id,
         ts.customer_id,
+        ct.name AS customer_name,
         ts.activity_id,
         a.name AS activity_name,
         a.activity_type,
@@ -237,6 +239,11 @@ export class TrainingSubscriptionsRepository {
         sbc.payment_date AS paid_date
       FROM training_subscriptions ts
       JOIN activities a ON a.id = ts.activity_id
+      -- El nombre del cliente vive en CONTACTS (customers.contact_id -> contacts.name),
+      -- igual que en customerSummary de customers.repo.ts.
+      -- LEFT JOIN a propósito: un customer sin contacto no debe desaparecer de la grilla.
+      LEFT JOIN customers cu ON cu.id = ts.customer_id
+      LEFT JOIN contacts ct ON ct.id = cu.contact_id
       CROSS JOIN current_month cm
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::int AS attendance_count
@@ -275,12 +282,11 @@ export class TrainingSubscriptionsRepository {
    * endpoint (PATCH /api/training-subscriptions/:id/admin) when paidDate is
    * included in the request body.
    *
-   * NOTE: there's no DB-level unique constraint on
-   * (training_subscription_id, billing_month) — the existing
-   * uq_billing_cycles_subscription_month index is keyed on the legacy
-   * subscription_id column, which stays NULL for training subscriptions going
-   * forward (see migration 1.22.0's comments). So this does a manual
-   * select-then-write instead of relying on ON CONFLICT.
+   * Atomic upsert: migración 1.22.1 crea el índice UNIQUE parcial
+   * uq_billing_cycles_training_subscription_month sobre
+   * (training_subscription_id, billing_month) WHERE training_subscription_id
+   * IS NOT NULL, así que ON CONFLICT resuelve la carrera entre dos requests
+   * simultáneos que antes duplicaban el ciclo del mes.
    *
    * @param trainingSubscriptionId Training subscription ID
    * @param paymentDate YYYY-MM-DD string to mark as paid, or null to clear payment
@@ -294,7 +300,13 @@ export class TrainingSubscriptionsRepository {
     const now = new Date();
     const billingMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
     const billingPeriodStart = `${billingMonth}-01`;
-    const billingPeriodEnd = `${billingMonth}-10`;
+    // El período de facturación es el mes calendario completo (1 al 28/29/30/31).
+    // El día 10 es el vencimiento de gracia para el pago, NO el fin del período:
+    // no confundirlos. Día 0 del mes siguiente = último día de este mes.
+    const lastDayOfMonth = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)
+    ).getUTCDate();
+    const billingPeriodEnd = `${billingMonth}-${String(lastDayOfMonth).padStart(2, "0")}`;
     const isPaid = paymentDate !== null;
     // payment_date/created_at/updated_at are `timestamp` columns in default (Date) mode —
     // Drizzle's mapToDriverValue calls .toISOString() on the value itself, so it must be
@@ -302,40 +314,32 @@ export class TrainingSubscriptionsRepository {
     // "value.toISOString is not a function").
     const paymentDateValue = paymentDate ? new Date(paymentDate) : null;
 
-    const existing = await db
-      .select({ id: subscriptionBillingCycles.id })
-      .from(subscriptionBillingCycles)
-      .where(
-        and(
-          eq(subscriptionBillingCycles.trainingSubscriptionId, trainingSubscriptionId),
-          eq(subscriptionBillingCycles.billingMonth, billingMonth)
-        )
-      )
-      .limit(1);
-
-    if (existing[0]) {
-      await db
-        .update(subscriptionBillingCycles)
-        .set({
+    await db
+      .insert(subscriptionBillingCycles)
+      .values({
+        id: crypto.randomUUID(),
+        trainingSubscriptionId,
+        billingMonth,
+        billingPeriodStart,
+        billingPeriodEnd,
+        isPaid,
+        paymentDate: paymentDateValue,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [
+          subscriptionBillingCycles.trainingSubscriptionId,
+          subscriptionBillingCycles.billingMonth,
+        ],
+        // Debe coincidir con el WHERE del índice parcial para que Postgres lo elija.
+        targetWhere: sql`${subscriptionBillingCycles.trainingSubscriptionId} IS NOT NULL`,
+        set: {
           paymentDate: paymentDateValue,
           isPaid,
           updatedAt: now,
-        })
-        .where(eq(subscriptionBillingCycles.id, existing[0].id));
-      return;
-    }
-
-    await db.insert(subscriptionBillingCycles).values({
-      id: crypto.randomUUID(),
-      trainingSubscriptionId,
-      billingMonth,
-      billingPeriodStart,
-      billingPeriodEnd,
-      isPaid,
-      paymentDate: paymentDateValue,
-      createdAt: now,
-      updatedAt: now,
-    });
+        },
+      });
   }
 
   /**

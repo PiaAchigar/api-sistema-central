@@ -18,11 +18,20 @@ const customersRouter = new Hono<{ Bindings: AppBindings }>();
 
 customersRouter.get(
   "/",
-  zValidator("query", z.object({ q: z.string().max(100).optional() })),
+  zValidator(
+    "query",
+    z.object({
+      q: z.string().max(100).optional(),
+      // Sin `limit` devuelve los 20 más recientes (autocompletar del facturador).
+      // El selector de cliente de Suscripciones necesita la lista completa, así
+      // que pide un limit alto explícitamente.
+      limit: z.coerce.number().int().min(1).max(1000).optional(),
+    }),
+  ),
   async (c) => {
     const db = createDb(c.env);
-    const { q } = c.req.valid("query");
-    const rows = q ? await searchCustomers(db, q) : await listRecentCustomers(db);
+    const { q, limit } = c.req.valid("query");
+    const rows = q ? await searchCustomers(db, q) : await listRecentCustomers(db, limit);
     return c.json(rows);
   },
 );

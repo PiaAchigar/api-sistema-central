@@ -1,4 +1,4 @@
-import { notFound, badRequest } from "../lib/errors";
+import { notFound, badRequest, conflict } from "../lib/errors";
 import { activitiesService } from "./activitiesService";
 import { eq } from "drizzle-orm";
 import { customers } from "../db/schema/crm";
@@ -9,12 +9,25 @@ import type {
 } from "../repositories/trainingSubscriptionsRepository";
 
 /**
+ * ¿Es este error una violación del índice UNIQUE `constraintName`?
+ * postgres.js expone el SQLSTATE en `.code` (23505 = unique_violation) y el
+ * nombre del índice en `.constraint_name`. Se chequean ambos para no confundir
+ * una unique distinta sobre la misma tabla.
+ */
+function isUniqueViolation(err: unknown, constraintName: string): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: unknown; constraint_name?: unknown };
+  return e.code === "23505" && e.constraint_name === constraintName;
+}
+
+/**
  * Subscription row enriched with this-month attendance and payment status,
  * used by the admin panel (GET /api/training-subscriptions/admin/list)
  */
 export interface SubscriptionWithAttendance {
   id: string;
   customerId: string;
+  customerName: string;
   activityId: string;
   activityName: string;
   activityType: "class" | "machine";
@@ -168,16 +181,32 @@ export class TrainingSubscriptionsService {
       throw badRequest("monthlyAmount must be greater than 0");
     }
 
-    // Create via repository with default status
-    const created = await this.repository.create({
-      activityId: data.activityId,
-      customerId: data.customerId,
-      subscriptionStartDate: data.subscriptionStartDate,
-      subscriptionEndDate: data.subscriptionEndDate || null,
-      status: "active",
-      monthlyAmount: data.monthlyAmount,
-      notes: data.notes || null,
-    });
+    // Create via repository with default status.
+    // La base tiene un UNIQUE parcial (customer_id, activity_id) WHERE status='active'
+    // — uq_training_subscriptions_customer_training_active. Sin este catch, intentar
+    // suscribir dos veces al mismo cliente a la misma actividad escapa como 500 y el
+    // front muestra el mensaje genérico, cuando en realidad es un error del usuario
+    // perfectamente explicable.
+    let created;
+    try {
+      created = await this.repository.create({
+        activityId: data.activityId,
+        customerId: data.customerId,
+        subscriptionStartDate: data.subscriptionStartDate,
+        subscriptionEndDate: data.subscriptionEndDate || null,
+        status: "active",
+        monthlyAmount: data.monthlyAmount,
+        notes: data.notes || null,
+      });
+    } catch (err) {
+      if (isUniqueViolation(err, "uq_training_subscriptions_customer_training_active")) {
+        throw conflict(
+          `${activity.name}: este cliente ya tiene una suscripción activa a esta actividad. ` +
+            `Pausala o cancelala antes de crear una nueva.`
+        );
+      }
+      throw err;
+    }
 
     if (!created) {
       throw badRequest("Failed to create subscription");
@@ -442,6 +471,9 @@ export class TrainingSubscriptionsService {
     return {
       id: row.id,
       customerId: row.customer_id,
+      // full_name es nullable en CONTACTS y el JOIN es LEFT: nunca devolvemos
+      // undefined al front, que lo pinta directo en la columna "Cliente".
+      customerName: row.customer_name ?? "(sin nombre)",
       activityId: row.activity_id,
       activityName: row.activity_name,
       activityType,
