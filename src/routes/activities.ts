@@ -209,4 +209,31 @@ activitiesRouter.delete("/activities/:id", async (c) => {
   }
 });
 
+/**
+ * DELETE /api/activities/:id/hard
+ * Permanently delete an activity from the database (irreversible)
+ * WARNING: This cannot be undone
+ */
+activitiesRouter.delete("/activities/:id/hard", async (c) => {
+  try {
+    const id = c.req.param("id");
+    await activitiesService.hardDeleteActivity(id);
+    return c.json({
+      success: true,
+      data: { id },
+    });
+  } catch (err) {
+    if (err instanceof AppError) {
+      return c.json(
+        {
+          success: false,
+          error: err.message,
+        },
+        err.status
+      );
+    }
+    throw err;
+  }
+});
+
 export { activitiesRouter };

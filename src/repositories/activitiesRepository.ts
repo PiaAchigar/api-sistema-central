@@ -162,6 +162,21 @@ export class ActivitiesRepository {
 
     return rows[0] || null;
   }
+
+  /**
+   * Hard-delete: permanently remove activity from database
+   * @param id Activity ID
+   * @returns true if deleted, false if not found
+   */
+  async hardDelete(id: string) {
+    const db = this.getDb();
+    const rows = await db
+      .delete(activities)
+      .where(eq(activities.id, id))
+      .returning();
+
+    return rows.length > 0;
+  }
 }
 
 /**

@@ -169,6 +169,28 @@ export class ActivitiesService {
 
     return deleted;
   }
+
+  /**
+   * Hard-delete an activity (permanently remove from database)
+   * WARNING: This is irreversible
+   * @param id Activity ID
+   * @throws notFound if activity not found
+   */
+  async hardDeleteActivity(id: string) {
+    // Verify activity exists
+    const existing = await this.repository.getById(id);
+    if (!existing) {
+      throw notFound("Activity");
+    }
+
+    // Hard-delete via repository
+    const deleted = await this.repository.hardDelete(id);
+    if (!deleted) {
+      throw notFound("Activity");
+    }
+
+    return { success: true };
+  }
 }
 
 /**
