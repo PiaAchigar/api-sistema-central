@@ -44,6 +44,80 @@ trainingSubscriptionsRouter.get("/training-subscriptions", async (c) => {
 });
 
 /**
+ * GET /api/class-attendance?activityId=&startsAt=
+ * Roster de una clase: clientes agendados a (actividad, horario) con su estado
+ * de asistencia. Lo consume el modal de asistencias de la Agenda.
+ *
+ * Una actividad grupal son N appointments distintos con el mismo activity_id y
+ * el mismo appointment_start, por eso la clase se identifica por ese par y no
+ * por un appointment id.
+ */
+trainingSubscriptionsRouter.get(
+  "/class-attendance",
+  zv(
+    "query",
+    z.object({
+      activityId: z.string().uuid("activityId must be a valid UUID"),
+      startsAt: z.string().datetime({ offset: true, message: "startsAt must be an ISO timestamp" }),
+    })
+  ),
+  async (c) => {
+    try {
+      const { activityId, startsAt } = c.req.valid("query");
+      const roster = await trainingSubscriptionsService.getClassRoster(activityId, startsAt);
+      return c.json({ success: true, data: roster });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return c.json({ success: false, error: err.message }, err.status);
+      }
+      throw err;
+    }
+  }
+);
+
+/**
+ * POST /api/class-attendance
+ * Registra la asistencia de una clase para varios clientes de una sola vez.
+ *
+ * Body: { activityId, startsAt, entries: [{ subscriptionId, attended }] }
+ * Response: { success: true, data: <roster actualizado> }
+ */
+trainingSubscriptionsRouter.post(
+  "/class-attendance",
+  zv(
+    "json",
+    z.object({
+      activityId: z.string().uuid("activityId must be a valid UUID"),
+      startsAt: z.string().datetime({ offset: true, message: "startsAt must be an ISO timestamp" }),
+      entries: z
+        .array(
+          z.object({
+            subscriptionId: z.string().uuid("subscriptionId must be a valid UUID"),
+            attended: z.boolean(),
+          })
+        )
+        .min(1, "entries must contain at least one row"),
+    })
+  ),
+  async (c) => {
+    try {
+      const { activityId, startsAt, entries } = c.req.valid("json");
+      const roster = await trainingSubscriptionsService.markClassAttendance(
+        activityId,
+        startsAt,
+        entries
+      );
+      return c.json({ success: true, data: roster });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return c.json({ success: false, error: err.message }, err.status);
+      }
+      throw err;
+    }
+  }
+);
+
+/**
  * GET /api/training-subscriptions/admin/list
  * List subscriptions with current-month attendance for the admin panel
  *

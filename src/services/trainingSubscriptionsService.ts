@@ -6,7 +6,23 @@ import type { Db } from "../db/client";
 import type {
   TrainingSubscriptionsRepository,
   SubscriptionWithAttendanceRow,
+  ClassRosterRow,
 } from "../repositories/trainingSubscriptionsRepository";
+
+/**
+ * Un cliente en el roster de una clase, tal como lo consume la Agenda.
+ * `canMark` en false = no se le puede tildar asistencia (no tiene suscripción
+ * activa a esta actividad), y `reason` explica por qué para mostrarlo en el modal.
+ */
+export interface ClassRosterEntry {
+  appointmentId: string;
+  customerId: string | null;
+  customerName: string;
+  subscriptionId: string | null;
+  attended: boolean;
+  canMark: boolean;
+  reason: string | null;
+}
 
 /**
  * ¿Es este error una violación del índice UNIQUE `constraintName`?
@@ -37,7 +53,11 @@ export interface SubscriptionWithAttendance {
   monthlyAmount: number;
   status: "active" | "paused" | "cancelled";
   notes: string | null;
-  attendanceThisMonth: number;
+  /** Clases a las que el cliente REALMENTE fue (tildadas desde la Agenda) */
+  attendedThisMonth: number;
+  /** Clases agendadas vigentes este mes (consumen cupo aunque no hayan ocurrido) */
+  scheduledThisMonth: number;
+  /** Cupo del plan que queda por agendar: classesPerMonth - scheduledThisMonth */
   classesRemainingThisMonth: number;
   paidDate: string | null;
   paidStatus: "paid" | "pending" | "overdue";
@@ -365,6 +385,85 @@ export class TrainingSubscriptionsService {
   }
 
   /**
+   * Roster de una clase: quiénes están agendados a (actividad, horario) y si ya
+   * se les registró asistencia. Lo consume el modal de la Agenda.
+   */
+  async getClassRoster(activityId: string, startsAt: string): Promise<ClassRosterEntry[]> {
+    const rows = await this.repository.getClassRoster(activityId, startsAt);
+    return rows.map((row) => this.toRosterEntry(row));
+  }
+
+  private toRosterEntry(row: ClassRosterRow): ClassRosterEntry {
+    const hasSubscription = Boolean(row.subscription_id);
+    return {
+      appointmentId: row.appointment_id,
+      customerId: row.customer_id,
+      customerName: row.customer_name ?? "(sin nombre)",
+      subscriptionId: row.subscription_id,
+      attended: row.attended === true,
+      canMark: hasSubscription,
+      reason: hasSubscription
+        ? null
+        : "Sin suscripción activa a esta actividad — no se puede registrar la asistencia",
+    };
+  }
+
+  /**
+   * Registra la asistencia de una clase, de a varios clientes a la vez.
+   *
+   * Reglas:
+   * - No se puede marcar una clase que todavía no ocurrió (evita dar por
+   *   asistida una clase futura y desvirtuar el historial).
+   * - Solo se aceptan suscripciones que estén efectivamente agendadas a esa
+   *   clase: el roster es la lista blanca. Así un id arbitrario no puede
+   *   inflar el contador de asistencias de otro cliente.
+   *
+   * @param activityId Actividad de la clase
+   * @param startsAt Timestamp de inicio de la clase (ISO)
+   * @param entries Asistencia por suscripción
+   * @returns El roster actualizado
+   */
+  async markClassAttendance(
+    activityId: string,
+    startsAt: string,
+    entries: { subscriptionId: string; attended: boolean }[]
+  ): Promise<ClassRosterEntry[]> {
+    const start = new Date(startsAt);
+    if (Number.isNaN(start.getTime())) {
+      throw badRequest("startsAt must be a valid ISO timestamp");
+    }
+    if (start.getTime() > Date.now()) {
+      throw badRequest(
+        "No se puede registrar asistencia de una clase que todavía no ocurrió"
+      );
+    }
+
+    const roster = await this.repository.getClassRoster(activityId, startsAt);
+    if (roster.length === 0) {
+      throw notFound("Class");
+    }
+
+    const markable = new Set(
+      roster.map((r) => r.subscription_id).filter((id): id is string => Boolean(id))
+    );
+    const invalid = entries.filter((e) => !markable.has(e.subscriptionId));
+    if (invalid.length > 0) {
+      throw badRequest(
+        `Estas suscripciones no están agendadas a esta clase: ${invalid
+          .map((e) => e.subscriptionId)
+          .join(", ")}`
+      );
+    }
+
+    // class_date sale del propio turno, no del cliente: así el registro cae
+    // siempre en el día real de la clase (en UTC, como el resto de la agenda).
+    const classDate = roster[0]!.class_date;
+    await this.repository.upsertAttendance(activityId, classDate, entries);
+
+    return this.getClassRoster(activityId, startsAt);
+  }
+
+  /**
    * List subscriptions with current-month attendance for the admin panel
    * @param filters Optional filters: activityId, status, paidStatus
    * @returns Array of subscriptions enriched with attendance/payment info
@@ -458,13 +557,17 @@ export class TrainingSubscriptionsService {
   ): SubscriptionWithAttendance {
     const activityType = row.activity_type as "class" | "machine";
     const classesPerMonth = Number(row.classes_per_month) || 0;
-    const attendanceThisMonth = Number(row.attendance_this_month) || 0;
+    const attendedThisMonth = Number(row.attended_this_month) || 0;
+    const scheduledThisMonth = Number(row.scheduled_this_month) || 0;
 
-    // Machine-based activities have no monthly class quota
+    // El cupo lo consume el AGENDAMIENTO, no la asistencia: si reservó 5 de 8,
+    // le quedan 3 para agendar aunque todavía no haya ido a ninguna. Es el
+    // número que va a usar el control de acceso desde la web.
+    // Las actividades de tipo máquina no tienen cupo mensual.
     const classesRemainingThisMonth =
       activityType === "machine"
         ? 0
-        : Math.max(0, classesPerMonth - attendanceThisMonth);
+        : Math.max(0, classesPerMonth - scheduledThisMonth);
 
     const paidDate = this.formatDateOnly(row.paid_date);
 
@@ -483,7 +586,8 @@ export class TrainingSubscriptionsService {
       monthlyAmount: Number(row.monthly_amount),
       status: row.status as "active" | "paused" | "cancelled",
       notes: row.notes,
-      attendanceThisMonth,
+      attendedThisMonth,
+      scheduledThisMonth,
       classesRemainingThisMonth,
       paidDate,
       paidStatus: this.computePaidStatus(paidDate),

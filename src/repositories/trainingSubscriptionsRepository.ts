@@ -23,8 +23,28 @@ export type SubscriptionWithAttendanceRow = {
   monthly_amount: string;
   status: string;
   notes: string | null;
-  attendance_this_month: number;
+  /** Asistencias reales del mes: activity_attendance.attended = true */
+  attended_this_month: number;
+  /** Clases agendadas vigentes del mes: appointments.status = 'scheduled' */
+  scheduled_this_month: number;
   paid_date: string | null;
+};
+
+/**
+ * Una fila del roster de una clase: un cliente agendado a (actividad, horario),
+ * con su suscripción activa y su asistencia ya registrada (si la hay).
+ */
+export type ClassRosterRow = {
+  appointment_id: string;
+  appointment_status: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  /** NULL si el cliente no tiene suscripción activa a esta actividad */
+  subscription_id: string | null;
+  subscription_status: string | null;
+  /** NULL si todavía no se registró nada para esa clase */
+  attended: boolean | null;
+  class_date: string;
 };
 
 /**
@@ -235,7 +255,8 @@ export class TrainingSubscriptionsRepository {
         ts.monthly_amount,
         ts.status,
         ts.notes,
-        COALESCE(att.attendance_count, 0)::int AS attendance_this_month,
+        COALESCE(att.attended_count, 0)::int AS attended_this_month,
+        COALESCE(sch.scheduled_count, 0)::int AS scheduled_this_month,
         sbc.payment_date AS paid_date
       FROM training_subscriptions ts
       JOIN activities a ON a.id = ts.activity_id
@@ -245,15 +266,29 @@ export class TrainingSubscriptionsRepository {
       LEFT JOIN customers cu ON cu.id = ts.customer_id
       LEFT JOIN contacts ct ON ct.id = cu.contact_id
       CROSS JOIN current_month cm
+      -- Asistencias REALES del mes. Única fuente de verdad: lo que el admin
+      -- tildó desde la Agenda (activity_attendance.attended = true). Se cuenta
+      -- por subscription_id, que es la clave de esa tabla.
       LEFT JOIN LATERAL (
-        SELECT COUNT(*)::int AS attendance_count
+        SELECT COUNT(*)::int AS attended_count
+        FROM activity_attendance aa
+        WHERE aa.subscription_id = ts.id
+          AND aa.attended = true
+          AND aa.class_date >= cm.month_start
+          AND aa.class_date < cm.month_end
+      ) att ON true
+      -- Clases AGENDADAS vigentes del mes: consumen cupo del plan aunque
+      -- todavía no hayan ocurrido. Los turnos cancelados quedan fuera (status
+      -- deja de ser 'scheduled'), así que cancelar devuelve el cupo.
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS scheduled_count
         FROM appointments ap
         WHERE ap.customer_id = ts.customer_id
           AND ap.activity_id = ts.activity_id
           AND ap.status = 'scheduled'
           AND ap.appointment_start >= cm.month_start
           AND ap.appointment_start < cm.month_end
-      ) att ON true
+      ) sch ON true
       LEFT JOIN subscription_billing_cycles sbc
         ON sbc.training_subscription_id = ts.id
         AND sbc.billing_month = cm.billing_month
@@ -274,6 +309,88 @@ export class TrainingSubscriptionsRepository {
   async getByIdWithAttendance(id: string): Promise<SubscriptionWithAttendanceRow | null> {
     const rows = await this.listWithAttendance({ id });
     return rows[0] || null;
+  }
+
+  /**
+   * Lista de clientes de una clase concreta, con su estado de asistencia.
+   *
+   * En este modelo `appointments.customer_id` es UNO solo, así que una actividad
+   * grupal son N turnos distintos con el mismo `activity_id` y el mismo
+   * `appointment_start`. Por eso la clase se identifica por (actividad, horario)
+   * y no por un appointment id.
+   *
+   * `subscription_id` puede venir NULL: alguien puede estar agendado a la clase
+   * sin suscripción activa (turno suelto). Esos casos no se pueden tildar,
+   * porque activity_attendance cuelga de la suscripción — la capa de servicio
+   * lo marca como no tildable en vez de romper.
+   *
+   * @param activityId Actividad de la clase
+   * @param startsAt Timestamp exacto de inicio (ISO)
+   */
+  async getClassRoster(
+    activityId: string,
+    startsAt: string
+  ): Promise<ClassRosterRow[]> {
+    const db = this.getDb();
+
+    const rows = await db.execute<ClassRosterRow>(sql`
+      SELECT
+        ap.id           AS appointment_id,
+        ap.status       AS appointment_status,
+        ap.customer_id,
+        ct.name         AS customer_name,
+        ts.id           AS subscription_id,
+        ts.status       AS subscription_status,
+        aa.attended     AS attended,
+        (ap.appointment_start AT TIME ZONE 'UTC')::date AS class_date
+      FROM appointments ap
+      LEFT JOIN customers cu ON cu.id = ap.customer_id
+      LEFT JOIN contacts ct ON ct.id = cu.contact_id
+      LEFT JOIN training_subscriptions ts
+        ON ts.customer_id = ap.customer_id
+       AND ts.activity_id = ap.activity_id
+       AND ts.status = 'active'
+      LEFT JOIN activity_attendance aa
+        ON aa.subscription_id = ts.id
+       AND aa.class_date = (ap.appointment_start AT TIME ZONE 'UTC')::date
+      WHERE ap.activity_id = ${activityId}
+        AND ap.appointment_start = ${startsAt}
+        AND ap.status <> 'cancelled'
+      ORDER BY ct.name NULLS LAST
+    `);
+
+    return rows as unknown as ClassRosterRow[];
+  }
+
+  /**
+   * Marca (o desmarca) la asistencia de varias suscripciones a una misma fecha
+   * de clase, en una sola sentencia.
+   *
+   * Upsert vía el UNIQUE (subscription_id, class_date) que crea la migración
+   * 1.23.0: guardar el mismo modal dos veces actualiza, no duplica — si no, el
+   * contador de asistencias del mes contaría de más.
+   */
+  async upsertAttendance(
+    activityId: string,
+    classDate: string,
+    entries: { subscriptionId: string; attended: boolean }[]
+  ): Promise<void> {
+    if (entries.length === 0) return;
+    const db = this.getDb();
+
+    const values = entries.map(
+      (e) =>
+        sql`(gen_random_uuid(), ${e.subscriptionId}::uuid, ${activityId}::uuid, ${classDate}::date, ${e.attended})`
+    );
+
+    await db.execute(sql`
+      INSERT INTO activity_attendance
+        (id, subscription_id, activity_id, class_date, attended)
+      VALUES ${sql.join(values, sql`, `)}
+      ON CONFLICT (subscription_id, class_date) DO UPDATE
+        SET attended = EXCLUDED.attended,
+            updated_at = now()
+    `);
   }
 
   /**

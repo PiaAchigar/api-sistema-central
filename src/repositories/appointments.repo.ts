@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, not, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
+  activities,
   appointments,
   contacts,
   customers,
@@ -149,6 +150,11 @@ export async function listAppointmentsByRange(
       providerName: serviceProviders.fullName,
       machineId: appointments.machineId,
       machineName: machines.name,
+      // Necesarios para que la Agenda distinga un turno de ACTIVIDAD y pueda
+      // abrir el modal de asistencias (ver GET /api/class-attendance).
+      activityId: appointments.activityId,
+      activityName: activities.name,
+      activityType: activities.activityType,
     })
     .from(appointments)
     .leftJoin(customers, eq(customers.id, appointments.customerId))
@@ -156,6 +162,7 @@ export async function listAppointmentsByRange(
     .leftJoin(service, eq(service.id, appointments.serviceId))
     .leftJoin(serviceProviders, eq(serviceProviders.id, appointments.serviceProviderId))
     .leftJoin(machines, eq(machines.id, appointments.machineId))
+    .leftJoin(activities, eq(activities.id, appointments.activityId))
     .where(and(...conditions))
     .orderBy(asc(appointments.appointmentStart));
 }
@@ -189,6 +196,11 @@ export async function getAppointmentDetail(db: Db, id: string) {
       providerName: serviceProviders.fullName,
       machineId: appointments.machineId,
       machineName: machines.name,
+      // Necesarios para que la Agenda distinga un turno de ACTIVIDAD y pueda
+      // abrir el modal de asistencias (ver GET /api/class-attendance).
+      activityId: appointments.activityId,
+      activityName: activities.name,
+      activityType: activities.activityType,
     })
     .from(appointments)
     .leftJoin(customers, eq(customers.id, appointments.customerId))
@@ -196,6 +208,7 @@ export async function getAppointmentDetail(db: Db, id: string) {
     .leftJoin(service, eq(service.id, appointments.serviceId))
     .leftJoin(serviceProviders, eq(serviceProviders.id, appointments.serviceProviderId))
     .leftJoin(machines, eq(machines.id, appointments.machineId))
+    .leftJoin(activities, eq(activities.id, appointments.activityId))
     .where(eq(appointments.id, id))
     .limit(1);
   return rows[0] ?? null;
