@@ -43,7 +43,11 @@ export class ActivitiesRepository {
     monthlyBasePrice: number | string;
   }) {
     const db = this.getDb();
-    const now = new Date().toISOString();
+    // created_at/updated_at son columnas `timestamp` en modo Date: Drizzle
+    // llama .toISOString() sobre el valor, así que tiene que ser un Date.
+    // Pasarle el string ISO reventaba con "value.toISOString is not a function"
+    // y el alta de actividades devolvía 500. El `as any` lo tapaba en compilación.
+    const now = new Date();
     const rows = await db
       .insert(activities)
       .values({
@@ -58,8 +62,8 @@ export class ActivitiesRepository {
             ? data.monthlyBasePrice
             : String(data.monthlyBasePrice),
         isActive: true,
-        createdAt: now as any,
-        updatedAt: now as any,
+        createdAt: now,
+        updatedAt: now,
       })
       .returning();
 
@@ -136,7 +140,7 @@ export class ActivitiesRepository {
           ? data.monthlyBasePrice
           : String(data.monthlyBasePrice);
     }
-    updateData.updatedAt = new Date().toISOString();
+    updateData.updatedAt = new Date();
 
     const rows = await db
       .update(activities)
@@ -156,7 +160,7 @@ export class ActivitiesRepository {
     const db = this.getDb();
     const rows = await db
       .update(activities)
-      .set({ isActive: false, updatedAt: new Date().toISOString() as any })
+      .set({ isActive: false, updatedAt: new Date() })
       .where(eq(activities.id, id))
       .returning();
 

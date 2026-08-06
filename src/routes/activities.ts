@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
+import { zv } from "../lib/validator";
 import { AppError } from "../lib/errors";
 import { activitiesService } from "../services/activitiesService";
 import type { AppBindings, Variables } from "../env";
@@ -74,7 +74,7 @@ activitiesRouter.get("/activities/:id", async (c) => {
  */
 activitiesRouter.post(
   "/activities",
-  zValidator(
+  zv(
     "json",
     z.object({
       name: z.string().min(1, "Activity name is required"),
@@ -148,7 +148,7 @@ activitiesRouter.post(
  */
 activitiesRouter.patch(
   "/activities/:id",
-  zValidator(
+  zv(
     "json",
     z.object({
       name: z.string().min(1).optional(),

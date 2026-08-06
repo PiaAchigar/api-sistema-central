@@ -48,6 +48,7 @@ import {
   listExceptions,
   listSaturdaySchedule,
   listWeeklyAvailability,
+  listWeeklyAvailabilityForAllProviders,
   setWeeklyAvailability,
 } from "../../repositories/provider-availability.repo";
 import { localDayRangeUtc, todayLocal } from "../../lib/time";
@@ -504,6 +505,28 @@ const weeklyRowSchema = z.object({
   workStartTime: z.string().regex(/^\d{2}:\d{2}$/),
   workEndTime: z.string().regex(/^\d{2}:\d{2}$/),
 });
+
+/**
+ * GET /api/agenda/providers/availability/weekly
+ * Horario semanal de todas las proveedoras, indexado por su id.
+ *
+ * Lo consume el selector de profe al crear/editar una Actividad: hay que ver
+ * los horarios de todas juntos para elegir, y pedirlos de a uno serían tantos
+ * requests como proveedoras.
+ *
+ * Va ANTES que "/:id/availability/weekly" por claridad; no compiten igual,
+ * porque tienen distinta cantidad de segmentos.
+ */
+providersRouter.get(
+  "/availability/weekly",
+  auth,
+  requireAuth,
+  requirePermission("proveedoras", "view"),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json(await listWeeklyAvailabilityForAllProviders(db));
+  },
+);
 
 providersRouter.get(
   "/:id/availability/weekly",

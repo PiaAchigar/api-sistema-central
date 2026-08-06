@@ -70,6 +70,51 @@ export async function listWeeklyAvailability(db: Tx, providerId: string) {
   }));
 }
 
+/**
+ * Horario semanal de TODAS las proveedoras activas, en una sola consulta.
+ *
+ * La variante por proveedora (`listWeeklyAvailability`) sirve para su ficha,
+ * pero al elegir la profe de una Actividad hay que ver los horarios de todas
+ * juntos para comparar — con una llamada por proveedora serían 14 requests
+ * sólo para pintar un selector.
+ */
+export async function listWeeklyAvailabilityForAllProviders(db: Tx) {
+  const rows = await db
+    .select({
+      serviceProviderId: serviceProviderAvailability.serviceProviderId,
+      dayOfWeek: serviceProviderAvailability.dayOfWeek,
+      workStartTime: serviceProviderAvailability.workStartTime,
+      workEndTime: serviceProviderAvailability.workEndTime,
+    })
+    .from(serviceProviderAvailability)
+    .where(eq(serviceProviderAvailability.isActive, true))
+    .orderBy(
+      asc(serviceProviderAvailability.serviceProviderId),
+      asc(serviceProviderAvailability.dayOfWeek),
+      asc(serviceProviderAvailability.workStartTime),
+    );
+
+  // Agrupado por proveedora: es como lo consume el selector, y así el front no
+  // tiene que rearmar el índice.
+  const byProvider = new Map<
+    string,
+    { dayOfWeek: number; workStartTime: string; workEndTime: string }[]
+  >();
+  for (const r of rows) {
+    const providerId = r.serviceProviderId as string;
+    if (!providerId) continue;
+    const list = byProvider.get(providerId) ?? [];
+    list.push({
+      dayOfWeek: r.dayOfWeek as number,
+      workStartTime: r.workStartTime as string,
+      workEndTime: r.workEndTime as string,
+    });
+    byProvider.set(providerId, list);
+  }
+
+  return Object.fromEntries(byProvider);
+}
+
 /** Reconcilia el horario semanal respetando §1.4 (cerrar viejo + crear nuevo).
  *  Transaccional junto con el audit log: si falla el audit, se revierte todo. */
 export async function setWeeklyAvailability(
