@@ -44,6 +44,50 @@ trainingSubscriptionsRouter.get("/training-subscriptions", async (c) => {
 });
 
 /**
+ * GET /api/training-subscriptions/admin/list
+ * List subscriptions with current-month attendance for the admin panel
+ *
+ * Query params (all optional):
+ * - activityId: string (UUID) — filter by activity
+ * - status: "active" | "paused" | "cancelled" — filter by subscription status
+ * - paidStatus: "paid" | "pending" | "overdue" — filter by current-month payment status
+ */
+trainingSubscriptionsRouter.get(
+  "/training-subscriptions/admin/list",
+  zValidator(
+    "query",
+    z.object({
+      activityId: z.string().uuid("activityId must be a valid UUID").optional(),
+      status: z.enum(["active", "paused", "cancelled"]).optional(),
+      paidStatus: z.enum(["paid", "pending", "overdue"]).optional(),
+    })
+  ),
+  async (c) => {
+    try {
+      const filters = c.req.valid("query");
+      const subscriptions = await trainingSubscriptionsService.listSubscriptionsWithAttendance(
+        filters
+      );
+      return c.json({
+        success: true,
+        data: subscriptions,
+      });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return c.json(
+          {
+            success: false,
+            error: err.message,
+          },
+          err.status
+        );
+      }
+      throw err;
+    }
+  }
+);
+
+/**
  * GET /api/training-subscriptions/:id
  * Get a single subscription by ID
  */

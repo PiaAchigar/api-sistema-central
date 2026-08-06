@@ -3,7 +3,32 @@ import { activitiesService } from "./activitiesService";
 import { eq } from "drizzle-orm";
 import { customers } from "../db/schema/crm";
 import type { Db } from "../db/client";
-import type { TrainingSubscriptionsRepository } from "../repositories/trainingSubscriptionsRepository";
+import type {
+  TrainingSubscriptionsRepository,
+  SubscriptionWithAttendanceRow,
+} from "../repositories/trainingSubscriptionsRepository";
+
+/**
+ * Subscription row enriched with this-month attendance and payment status,
+ * used by the admin panel (GET /api/training-subscriptions/admin/list)
+ */
+export interface SubscriptionWithAttendance {
+  id: string;
+  customerId: string;
+  activityId: string;
+  activityName: string;
+  activityType: "class" | "machine";
+  classesPerMonth: number;
+  subscriptionStartDate: string;
+  subscriptionEndDate: string | null;
+  monthlyAmount: number;
+  status: "active" | "paused" | "cancelled";
+  notes: string | null;
+  attendanceThisMonth: number;
+  classesRemainingThisMonth: number;
+  paidDate: string | null;
+  paidStatus: "paid" | "pending" | "overdue";
+}
 
 /**
  * TrainingSubscriptionsService — Business logic layer for training subscriptions
@@ -290,6 +315,91 @@ export class TrainingSubscriptionsService {
       attendedCount: attended,
       records: attendance,
     };
+  }
+
+  /**
+   * List subscriptions with current-month attendance for the admin panel
+   * @param filters Optional filters: activityId, status, paidStatus
+   * @returns Array of subscriptions enriched with attendance/payment info
+   */
+  async listSubscriptionsWithAttendance(filters: {
+    activityId?: string;
+    status?: "active" | "paused" | "cancelled";
+    paidStatus?: "paid" | "pending" | "overdue";
+  }): Promise<SubscriptionWithAttendance[]> {
+    const rows = await this.repository.listWithAttendance(filters);
+    return rows.map((row) => this.toSubscriptionWithAttendance(row));
+  }
+
+  /**
+   * Map a raw SQL row (snake_case) to the SubscriptionWithAttendance shape,
+   * computing classesRemainingThisMonth and paidStatus along the way.
+   */
+  private toSubscriptionWithAttendance(
+    row: SubscriptionWithAttendanceRow
+  ): SubscriptionWithAttendance {
+    const activityType = row.activity_type as "class" | "machine";
+    const classesPerMonth = Number(row.classes_per_month) || 0;
+    const attendanceThisMonth = Number(row.attendance_this_month) || 0;
+
+    // Machine-based activities have no monthly class quota
+    const classesRemainingThisMonth =
+      activityType === "machine"
+        ? 0
+        : Math.max(0, classesPerMonth - attendanceThisMonth);
+
+    const paidDate = this.formatDateOnly(row.paid_date);
+
+    return {
+      id: row.id,
+      customerId: row.customer_id,
+      activityId: row.activity_id,
+      activityName: row.activity_name,
+      activityType,
+      classesPerMonth,
+      subscriptionStartDate: this.formatDateOnly(row.subscription_start_date) as string,
+      subscriptionEndDate: this.formatDateOnly(row.subscription_end_date),
+      monthlyAmount: Number(row.monthly_amount),
+      status: row.status as "active" | "paused" | "cancelled",
+      notes: row.notes,
+      attendanceThisMonth,
+      classesRemainingThisMonth,
+      paidDate,
+      paidStatus: this.computePaidStatus(paidDate),
+    };
+  }
+
+  /**
+   * paidStatus logic:
+   * - "paid": paidDate is set (subscription_billing_cycles.payment_date != null)
+   * - "pending": no paidDate yet and today (UTC) is on/before the 10th
+   * - "overdue": no paidDate and today (UTC) is past the 10th
+   *
+   * Kept in sync with the equivalent CASE expression used for SQL-side
+   * filtering in TrainingSubscriptionsRepository.listWithAttendance.
+   */
+  private computePaidStatus(paidDate: string | null): "paid" | "pending" | "overdue" {
+    if (paidDate) return "paid";
+    const currentDay = new Date().getUTCDate();
+    return currentDay > 10 ? "overdue" : "pending";
+  }
+
+  /**
+   * Normalize a Postgres date/timestamp value (which may arrive as a Date
+   * object, a "T"-separated ISO string, or — as raw rows from db.execute()
+   * do for `timestamp` columns like payment_date — a space-separated
+   * "YYYY-MM-DD HH:mm:ss.ffffff" string) to a plain YYYY-MM-DD string.
+   */
+  private formatDateOnly(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    if (value instanceof Date) {
+      return value.toISOString().split("T")[0] || null;
+    }
+    if (typeof value === "string") {
+      const match = value.match(/^\d{4}-\d{2}-\d{2}/);
+      return match ? match[0] : value;
+    }
+    return String(value);
   }
 }
 
