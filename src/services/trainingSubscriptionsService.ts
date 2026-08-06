@@ -108,7 +108,9 @@ export class TrainingSubscriptionsService {
         .limit(1);
 
       if (!customer || customer.length === 0) {
-        throw notFound("Customer not found");
+        // notFound() ya agrega " not found" — pasarle la frase entera daba
+        // "Customer not found not found" en pantalla.
+        throw notFound("Customer");
       }
     } catch (err) {
       if (err instanceof Error && err.message.includes("not found")) {
@@ -177,22 +179,21 @@ export class TrainingSubscriptionsService {
       throw badRequest("Activity not found or inactive");
     }
 
-    // Validate activity type constraints:
-    // - If 'class': must have classesPerMonth > 0
-    // - If 'machine': must have classesPerMonth = 0
-    try {
-      activitiesService.validateActivityType(
-        activity.activityType as "class" | "machine",
-        activity.classesPerMonth || 0,
-        activity.serviceProviderId
-      );
-    } catch (err) {
-      throw badRequest(
-        `Activity "${activity.name}" does not meet subscription requirements: ${
-          err instanceof Error ? err.message : String(err)
-        }`
-      );
-    }
+    // NO se valida acá la integridad del catálogo (validateActivityType).
+    // Esa regla — 'class' exige service_provider_id y classes_per_month > 0,
+    // 'machine' exige classes_per_month = 0 — describe cómo tiene que estar
+    // configurada una ACTIVIDAD, y su lugar es el alta/edición de la actividad
+    // y de sus horarios, donde activitiesService ya la aplica.
+    //
+    // Corriéndola acá, una actividad del catálogo mal configurada bloqueaba
+    // suscribir clientes, que es una operación sin relación: en producción
+    // ninguna de las 13 actividades tiene prestadora asignada, así que
+    // rechazaba TODA suscripción a una actividad de tipo 'class'. Un problema
+    // de configuración del catálogo tiene que verse y arreglarse en la pantalla
+    // de Actividades, no aparecer como un error al dar de alta a una clienta.
+    //
+    // Para suscribir alcanza con que la actividad exista y esté activa, que es
+    // lo que ya garantiza getActivity() arriba.
 
     // Validate monthlyAmount is positive
     const amount = typeof data.monthlyAmount === "string"
