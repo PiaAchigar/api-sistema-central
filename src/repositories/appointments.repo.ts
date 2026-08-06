@@ -155,6 +155,7 @@ export async function listAppointmentsByRange(
       activityId: appointments.activityId,
       activityName: activities.name,
       activityType: activities.activityType,
+      trainingSessionId: appointments.trainingSessionId,
     })
     .from(appointments)
     .leftJoin(customers, eq(customers.id, appointments.customerId))
@@ -201,6 +202,7 @@ export async function getAppointmentDetail(db: Db, id: string) {
       activityId: appointments.activityId,
       activityName: activities.name,
       activityType: activities.activityType,
+      trainingSessionId: appointments.trainingSessionId,
     })
     .from(appointments)
     .leftJoin(customers, eq(customers.id, appointments.customerId))

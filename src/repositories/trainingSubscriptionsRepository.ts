@@ -1,5 +1,6 @@
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
+import { todayLocal } from "../lib/time";
 import {
   trainingSubscriptions,
   activityAttendance,
@@ -226,7 +227,8 @@ export class TrainingSubscriptionsRepository {
       conditions.push(sql`
         (CASE
           WHEN sbc.payment_date IS NOT NULL THEN 'paid'
-          WHEN EXTRACT(DAY FROM (now() AT TIME ZONE 'UTC')) > 10 THEN 'overdue'
+          WHEN EXTRACT(DAY FROM (now() AT TIME ZONE 'America/Argentina/Buenos_Aires')) > 10
+            THEN 'overdue'
           ELSE 'pending'
         END) = ${filters.paidStatus}
       `);
@@ -236,11 +238,17 @@ export class TrainingSubscriptionsRepository {
       conditions.length > 0 ? sql`WHERE ${sql.join(conditions, sql` AND `)}` : sql``;
 
     const rows = await db.execute<SubscriptionWithAttendanceRow>(sql`
+      -- El mes se recorta en hora LOCAL del negocio (ART, -03:00), no en UTC.
+      -- Con UTC, una clase del 31/8 a las 21:00 ART (= 1/9 00:00 UTC) caía en
+      -- septiembre y el cupo del mes daba mal. Ver src/lib/time.ts.
       WITH current_month AS (
         SELECT
-          date_trunc('month', (now() AT TIME ZONE 'UTC'))::date AS month_start,
-          (date_trunc('month', (now() AT TIME ZONE 'UTC')) + INTERVAL '1 month')::date AS month_end,
-          to_char((now() AT TIME ZONE 'UTC'), 'YYYY-MM') AS billing_month
+          date_trunc('month', (now() AT TIME ZONE 'America/Argentina/Buenos_Aires'))::date
+            AS month_start,
+          (date_trunc('month', (now() AT TIME ZONE 'America/Argentina/Buenos_Aires'))
+            + INTERVAL '1 month')::date AS month_end,
+          to_char((now() AT TIME ZONE 'America/Argentina/Buenos_Aires'), 'YYYY-MM')
+            AS billing_month
       )
       SELECT
         ts.id,
@@ -286,8 +294,12 @@ export class TrainingSubscriptionsRepository {
         WHERE ap.customer_id = ts.customer_id
           AND ap.activity_id = ts.activity_id
           AND ap.status = 'scheduled'
-          AND ap.appointment_start >= cm.month_start
-          AND ap.appointment_start < cm.month_end
+          -- appointment_start guarda UTC; el corte del mes es local, así que
+          -- se lleva el turno a hora local antes de compararlo.
+          AND (ap.appointment_start AT TIME ZONE 'UTC'
+                AT TIME ZONE 'America/Argentina/Buenos_Aires')::date >= cm.month_start
+          AND (ap.appointment_start AT TIME ZONE 'UTC'
+                AT TIME ZONE 'America/Argentina/Buenos_Aires')::date < cm.month_end
       ) sch ON true
       LEFT JOIN subscription_billing_cycles sbc
         ON sbc.training_subscription_id = ts.id
@@ -342,7 +354,10 @@ export class TrainingSubscriptionsRepository {
         ts.id           AS subscription_id,
         ts.status       AS subscription_status,
         aa.attended     AS attended,
-        (ap.appointment_start AT TIME ZONE 'UTC')::date AS class_date
+        -- Fecha LOCAL de la clase: una clase del 31/8 a las 21:00 ART es
+        -- 1/9 en UTC, y quedaría registrada en el día equivocado.
+        (ap.appointment_start AT TIME ZONE 'UTC'
+          AT TIME ZONE 'America/Argentina/Buenos_Aires')::date AS class_date
       FROM appointments ap
       LEFT JOIN customers cu ON cu.id = ap.customer_id
       LEFT JOIN contacts ct ON ct.id = cu.contact_id
@@ -352,7 +367,8 @@ export class TrainingSubscriptionsRepository {
        AND ts.status = 'active'
       LEFT JOIN activity_attendance aa
         ON aa.subscription_id = ts.id
-       AND aa.class_date = (ap.appointment_start AT TIME ZONE 'UTC')::date
+       AND aa.class_date = (ap.appointment_start AT TIME ZONE 'UTC'
+             AT TIME ZONE 'America/Argentina/Buenos_Aires')::date
       WHERE ap.activity_id = ${activityId}
         AND ap.appointment_start = ${startsAt}
         AND ap.status <> 'cancelled'
@@ -415,14 +431,16 @@ export class TrainingSubscriptionsRepository {
     const db = this.getDb();
 
     const now = new Date();
-    const billingMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+    // El mes de facturación se decide en hora LOCAL del negocio: el 31/8 a las
+    // 22:00 ART ya es 1/9 en UTC, y con getUTCMonth() el pago se habría
+    // imputado a septiembre. Ver src/lib/time.ts.
+    const [year, month] = todayLocal().split("-").map(Number);
+    const billingMonth = `${year}-${String(month).padStart(2, "0")}`;
     const billingPeriodStart = `${billingMonth}-01`;
     // El período de facturación es el mes calendario completo (1 al 28/29/30/31).
     // El día 10 es el vencimiento de gracia para el pago, NO el fin del período:
     // no confundirlos. Día 0 del mes siguiente = último día de este mes.
-    const lastDayOfMonth = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)
-    ).getUTCDate();
+    const lastDayOfMonth = new Date(Date.UTC(year!, month!, 0)).getUTCDate();
     const billingPeriodEnd = `${billingMonth}-${String(lastDayOfMonth).padStart(2, "0")}`;
     const isPaid = paymentDate !== null;
     // payment_date/created_at/updated_at are `timestamp` columns in default (Date) mode —

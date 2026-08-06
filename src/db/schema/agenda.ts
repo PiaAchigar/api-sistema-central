@@ -249,6 +249,7 @@ export const appointments = pgTable("appointments", {
   serviceId: uuid("service_id"),
   dealId: uuid("deal_id"),
   activityId: uuid("activity_id"), // For activity-based bookings (Pilates, Thermo Bike)
+  trainingSessionId: uuid("training_session_id"), // Inscripción a un encuentro de capacitación (1.24.0)
   appointmentStart: timestamp("appointment_start"),
   appointmentEnd: timestamp("appointment_end"),
   durationMinutes: integer("duration_minutes"),
@@ -364,10 +365,34 @@ export const activitySchedules = pgTable("activity_schedules", {
   activityId: uuid("activity_id"),
   machineId: uuid("machine_id"), // Nullable; solo para machine-based activities
   dayOfWeek: integer("day_of_week"), // 0=Domingo, ..., 6=Sábado
-  startTime: time("start_time"),
+  startTime: time("start_time"), // Hora LOCAL del negocio (ART) — ver src/lib/time.ts
   endTime: time("end_time"),
   validFrom: date("valid_from"),
   validUntil: date("valid_until"),
+  // Cupo de ESTE horario (1.24.0). NULL = sin límite declarado.
+  capacity: integer("capacity"),
+  isActive: boolean("is_active").default(true),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+// Sesiones fechadas de una capacitación — Migración 1.24.0
+// TRAINING sabía cuántos encuentros tiene una capacitación (total_sessions) pero
+// no CUÁNDO se dictan. A diferencia de activitySchedules (patrón semanal
+// recurrente), acá cada fila es una fecha concreta: una capacitación es un
+// evento fechado, no un patrón que se repite todas las semanas.
+export const trainingSessions = pgTable("training_sessions", {
+  id: id(),
+  trainingId: uuid("training_id"),
+  serviceProviderId: uuid("service_provider_id"),
+  sessionNumber: integer("session_number").default(1),
+  sessionDate: date("session_date"),
+  startTime: time("start_time"), // Hora LOCAL del negocio (ART)
+  endTime: time("end_time"),
+  location: varchar("location", { length: 255 }),
+  // NULL = se cae al training.max_participants del catálogo
+  capacity: integer("capacity"),
+  notes: text("notes"),
   isActive: boolean("is_active").default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),

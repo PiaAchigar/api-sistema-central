@@ -1,4 +1,5 @@
 import { notFound, badRequest, conflict } from "../lib/errors";
+import { todayLocal } from "../lib/time";
 import { activitiesService } from "./activitiesService";
 import { eq } from "drizzle-orm";
 import { customers } from "../db/schema/crm";
@@ -605,7 +606,9 @@ export class TrainingSubscriptionsService {
    */
   private computePaidStatus(paidDate: string | null): "paid" | "pending" | "overdue" {
     if (paidDate) return "paid";
-    const currentDay = new Date().getUTCDate();
+    // Día del mes en hora LOCAL del negocio: entre las 21:00 y las 24:00 ART,
+    // getUTCDate() ya devuelve el día siguiente y el 10 se adelantaba tres horas.
+    const currentDay = Number(todayLocal().split("-")[2]);
     return currentDay > 10 ? "overdue" : "pending";
   }
 
