@@ -1,5 +1,5 @@
 import { notFound, badRequest, conflict } from "../lib/errors";
-import { todayLocal } from "../lib/time";
+import { todayLocal, utcToLocalDateString } from "../lib/time";
 import { activitiesService } from "./activitiesService";
 import { eq } from "drizzle-orm";
 import { customers } from "../db/schema/crm";
@@ -622,7 +622,9 @@ export class TrainingSubscriptionsService {
   private formatDateOnly(value: unknown): string | null {
     if (value === null || value === undefined) return null;
     if (value instanceof Date) {
-      return value.toISOString().split("T")[0] || null;
+      // En hora LOCAL del negocio: un pago hecho a las 22:00 ART es un instante
+      // UTC del día siguiente, y en UTC se mostraría con fecha de mañana.
+      return utcToLocalDateString(value);
     }
     if (typeof value === "string") {
       const match = value.match(/^\d{4}-\d{2}-\d{2}/);

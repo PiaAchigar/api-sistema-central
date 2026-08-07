@@ -1,6 +1,7 @@
 import type { Db } from "../db/client";
 import type { AppBindings } from "../env";
 import { conflict, notFound } from "../lib/errors";
+import { utcToLocalDateString } from "../lib/time";
 import { companyConfig } from "../db/schema";
 import {
   getArcaLogsForInvoice,
@@ -91,9 +92,9 @@ export async function generateInvoicePdf(db: Db, env: AppBindings, invoiceId: st
   return createPdfViaAfipSdk(creds.sdkToken, creds.production, html, fileName);
 }
 
+/** Fecha local Argentina (YYYY-MM-DD) — misma conversión que el resto del sistema. */
 function formatDateIso(d: Date): string {
-  const ar = new Date(d.getTime() - 3 * 60 * 60 * 1000);
-  return ar.toISOString().slice(0, 10);
+  return utcToLocalDateString(d);
 }
 
 function escapeHtml(s: string): string {

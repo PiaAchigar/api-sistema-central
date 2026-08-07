@@ -44,7 +44,10 @@ export class ActivitySchedulesRepository {
     validUntil?: string | null;
   }) {
     const db = this.getDb();
-    const now = new Date().toISOString();
+    // createdAt/updatedAt son `timestamp()` en modo Date: drizzle les llama
+    // .toISOString() al mapear, así que un string ISO revienta con
+    // "value.toISOString is not a function". Tiene que ser un Date.
+    const now = new Date();
     const rows = await db
       .insert(activitySchedules)
       .values({
@@ -52,13 +55,15 @@ export class ActivitySchedulesRepository {
         activityId: data.activityId,
         machineId: data.machineId || null,
         dayOfWeek: data.dayOfWeek,
-        startTime: data.startTime as any,
-        endTime: data.endTime as any,
-        validFrom: data.validFrom as any,
-        validUntil: data.validUntil as any,
+        // startTime/endTime son `time` y validFrom/validUntil `date`: columnas
+        // de string, reciben "HH:MM" y "YYYY-MM-DD" en hora LOCAL del negocio.
+        startTime: data.startTime,
+        endTime: data.endTime,
+        validFrom: data.validFrom ?? null,
+        validUntil: data.validUntil ?? null,
         isActive: true,
-        createdAt: now as any,
-        updatedAt: now as any,
+        createdAt: now,
+        updatedAt: now,
       })
       .returning();
 
@@ -125,7 +130,7 @@ export class ActivitySchedulesRepository {
     if (data.endTime !== undefined) updateData.endTime = data.endTime;
     if (data.validFrom !== undefined) updateData.validFrom = data.validFrom;
     if (data.validUntil !== undefined) updateData.validUntil = data.validUntil;
-    updateData.updatedAt = new Date().toISOString();
+    updateData.updatedAt = new Date();
 
     const rows = await db
       .update(activitySchedules)
@@ -145,7 +150,7 @@ export class ActivitySchedulesRepository {
     const db = this.getDb();
     const rows = await db
       .update(activitySchedules)
-      .set({ isActive: false, updatedAt: new Date().toISOString() as any })
+      .set({ isActive: false, updatedAt: new Date() })
       .where(eq(activitySchedules.id, id))
       .returning();
 

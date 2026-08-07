@@ -2,12 +2,15 @@ import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { promotions, promotionService, service, serviceProviders } from "../db/schema";
 import { applyDiscount } from "../lib/promo-pricing";
+import { todayLocal } from "../lib/time";
 
 export async function listActivePromotions(
   db: Db,
   filters: { featured?: boolean } = {},
 ) {
-  const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+  // Hoy en hora LOCAL del negocio: en UTC, entre las 21:00 y las 24:00 ART ya
+  // es mañana, y una promo que vence hoy desaparecía tres horas antes de tiempo.
+  const today = todayLocal();
 
   const conditions = [
     eq(promotions.status, "active"),

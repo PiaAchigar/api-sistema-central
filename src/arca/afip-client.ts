@@ -4,6 +4,7 @@ import type {
   ArcaEmitRequest,
   ArcaEmitResult,
 } from "./types";
+import { utcToLocalDateString } from "../lib/time";
 
 const AFIP_SDK_BASE_URL = "https://app.afipsdk.com/api/v1";
 
@@ -312,10 +313,9 @@ function toMsgList(node: unknown): string | undefined {
   return msgs.length ? msgs.join("; ") : undefined;
 }
 
-/** Fecha local Argentina (UTC-3) en formato YYYYMMDD que exige WSFE. */
+/** Fecha local Argentina en formato YYYYMMDD que exige WSFE. */
 function formatDate(d: Date): string {
-  const ar = new Date(d.getTime() - 3 * 60 * 60 * 1000);
-  return ar.toISOString().slice(0, 10).replace(/-/g, "");
+  return utcToLocalDateString(d).replace(/-/g, "");
 }
 
 function parseAfipDate(yyyymmdd: string): Date {
