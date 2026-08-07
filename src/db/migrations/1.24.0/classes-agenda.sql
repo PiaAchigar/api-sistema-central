@@ -26,6 +26,11 @@
 ALTER TABLE activity_schedules
   ADD COLUMN IF NOT EXISTS capacity INTEGER;
 
+-- DROP + ADD en vez de ADD solo: ADD CONSTRAINT no admite IF NOT EXISTS, así
+-- que re-correr la migración abortaba con 42710 "constraint already exists".
+ALTER TABLE activity_schedules
+  DROP CONSTRAINT IF EXISTS chk_activity_schedules_capacity_positive;
+
 ALTER TABLE activity_schedules
   ADD CONSTRAINT chk_activity_schedules_capacity_positive
   CHECK (capacity IS NULL OR capacity > 0);
