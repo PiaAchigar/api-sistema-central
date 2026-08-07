@@ -171,6 +171,25 @@ export class ActivitiesService {
   }
 
   /**
+   * Restore a soft-deleted (archived) activity
+   * @param id Activity ID
+   * @throws notFound if activity not found
+   */
+  async restoreActivity(id: string) {
+    const existing = await this.repository.getById(id);
+    if (!existing) {
+      throw notFound("Activity");
+    }
+
+    const restored = await this.repository.restore(id);
+    if (!restored) {
+      throw notFound("Activity");
+    }
+
+    return restored;
+  }
+
+  /**
    * Hard-delete an activity (permanently remove from database)
    * WARNING: This is irreversible
    * @param id Activity ID

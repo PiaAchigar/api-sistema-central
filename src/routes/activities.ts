@@ -13,7 +13,11 @@ const activitiesRouter = new Hono<{ Bindings: AppBindings; Variables: Variables 
  */
 activitiesRouter.get("/activities", async (c) => {
   try {
-    const activities = await activitiesService.listActivities(true);
+    // ?includeInactive=true trae también las archivadas, para que la pantalla
+    // de Actividades pueda mostrarlas y restaurarlas (mismo patrón que
+    // /api/agenda/services).
+    const includeInactive = c.req.query("includeInactive") === "true";
+    const activities = await activitiesService.listActivities(!includeInactive);
     return c.json({
       success: true,
       data: activities,
@@ -194,6 +198,32 @@ activitiesRouter.delete("/activities/:id", async (c) => {
     return c.json({
       success: true,
       data: deleted,
+    });
+  } catch (err) {
+    if (err instanceof AppError) {
+      return c.json(
+        {
+          success: false,
+          error: err.message,
+        },
+        err.status
+      );
+    }
+    throw err;
+  }
+});
+
+/**
+ * POST /api/activities/:id/restore
+ * Restore an archived activity (set isActive back to true)
+ */
+activitiesRouter.post("/activities/:id/restore", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const restored = await activitiesService.restoreActivity(id);
+    return c.json({
+      success: true,
+      data: restored,
     });
   } catch (err) {
     if (err instanceof AppError) {

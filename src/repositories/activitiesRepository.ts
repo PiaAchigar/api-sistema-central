@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { activities } from "../db/schema/agenda";
 
@@ -86,8 +86,13 @@ export class ActivitiesRepository {
     return rows[0] || null;
   }
 
+  // Sin ORDER BY, Postgres devuelve las filas en el orden en que las encuentra
+  // en el heap, y un UPDATE escribe una versión nueva de la fila al final: al
+  // asignarle la prestadora a una actividad, esa actividad saltaba al fondo de
+  // la lista. Ordenar por nombre hace que la pantalla sea estable y predecible.
+
   /**
-   * List all active activities (isActive = true)
+   * List all active activities (isActive = true), ordered by name
    * @returns Array of active activities
    */
   async listActive() {
@@ -95,16 +100,33 @@ export class ActivitiesRepository {
     return db
       .select()
       .from(activities)
-      .where(eq(activities.isActive, true));
+      .where(eq(activities.isActive, true))
+      .orderBy(asc(activities.name));
   }
 
   /**
-   * List all activities regardless of active status
+   * List all activities regardless of active status, ordered by name
    * @returns Array of all activities
    */
   async listAll() {
     const db = this.getDb();
-    return db.select().from(activities);
+    return db.select().from(activities).orderBy(asc(activities.name));
+  }
+
+  /**
+   * Restore a soft-deleted activity (isActive = true)
+   * @param id Activity ID
+   * @returns Updated activity record or null if not found
+   */
+  async restore(id: string) {
+    const db = this.getDb();
+    const rows = await db
+      .update(activities)
+      .set({ isActive: true, updatedAt: new Date() })
+      .where(eq(activities.id, id))
+      .returning();
+
+    return rows[0] || null;
   }
 
   /**
