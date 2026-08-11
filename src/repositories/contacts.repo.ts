@@ -4,25 +4,32 @@ import { contacts } from "../db/schema";
 
 export async function listContacts(
   db: Db,
-  filters: { status?: string; q?: string; limit: number; offset: number; includeArchived?: boolean },
+  filters: { q?: string; limit: number; offset: number; includeArchived?: boolean },
 ) {
   const conditions = [];
   if (!filters.includeArchived) conditions.push(sql`${contacts.isArchived} IS NOT TRUE`);
-  if (filters.status) conditions.push(eq(contacts.status, filters.status));
   if (filters.q) {
     const pattern = `%${filters.q}%`;
     conditions.push(
       or(ilike(contacts.name, pattern), ilike(contacts.phone, pattern), ilike(contacts.email, pattern)),
     );
   }
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
 
-  return db
-    .select()
-    .from(contacts)
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .orderBy(desc(contacts.createdAt))
-    .limit(filters.limit)
-    .offset(filters.offset);
+  // El total se cuenta con el MISMO where que la página: si contara sin filtros,
+  // el "Mostrando 1-50 de N" mentiría apenas la dueña escriba algo en el buscador.
+  const [items, totalRows] = await Promise.all([
+    db
+      .select()
+      .from(contacts)
+      .where(where)
+      .orderBy(desc(contacts.createdAt))
+      .limit(filters.limit)
+      .offset(filters.offset),
+    db.select({ n: sql<number>`count(*)::int` }).from(contacts).where(where),
+  ]);
+
+  return { items, total: totalRows[0]?.n ?? 0 };
 }
 
 export async function getContactById(db: Db, id: string) {
