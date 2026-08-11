@@ -26,6 +26,17 @@ const customerSummary = {
   email: contacts.email,
 };
 
+// Un cliente ARCHIVADO no se ofrece en ningún selector del sistema: ni para
+// agendar, ni para facturar, ni para suscribir. Estas dos funciones son el único
+// embudo — `GET /api/billing/customers` es el endpoint que consumen los cuatro
+// frontends (agenda, dashboard, facturador y CRM), así que el filtro va acá y no
+// repetido en cada pantalla.
+//
+// Las búsquedas puntuales por id (`getCustomerById`, `getCustomerByContactId`)
+// NO filtran a propósito: una factura vieja de un cliente archivado tiene que
+// seguir resolviendo su nombre. Archivar saca de las listas, no borra el pasado.
+const notArchived = sql`${contacts.isArchived} IS NOT TRUE`;
+
 export async function searchCustomers(db: Db, q: string, limit = 20) {
   const pattern = `%${q}%`;
   return db
@@ -33,10 +44,13 @@ export async function searchCustomers(db: Db, q: string, limit = 20) {
     .from(customers)
     .innerJoin(contacts, eq(contacts.id, customers.contactId))
     .where(
-      or(
-        ilike(contacts.name, pattern),
-        ilike(customers.dni, pattern),
-        ilike(contacts.phone, pattern),
+      and(
+        notArchived,
+        or(
+          ilike(contacts.name, pattern),
+          ilike(customers.dni, pattern),
+          ilike(contacts.phone, pattern),
+        ),
       ),
     )
     .limit(limit);
@@ -111,6 +125,7 @@ export async function listRecentCustomers(db: Db, limit = 20) {
     .select(customerSummary)
     .from(customers)
     .innerJoin(contacts, eq(contacts.id, customers.contactId))
+    .where(notArchived)
     .orderBy(desc(customers.createdAt))
     .limit(limit);
 }
