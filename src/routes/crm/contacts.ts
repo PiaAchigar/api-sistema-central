@@ -17,6 +17,8 @@ import {
 } from "../../repositories/customers.repo";
 import { listDealsByContactId } from "../../repositories/deals.repo";
 import { listAppointmentsByContactId } from "../../repositories/appointments.repo";
+import { listInvoices } from "../../repositories/invoices.repo";
+import { trainingSubscriptionsRepository } from "../../repositories/trainingSubscriptionsRepository";
 import type { AppBindings, Variables } from "../../env";
 import { contactInput, listQuery } from "./contacts.schema";
 
@@ -70,13 +72,18 @@ contactsRouter.get(
     const contact = await getContactById(db, id);
     if (!contact) throw notFound("Contact");
 
-    const [customer, deals, appointments] = await Promise.all([
-      getCustomerByContactId(db, id),
+    const customer = await getCustomerByContactId(db, id);
+
+    // Suscripciones y facturas cuelgan del CUSTOMER, no del CONTACT: un contacto
+    // que nunca agendó no tiene customer y por lo tanto no tiene ninguna de las dos.
+    const [deals, appointments, subscriptions, invoices] = await Promise.all([
       listDealsByContactId(db, id),
       listAppointmentsByContactId(db, id),
+      customer ? trainingSubscriptionsRepository.listByCustomerId(customer.id) : Promise.resolve([]),
+      customer ? listInvoices(db, { customerId: customer.id }) : Promise.resolve([]),
     ]);
 
-    return c.json({ contact, customer, deals, appointments });
+    return c.json({ contact, customer, deals, appointments, subscriptions, invoices });
   },
 );
 
