@@ -32,6 +32,9 @@ export const listQuery = z.object({
     .string()
     .optional()
     .transform((v) => v === "true"),
+  // "recent" es el orden histórico de la pantalla (alta más nueva primero) y
+  // sigue siendo el default para no cambiarle la vista a nadie sin pedirlo.
+  sort: z.enum(["recent", "nameAsc", "nameDesc"]).default("recent"),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });

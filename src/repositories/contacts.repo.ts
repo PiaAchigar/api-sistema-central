@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   analyticsEvents,
@@ -10,9 +10,28 @@ import {
   messages,
 } from "../db/schema";
 
+export type ContactSort = "recent" | "nameAsc" | "nameDesc";
+
+// `lower(...)` porque sin eso "ana" cae después de "Zulema" en las collations que
+// ordenan por byte. NULLS LAST en los dos sentidos: un contacto sin nombre es
+// basura al final de la lista, nunca lo primero que ve la dueña al invertir el orden.
+// El desempate por `id` es obligatorio con paginación: dos "María González" sin
+// desempate pueden aparecer dos veces o ninguna al pasar de página.
+const ORDER_BY: Record<ContactSort, ReturnType<typeof sql>> = {
+  recent: sql`${contacts.createdAt} DESC, ${contacts.id}`,
+  nameAsc: sql`lower(${contacts.name}) ASC NULLS LAST, ${contacts.id}`,
+  nameDesc: sql`lower(${contacts.name}) DESC NULLS LAST, ${contacts.id}`,
+};
+
 export async function listContacts(
   db: Db,
-  filters: { q?: string; limit: number; offset: number; includeArchived?: boolean },
+  filters: {
+    q?: string;
+    limit: number;
+    offset: number;
+    includeArchived?: boolean;
+    sort?: ContactSort;
+  },
 ) {
   const conditions = [];
   if (!filters.includeArchived) conditions.push(sql`${contacts.isArchived} IS NOT TRUE`);
@@ -31,7 +50,7 @@ export async function listContacts(
       .select()
       .from(contacts)
       .where(where)
-      .orderBy(desc(contacts.createdAt))
+      .orderBy(ORDER_BY[filters.sort ?? "recent"])
       .limit(filters.limit)
       .offset(filters.offset),
     db.select({ n: sql<number>`count(*)::int` }).from(contacts).where(where),
