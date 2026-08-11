@@ -87,6 +87,24 @@ export const training = pgTable("training", {
   updatedAt: updatedAt(),
 });
 
+// Inscripciones de un cliente a una capacitación (TRAINING, profesionales).
+// La tabla existe desde migrations/1.0.0/init.sql; se mapea acá porque el
+// impacto de borrado de un cliente necesita contarlas — son historial de
+// negocio y bloquean el hard-delete.
+export const trainingEnrollments = pgTable("training_enrollments", {
+  id: id(),
+  trainingId: uuid("training_id"),
+  customerId: uuid("customer_id"),
+  enrolledDate: timestamp("enrolled_date"),
+  status: varchar("status", { length: 50 }),
+  completionDate: timestamp("completion_date"),
+  amountPaid: decimal("amount_paid", { precision: 10, scale: 2 }),
+  invoiceLineItemId: uuid("invoice_line_item_id"),
+  notes: text("notes"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
 export const serviceProviders = pgTable("service_providers", {
   id: id(),
   userId: uuid("user_id"),

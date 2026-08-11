@@ -1,6 +1,14 @@
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { contacts } from "../db/schema";
+import {
+  analyticsEvents,
+  callLogs,
+  contacts,
+  conversations,
+  customers,
+  deals,
+  messages,
+} from "../db/schema";
 
 export async function listContacts(
   db: Db,
@@ -57,4 +65,40 @@ export async function updateContact(
 ) {
   const rows = await db.update(contacts).set(data).where(eq(contacts.id, id)).returning();
   return rows[0] ?? null;
+}
+
+/** Borra el cliente y sus rastros de CRM en una transacción.
+ *
+ *  El caller (la ruta) DEBE haber verificado que `getClientDeleteImpact` no
+ *  esté `blocked`. Acá no aparecen invoices, payments, line_items, arca_logs,
+ *  payment_logs ni cash_register a propósito: si el cliente tiene alguna de
+ *  esas filas no llega a esta función.
+ *
+ *  Por el mismo motivo no hay que romper el ciclo de FK entre appointments y
+ *  deals (appointments.deal_id ↔ deals.appointment_id): un cliente sin turnos
+ *  no tiene appointments del otro lado del ciclo.
+ *
+ *  Orden hijos → padre. `contact_notes` y `message_queue` caen solos por
+ *  ON DELETE CASCADE; `delivery_logs.contact_id` queda en NULL. */
+export async function hardDeleteClient(db: Db, contactId: string): Promise<boolean> {
+  const deleted = await db.transaction(async (tx) => {
+    const conv = await tx
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(eq(conversations.contactId, contactId));
+
+    if (conv.length > 0) {
+      const ids = conv.map((r) => r.id);
+      await tx.delete(messages).where(inArray(messages.conversationId, ids));
+      await tx.delete(conversations).where(eq(conversations.contactId, contactId));
+    }
+
+    await tx.delete(deals).where(eq(deals.contactId, contactId));
+    await tx.delete(callLogs).where(eq(callLogs.contactId, contactId));
+    await tx.delete(analyticsEvents).where(eq(analyticsEvents.contactId, contactId));
+    await tx.delete(customers).where(eq(customers.contactId, contactId));
+
+    return tx.delete(contacts).where(eq(contacts.id, contactId)).returning({ id: contacts.id });
+  });
+  return deleted.length > 0;
 }

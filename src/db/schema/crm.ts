@@ -174,6 +174,32 @@ export const messages = pgTable("messages", {
   createdAt: createdAt(),
 });
 
+// Llamadas registradas contra un contacto. La tabla existe desde
+// migrations/1.0.0/init.sql; se mapea acá porque el borrado de un cliente
+// necesita contarlas y borrarlas (rastro de CRM, sin valor fiscal).
+export const callLogs = pgTable("call_logs", {
+  id: id(),
+  contactId: uuid("contact_id"),
+  duration: integer("duration"),
+  transcript: text("transcript"),
+  isSuccess: boolean("is_success"),
+  aiModel: varchar("ai_model", { length: 100 }),
+  tokensUsed: integer("tokens_used"),
+  createdAt: createdAt(),
+});
+
+// Eventos de analítica del CRM. Igual que call_logs: existe desde
+// migrations/1.0.0/init.sql y se mapea acá para el borrado de clientes.
+export const analyticsEvents = pgTable("analytics_events", {
+  id: id(),
+  eventType: varchar("event_type", { length: 100 }),
+  channel: varchar("channel", { length: 50 }),
+  agentId: uuid("agent_id"),
+  contactId: uuid("contact_id"),
+  metadataJson: jsonb("metadata_json"),
+  createdAt: createdAt(),
+});
+
 export const automationRules = pgTable("automation_rules", {
   id: id(),
   name: varchar("name", { length: 255 }),
