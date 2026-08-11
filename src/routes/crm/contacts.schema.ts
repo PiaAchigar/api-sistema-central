@@ -25,7 +25,6 @@ export const contactInput = z.object({
 });
 
 export const listQuery = z.object({
-  status: z.enum(CONTACT_STATUS).optional(),
   q: z.string().optional(),
   // Query params son strings: coacción explícita "true"→true, todo lo demás→false.
   // NO usar z.coerce.boolean() (haría "false"→true).
