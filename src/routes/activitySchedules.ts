@@ -3,15 +3,18 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { AppError } from "../lib/errors";
 import { activitySchedulesService } from "../services/activitySchedulesService";
+import { requireAuth, requirePermission } from "../middleware/auth";
 import type { AppBindings, Variables } from "../env";
 
 const activitySchedulesRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
+
+// Horarios de actividades = catálogo, mismos permisos que las actividades.
 
 /**
  * GET /api/activities/:activityId/schedules
  * List all active schedules for an activity
  */
-activitySchedulesRouter.get("/activities/:activityId/schedules", async (c) => {
+activitySchedulesRouter.get("/activities/:activityId/schedules", requireAuth, requirePermission("catalogo", "view"), async (c) => {
   try {
     const activityId = c.req.param("activityId");
     const schedules = await activitySchedulesService.listSchedules(activityId);
@@ -49,6 +52,8 @@ activitySchedulesRouter.get("/activities/:activityId/schedules", async (c) => {
  */
 activitySchedulesRouter.post(
   "/activities/:activityId/schedules",
+  requireAuth,
+  requirePermission("catalogo", "manage"),
   zValidator(
     "json",
     z.object({
@@ -111,6 +116,8 @@ activitySchedulesRouter.post(
  */
 activitySchedulesRouter.patch(
   "/activities/schedules/:scheduleId",
+  requireAuth,
+  requirePermission("catalogo", "edit"),
   zValidator(
     "json",
     z.object({
@@ -150,7 +157,7 @@ activitySchedulesRouter.patch(
  * DELETE /api/activities/schedules/:scheduleId
  * Soft-delete a schedule (set isActive to false)
  */
-activitySchedulesRouter.delete("/activities/schedules/:scheduleId", async (c) => {
+activitySchedulesRouter.delete("/activities/schedules/:scheduleId", requireAuth, requirePermission("catalogo", "manage"), async (c) => {
   try {
     const scheduleId = c.req.param("scheduleId");
     const deleted = await activitySchedulesService.deleteSchedule(scheduleId);

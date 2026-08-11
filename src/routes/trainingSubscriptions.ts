@@ -3,15 +3,22 @@ import { z } from "zod";
 import { AppError } from "../lib/errors";
 import { zv } from "../lib/validator";
 import { trainingSubscriptionsService } from "../services/trainingSubscriptionsService";
+import { requireAdmin, requireAuth, requirePermission } from "../middleware/auth";
 import type { AppBindings, Variables } from "../env";
 
 const trainingSubscriptionsRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
+
+// Suscripciones = sección "catalogo", que es la que gatea la pestaña
+// "Suscripciones" en front-dashboard → Administración (AdminLayout SUBNAV).
+// Si acá pusiera "facturacion" habría roles que ven el tab y reciben 403, o al
+// revés. Marcar un mes como pagado queda en requireAdmin, como dice el acta.
+// `/class-attendance` es otra cosa: lo consume front-agenda, va con permisos de agenda.
 
 /**
  * GET /api/training-subscriptions
  * List subscriptions for a customer (customerId required as query param)
  */
-trainingSubscriptionsRouter.get("/training-subscriptions", async (c) => {
+trainingSubscriptionsRouter.get("/training-subscriptions", requireAuth, requirePermission("catalogo", "view"), async (c) => {
   try {
     const customerId = c.req.query("customerId");
     if (!customerId) {
@@ -54,6 +61,8 @@ trainingSubscriptionsRouter.get("/training-subscriptions", async (c) => {
  */
 trainingSubscriptionsRouter.get(
   "/class-attendance",
+  requireAuth,
+  requirePermission("agenda", "view"),
   zv(
     "query",
     z.object({
@@ -84,6 +93,8 @@ trainingSubscriptionsRouter.get(
  */
 trainingSubscriptionsRouter.post(
   "/class-attendance",
+  requireAuth,
+  requirePermission("agenda", "edit"),
   zv(
     "json",
     z.object({
@@ -128,6 +139,8 @@ trainingSubscriptionsRouter.post(
  */
 trainingSubscriptionsRouter.get(
   "/training-subscriptions/admin/list",
+  requireAuth,
+  requirePermission("catalogo", "view"),
   zv(
     "query",
     z.object({
@@ -165,7 +178,7 @@ trainingSubscriptionsRouter.get(
  * GET /api/training-subscriptions/:id
  * Get a single subscription by ID
  */
-trainingSubscriptionsRouter.get("/training-subscriptions/:id", async (c) => {
+trainingSubscriptionsRouter.get("/training-subscriptions/:id", requireAuth, requirePermission("catalogo", "view"), async (c) => {
   try {
     const id = c.req.param("id");
     const subscription = await trainingSubscriptionsService.getSubscription(id);
@@ -203,6 +216,8 @@ trainingSubscriptionsRouter.get("/training-subscriptions/:id", async (c) => {
  */
 trainingSubscriptionsRouter.post(
   "/training-subscriptions",
+  requireAuth,
+  requirePermission("catalogo", "edit"),
   zv(
     "json",
     z.object({
@@ -268,6 +283,8 @@ trainingSubscriptionsRouter.post(
  */
 trainingSubscriptionsRouter.patch(
   "/training-subscriptions/:id",
+  requireAuth,
+  requirePermission("catalogo", "edit"),
   zv(
     "json",
     z.object({
@@ -323,6 +340,8 @@ trainingSubscriptionsRouter.patch(
  */
 trainingSubscriptionsRouter.patch(
   "/training-subscriptions/:id/admin",
+  requireAuth,
+  requireAdmin,
   zv(
     "json",
     z
@@ -373,7 +392,7 @@ trainingSubscriptionsRouter.patch(
  * - year: number (optional, defaults to current year)
  * - month: number (optional, defaults to current month)
  */
-trainingSubscriptionsRouter.get("/training-subscriptions/:id/attendance", async (c) => {
+trainingSubscriptionsRouter.get("/training-subscriptions/:id/attendance", requireAuth, requirePermission("catalogo", "view"), async (c) => {
   try {
     const id = c.req.param("id");
     const yearParam = c.req.query("year");

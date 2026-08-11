@@ -3,15 +3,22 @@ import { z } from "zod";
 import { zv } from "../lib/validator";
 import { AppError } from "../lib/errors";
 import { activitiesService } from "../services/activitiesService";
+import { requireAdmin, requireAuth, requirePermission } from "../middleware/auth";
 import type { AppBindings, Variables } from "../env";
 
 const activitiesRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
+
+// Las actividades son catálogo, igual que los servicios: mismos permisos que
+// `/api/agenda/services` (sección "catalogo" de reglas_negocio §1.7). El único
+// consumidor es front-dashboard → Administración, que ya manda el token.
+// A diferencia de los servicios, acá NADA es público: el sitio web no lee
+// actividades, así que hasta el listado pide sesión.
 
 /**
  * GET /api/activities
  * List all active activities
  */
-activitiesRouter.get("/activities", async (c) => {
+activitiesRouter.get("/activities", requireAuth, requirePermission("catalogo", "view"), async (c) => {
   try {
     // ?includeInactive=true trae también las archivadas, para que la pantalla
     // de Actividades pueda mostrarlas y restaurarlas (mismo patrón que
@@ -40,7 +47,7 @@ activitiesRouter.get("/activities", async (c) => {
  * GET /api/activities/:id
  * Get a single activity by ID
  */
-activitiesRouter.get("/activities/:id", async (c) => {
+activitiesRouter.get("/activities/:id", requireAuth, requirePermission("catalogo", "view"), async (c) => {
   try {
     const id = c.req.param("id");
     const activity = await activitiesService.getActivity(id);
@@ -78,6 +85,8 @@ activitiesRouter.get("/activities/:id", async (c) => {
  */
 activitiesRouter.post(
   "/activities",
+  requireAuth,
+  requirePermission("catalogo", "manage"),
   zv(
     "json",
     z.object({
@@ -152,6 +161,8 @@ activitiesRouter.post(
  */
 activitiesRouter.patch(
   "/activities/:id",
+  requireAuth,
+  requirePermission("catalogo", "edit"),
   zv(
     "json",
     z.object({
@@ -191,7 +202,7 @@ activitiesRouter.patch(
  * DELETE /api/activities/:id
  * Soft-delete an activity (set isActive to false)
  */
-activitiesRouter.delete("/activities/:id", async (c) => {
+activitiesRouter.delete("/activities/:id", requireAuth, requirePermission("catalogo", "manage"), async (c) => {
   try {
     const id = c.req.param("id");
     const deleted = await activitiesService.deleteActivity(id);
@@ -217,7 +228,7 @@ activitiesRouter.delete("/activities/:id", async (c) => {
  * POST /api/activities/:id/restore
  * Restore an archived activity (set isActive back to true)
  */
-activitiesRouter.post("/activities/:id/restore", async (c) => {
+activitiesRouter.post("/activities/:id/restore", requireAuth, requirePermission("catalogo", "manage"), async (c) => {
   try {
     const id = c.req.param("id");
     const restored = await activitiesService.restoreActivity(id);
@@ -243,8 +254,10 @@ activitiesRouter.post("/activities/:id/restore", async (c) => {
  * DELETE /api/activities/:id/hard
  * Permanently delete an activity from the database (irreversible)
  * WARNING: This cannot be undone
+ *
+ * Solo admin, igual que el hard-delete de servicios: es irreversible.
  */
-activitiesRouter.delete("/activities/:id/hard", async (c) => {
+activitiesRouter.delete("/activities/:id/hard", requireAuth, requireAdmin, async (c) => {
   try {
     const id = c.req.param("id");
     await activitiesService.hardDeleteActivity(id);
