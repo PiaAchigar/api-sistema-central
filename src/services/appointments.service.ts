@@ -195,11 +195,18 @@ export async function updateAppointmentStatus(
 
     // Al cancelar: si había una seña paga, se cancela el deal y se acredita
     // el saldo al cliente (no se pierde la plata — reglas_negocio §6.2).
+    //
+    // Solo se acredita si se cancela ANTES del horario del turno: avisar con
+    // tiempo devuelve la seña, no presentarse la pierde. Cancelar un turno que
+    // ya pasó es equivalente a un "Ausente" (que tampoco acredita), y sin este
+    // corte se regalaba saldo con solo ir cancelando turnos viejos.
+    //
     // Solo se RESUELVE acá; los tres writes (cancelar deal, acreditar saldo y
     // marcar el turno cancelado) se hacen abajo en una única transacción.
     if (changes.status === "cancelled" && appt.status !== "cancelled") {
+      const beforeStart = !appt.appointmentStart || appt.appointmentStart > new Date();
       const deal = await getDealByAppointmentId(db, id);
-      if (deal?.seniaPaid && deal.seniaAmount && appt.customerId) {
+      if (beforeStart && deal?.seniaPaid && deal.seniaAmount && appt.customerId) {
         dealToCancel = {
           id: deal.id,
           amount: Number(deal.seniaAmount),
@@ -217,7 +224,13 @@ export async function updateAppointmentStatus(
   const pending = dealToCancel;
   return db.transaction(async (tx) => {
     const cancelled = await cancelDeal(tx, pending.id, { cancelReason: "Turno cancelado" });
-    if (cancelled) await creditCustomer(tx, pending.customerId, pending.amount);
+    if (cancelled) {
+      await creditCustomer(tx, pending.customerId, pending.amount, {
+        reason: "appointment_cancelled",
+        appointmentId: id,
+        notes: "Seña de un turno cancelado antes de su horario",
+      });
+    }
     return updateAppointment(tx, id, values);
   });
 }

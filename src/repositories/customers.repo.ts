@@ -6,6 +6,7 @@ import {
   callLogs,
   contacts,
   conversations,
+  customerCreditMovements,
   customers,
   deals,
   invoices,
@@ -134,15 +135,81 @@ export async function listRecentCustomers(db: Db, limit = 20) {
  *  transacción que cancela el deal (ver appointments.service.ts). `sql` suma
  *  sobre el valor actual en la propia query — no hay condición de carrera entre
  *  leer y escribir el balance. */
+export type CreditMovementReason =
+  | "appointment_cancelled"
+  | "deposit_paid_with_credit"
+  | "manual_adjustment";
+
+type CreditContext = {
+  reason: CreditMovementReason;
+  appointmentId?: string | null;
+  paymentId?: string | null;
+  notes?: string | null;
+};
+
+/** Acredita saldo y deja el movimiento en el historial (misma transacción). */
 export async function creditCustomer(
-  tx: Pick<Db, "update">,
+  tx: Pick<Db, "update" | "insert">,
   customerId: string,
   amount: number,
+  ctx: CreditContext = { reason: "appointment_cancelled" },
 ) {
   await tx
     .update(customers)
     .set({ creditBalance: sql`${customers.creditBalance} + ${amount}` })
     .where(eq(customers.id, customerId));
+  await insertCreditMovement(tx, customerId, amount, ctx);
+}
+
+/**
+ * Consume saldo a favor. Devuelve false si no alcanza.
+ *
+ * El `WHERE credit_balance >= amount` hace el descuento seguro ante carreras:
+ * dos reservas simultáneas del mismo cliente se serializan por el lock de fila
+ * de Postgres y la segunda no matchea, en vez de dejar el saldo en negativo.
+ */
+export async function debitCustomerCredit(
+  tx: Pick<Db, "update" | "insert">,
+  customerId: string,
+  amount: number,
+  ctx: CreditContext,
+): Promise<boolean> {
+  const rows = await tx
+    .update(customers)
+    .set({ creditBalance: sql`${customers.creditBalance} - ${amount}` })
+    .where(
+      and(eq(customers.id, customerId), sql`${customers.creditBalance} >= ${amount}`),
+    )
+    .returning({ id: customers.id });
+  if (rows.length === 0) return false;
+  await insertCreditMovement(tx, customerId, -amount, ctx);
+  return true;
+}
+
+async function insertCreditMovement(
+  tx: Pick<Db, "insert">,
+  customerId: string,
+  amount: number,
+  ctx: CreditContext,
+) {
+  await tx.insert(customerCreditMovements).values({
+    customerId,
+    amount: amount.toFixed(2),
+    reason: ctx.reason,
+    appointmentId: ctx.appointmentId ?? null,
+    paymentId: ctx.paymentId ?? null,
+    notes: ctx.notes ?? null,
+  });
+}
+
+/** Movimientos de saldo de un cliente, del más reciente al más viejo. */
+export async function listCreditMovements(db: Db, customerId: string, limit = 20) {
+  return db
+    .select()
+    .from(customerCreditMovements)
+    .where(eq(customerCreditMovements.customerId, customerId))
+    .orderBy(desc(customerCreditMovements.createdAt))
+    .limit(limit);
 }
 
 // ── Borrado de un cliente (admin-only) ──────────────────────────────────────

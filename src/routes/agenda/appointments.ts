@@ -88,7 +88,8 @@ const createBody = z.object({
   deposit: z
     .object({
       amount: z.number().positive(),
-      method: z.enum(["cash", "bank_transfer", "mercadopago"]),
+      /** "credit" paga con el saldo a favor del cliente (no entra plata nueva). */
+      method: z.enum(["cash", "bank_transfer", "mercadopago", "credit"]),
       /** Facturador de la seña. Si no viene, el marcado por defecto. */
       issuerId: z.string().uuid().optional(),
     })

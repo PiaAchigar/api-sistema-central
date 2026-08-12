@@ -42,7 +42,8 @@ services:
       - ./src/db/migrations/1.23.0/activity-attendance-unique.sql:/docker-entrypoint-initdb.d/29-activity-attendance-unique.sql:ro
       - ./src/db/migrations/1.24.0/classes-agenda.sql:/docker-entrypoint-initdb.d/30-classes-agenda.sql:ro
       - ./src/db/migrations/1.24.1/reconcile-billing-cycles-nullability.sql:/docker-entrypoint-initdb.d/31-reconcile-billing-cycles-nullability.sql:ro
-      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/32-seed.sql:ro
+      - ./src/db/migrations/1.25.0/credit-movements.sql:/docker-entrypoint-initdb.d/32-credit-movements.sql:ro
+      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/33-seed.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]

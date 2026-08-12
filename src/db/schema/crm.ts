@@ -58,6 +58,23 @@ export const customers = pgTable("customers", {
   updatedAt: updatedAt(),
 });
 
+/**
+ * Historial del saldo a favor. `amount` positivo acredita (turno cancelado con
+ * seña paga) y negativo consume (se usó como seña de un turno nuevo). La suma
+ * de los movimientos de un cliente debe dar siempre su `credit_balance`: ambos
+ * se escriben en la misma transacción.
+ */
+export const customerCreditMovements = pgTable("customer_credit_movements", {
+  id: id(),
+  customerId: uuid("customer_id"),
+  amount: decimal("amount", { precision: 10, scale: 2 }),
+  reason: varchar("reason", { length: 50 }),
+  appointmentId: uuid("appointment_id"),
+  paymentId: uuid("payment_id"),
+  notes: text("notes"),
+  createdAt: createdAt(),
+});
+
 // Se usa desde el facturador para las SEÑAS: al reservar un turno con seña se
 // crea un deal (senia_amount / senia_paid) vinculado al appointment. El resto
 // de las columnas del pipeline CRM (stage, probability, nps…) no se mapean acá.

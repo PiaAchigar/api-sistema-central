@@ -66,6 +66,10 @@ export async function getDailyReport(db: Db, date: string) {
 
   for (const p of payments) {
     const amount = Number(p.amount ?? 0);
+    // Pagado con saldo a favor: no entró ni salió plata hoy (esa plata ya se
+    // cobró y se declaró cuando se facturó la seña original). Se lista en el
+    // detalle pero no suma a ningún total de caja.
+    if (p.paymentMethod === "credit") continue;
     if (p.receivedByProviderId) {
       // Dinero que nunca entró a PiuBella: se lista pero no suma a la caja
       paidToProviders += amount;
