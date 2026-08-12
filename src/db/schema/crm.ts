@@ -66,9 +66,11 @@ export const customers = pgTable("customers", {
  */
 export const customerCreditMovements = pgTable("customer_credit_movements", {
   id: id(),
-  customerId: uuid("customer_id"),
-  amount: decimal("amount", { precision: 10, scale: 2 }),
-  reason: varchar("reason", { length: 50 }),
+  // Los tres `notNull` están así en la migración 1.25.0. Sin declararlos acá,
+  // TypeScript deja pasar un insert con null y el error aparece en runtime.
+  customerId: uuid("customer_id").notNull(),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  reason: varchar("reason", { length: 50 }).notNull(),
   appointmentId: uuid("appointment_id"),
   paymentId: uuid("payment_id"),
   notes: text("notes"),

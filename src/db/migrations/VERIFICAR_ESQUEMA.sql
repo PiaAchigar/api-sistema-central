@@ -127,5 +127,61 @@ SELECT * FROM (
     ) THEN 'OK' ELSE 'FALTA' END,
     '1.24.0',
     'columna appointments.training_session_id'
+
+  -- ── 1.25.0 — historial de saldo a favor ──
+  UNION ALL
+  SELECT
+    'tabla customer_credit_movements existe',
+    CASE WHEN EXISTS (
+      SELECT 1 FROM information_schema.tables WHERE table_name = 'customer_credit_movements'
+    ) THEN 'OK' ELSE 'FALTA' END,
+    '1.25.0',
+    'tabla customer_credit_movements'
+
+  -- Sin la tabla, cancelar un turno con seña paga revienta: `creditCustomer`
+  -- inserta el movimiento SIEMPRE. Este chequeo es el que avisa antes.
+  UNION ALL
+  SELECT
+    'FKs de credit_movements con su ON DELETE',
+    CASE WHEN (
+      SELECT count(*) FROM pg_constraint
+      WHERE conname IN ('fk_credit_mov_customer','fk_credit_mov_appointment','fk_credit_mov_payment')
+        AND confdeltype IN ('r','n')
+    ) = 3 THEN 'OK' ELSE 'FALTA' END,
+    '1.25.0',
+    -- r=RESTRICT, n=SET NULL, a=NO ACTION (el default, que NO queremos)
+    COALESCE((SELECT string_agg(conname || '=' || confdeltype::text, ', ' ORDER BY conname)
+                FROM pg_constraint WHERE conname LIKE 'fk_credit_mov%'), 'ninguna')
 ) t
 ORDER BY CASE WHEN estado = 'FALTA' THEN 0 ELSE 1 END, chequeo;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- Cuadre del saldo a favor (1.25.0) — sale por "Messages", no por resultados
+-- ════════════════════════════════════════════════════════════════════════════
+-- La suma de los movimientos de un cliente tiene que dar su `credit_balance`;
+-- los dos se escriben en la misma transacción. Si alguna vez no coincide, hay
+-- un saldo que el historial no puede explicar.
+--
+-- Va en un DO con SQL dinámico a propósito: una consulta normal que nombre
+-- `customer_credit_movements` falla al PARSEAR si la tabla todavía no existe, y
+-- se llevaría puesto todo el bloque de arriba — justo cuando más se necesita.
+DO $$
+DECLARE descuadrados int;
+BEGIN
+  IF to_regclass('customer_credit_movements') IS NULL THEN
+    RAISE NOTICE '1.25.0 sin aplicar — no se puede chequear el cuadre de saldos.';
+    RETURN;
+  END IF;
+
+  EXECUTE $q$
+    SELECT count(*) FROM customers c
+     WHERE COALESCE(c.credit_balance, 0) <> COALESCE(
+       (SELECT sum(m.amount) FROM customer_credit_movements m WHERE m.customer_id = c.id), 0)
+  $q$ INTO descuadrados;
+
+  IF descuadrados = 0 THEN
+    RAISE NOTICE 'OK — el saldo a favor de todos los clientes cuadra con sus movimientos.';
+  ELSE
+    RAISE WARNING 'DESCUADRE — % cliente(s) con credit_balance distinto de la suma de sus movimientos.', descuadrados;
+  END IF;
+END $$;

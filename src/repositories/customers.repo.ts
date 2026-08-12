@@ -237,7 +237,7 @@ export async function getClientDeleteImpact(db: Db, contactId: string) {
   // Sin customer no hay historial de negocio posible: es un contacto que nunca
   // agendó ni compró.
   const n = (rows: { n: number }[]) => rows[0]?.n ?? 0;
-  const [inv, pay, appt, subs, enr] = customerId
+  const [inv, pay, appt, subs, enr, credit] = customerId
     ? await Promise.all([
         db.select({ n: sql<number>`count(*)::int` }).from(invoices)
           .where(eq(invoices.customerId, customerId)).then(n),
@@ -249,8 +249,13 @@ export async function getClientDeleteImpact(db: Db, contactId: string) {
           .where(eq(trainingSubscriptions.customerId, customerId)).then(n),
         db.select({ n: sql<number>`count(*)::int` }).from(trainingEnrollments)
           .where(eq(trainingEnrollments.customerId, customerId)).then(n),
+        // `customer_credit_movements.customer_id` es ON DELETE RESTRICT (1.25.0):
+        // sin contarlo acá, el borrado pasaba el chequeo previo y recién moría
+        // en el DELETE, con el mensaje genérico de violación de FK.
+        db.select({ n: sql<number>`count(*)::int` }).from(customerCreditMovements)
+          .where(eq(customerCreditMovements.customerId, customerId)).then(n),
       ])
-    : [0, 0, 0, 0, 0];
+    : [0, 0, 0, 0, 0, 0];
 
   const [conv, dealRows, calls, events] = await Promise.all([
     db.select({ id: conversations.id }).from(conversations).where(eq(conversations.contactId, contactId)),
@@ -272,6 +277,7 @@ export async function getClientDeleteImpact(db: Db, contactId: string) {
   if (appt > 0) parts.push(`${appt} turno(s)`);
   if (subs > 0) parts.push(`${subs} suscripción(es)`);
   if (enr > 0) parts.push(`${enr} inscripción(es)`);
+  if (credit > 0) parts.push(`${credit} movimiento(s) de saldo a favor`);
 
   return {
     blocked: parts.length > 0,
@@ -279,7 +285,14 @@ export async function getClientDeleteImpact(db: Db, contactId: string) {
       parts.length > 0
         ? `Tiene ${parts.join(", ")}. Archivalo en su lugar para no perder el historial.`
         : undefined,
-    history: { invoices: inv, payments: pay, appointments: appt, subscriptions: subs, enrollments: enr },
+    history: {
+      invoices: inv,
+      payments: pay,
+      appointments: appt,
+      subscriptions: subs,
+      enrollments: enr,
+      creditMovements: credit,
+    },
     cascade: {
       conversations: conv.length,
       messages: msgRows[0]?.n ?? 0,
