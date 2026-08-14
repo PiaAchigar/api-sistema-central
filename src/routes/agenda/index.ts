@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { activitiesPublicRouter } from "./activities-public";
 import { appointmentsRouter } from "./appointments";
 import { availability } from "./availability";
 import { categoriesRouter } from "./categories";
@@ -16,6 +17,7 @@ const agenda = new Hono<{ Bindings: AppBindings }>();
 
 agenda.route("/services", services);
 agenda.route("/categories", categoriesRouter);
+agenda.route("/activities", activitiesPublicRouter);
 agenda.route("/availability", availability);
 agenda.route("/appointments", appointmentsRouter);
 agenda.route("/classes", classesRouter);
