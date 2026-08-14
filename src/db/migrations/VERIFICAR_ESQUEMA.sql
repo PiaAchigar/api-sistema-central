@@ -152,6 +152,36 @@ SELECT * FROM (
     -- r=RESTRICT, n=SET NULL, a=NO ACTION (el default, que NO queremos)
     COALESCE((SELECT string_agg(conname || '=' || confdeltype::text, ', ' ORDER BY conname)
                 FROM pg_constraint WHERE conname LIKE 'fk_credit_mov%'), 'ninguna')
+
+  -- ── 1.26.0 — reestructura de categorías ──
+  UNION ALL
+  SELECT
+    'service_category tiene UNIQUE',
+    CASE WHEN EXISTS (SELECT 1 FROM pg_constraint WHERE conname='uq_service_category')
+         THEN 'OK' ELSE 'FALTA' END,
+    '1.26.0',
+    'uq_service_category (service_id, category_id)'
+
+  UNION ALL
+  SELECT
+    'backup de service_category existe',
+    CASE WHEN EXISTS (SELECT 1 FROM information_schema.tables
+                       WHERE table_name='service_category_backup_1260')
+         THEN 'OK' ELSE 'FALTA' END,
+    '1.26.0',
+    'service_category_backup_1260'
+
+  -- Un servicio activo sin ninguna categoría no se ve en la web. Antes de
+  -- empezar hay exactamente 1; si este número sube, un remapeo perdió filas.
+  UNION ALL
+  SELECT
+    'servicios activos sin categoría',
+    CASE WHEN (SELECT count(*) FROM service s WHERE s.is_active
+                AND NOT EXISTS (SELECT 1 FROM service_category sc WHERE sc.service_id=s.id)) <= 1
+         THEN 'OK' ELSE 'REVISAR' END,
+    '1.26.0',
+    (SELECT count(*)::text || ' servicio(s)' FROM service s WHERE s.is_active
+      AND NOT EXISTS (SELECT 1 FROM service_category sc WHERE sc.service_id=s.id))
 ) t
 ORDER BY CASE WHEN estado = 'FALTA' THEN 0 ELSE 1 END, chequeo;
 
