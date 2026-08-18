@@ -171,17 +171,29 @@ SELECT * FROM (
     '1.26.0',
     'service_category_backup_1260'
 
-  -- Un servicio activo sin ninguna categoría no se ve en la web. Antes de
-  -- empezar hay exactamente 1; si este número sube, un remapeo perdió filas.
+  -- Un servicio activo sin ninguna categoría ACTIVA no se ve en la web. La
+  -- 1.26.0/05 archivó los buckets `(Eje)` y le asignó categoría a `Cavado
+  -- Completo`, así que desde esa migración el número tiene que ser 0 en
+  -- punto — ya no se tolera 1 como en el chequeo original de la Task 1.
+  --
+  -- Ojo con el `AND c.is_active` del JOIN: antes de la 1.26.0/05 los `(Eje)`
+  -- estaban `is_active=true` (la web los escondía filtrando el nombre, no el
+  -- flag), así que un servicio colgado SOLO de un `(Eje)` pasaba este chequeo
+  -- sin el JOIN aunque fuera invisible en pantalla. Con los Eje ya archivados,
+  -- `c.is_active` los excluye solo y el chequeo queda correcto sin trampa.
   UNION ALL
   SELECT
-    'servicios activos sin categoría',
+    'todo servicio activo tiene categoría activa',
     CASE WHEN (SELECT count(*) FROM service s WHERE s.is_active
-                AND NOT EXISTS (SELECT 1 FROM service_category sc WHERE sc.service_id=s.id)) <= 1
+                AND NOT EXISTS (SELECT 1 FROM service_category sc
+                                 JOIN categories c ON c.id=sc.category_id AND c.is_active
+                                WHERE sc.service_id=s.id)) = 0
          THEN 'OK' ELSE 'REVISAR' END,
     '1.26.0',
-    (SELECT count(*)::text || ' servicio(s)' FROM service s WHERE s.is_active
-      AND NOT EXISTS (SELECT 1 FROM service_category sc WHERE sc.service_id=s.id))
+    (SELECT count(*)::text || ' servicio(s) huérfano(s)' FROM service s WHERE s.is_active
+      AND NOT EXISTS (SELECT 1 FROM service_category sc
+                       JOIN categories c ON c.id=sc.category_id AND c.is_active
+                      WHERE sc.service_id=s.id))
 ) t
 ORDER BY CASE WHEN estado = 'FALTA' THEN 0 ELSE 1 END, chequeo;
 
