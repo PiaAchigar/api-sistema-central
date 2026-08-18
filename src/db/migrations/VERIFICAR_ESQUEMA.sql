@@ -194,6 +194,16 @@ SELECT * FROM (
       AND NOT EXISTS (SELECT 1 FROM service_category sc
                        JOIN categories c ON c.id=sc.category_id AND c.is_active
                       WHERE sc.service_id=s.id))
+
+  -- ── 1.27.0 — buscador por objetivo ──
+  UNION ALL
+  SELECT
+    'tabla training_embeddings existe',
+    CASE WHEN EXISTS (SELECT 1 FROM information_schema.tables
+                       WHERE table_name='training_embeddings')
+         THEN 'OK' ELSE 'FALTA' END,
+    '1.27.0',
+    'tabla training_embeddings'
 ) t
 ORDER BY CASE WHEN estado = 'FALTA' THEN 0 ELSE 1 END, chequeo;
 
