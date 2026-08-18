@@ -1,16 +1,44 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 
+export type TreatmentKind = "service" | "activity" | "training";
+
 export type TreatmentResult = {
   id: string;
   name: string;
   description: string | null;
-  unit_price_list: number;
+  // Sigue siendo el precio de SERVICE tal cual estaba: para actividades y
+  // capacitaciones viene NULL (no se renombra, no se reutiliza). El precio
+  // que corresponda a cada `kind` está en el campo `price`, agregado abajo.
+  unit_price_list: number | null;
   benefits: string | null;
   contraindications: string | null;
   special_attention_notes: string | null;
   similarity_score: number;
+  // Campos nuevos (Task 3): de dónde viene el resultado y cómo se cobra.
+  kind: TreatmentKind;
+  price: number | null;
+  price_label: string;
 };
+
+// Fila cruda que devuelve el UNION ALL, antes de calcularle `price_label` en TS.
+type TreatmentQueryRow = Omit<TreatmentResult, "price_label">;
+
+/**
+ * Qué unidad de cobro corresponde a cada resultado.
+ *
+ * Las actividades son el caso feo: `monthly_base_price` guarda el abono del mes
+ * o el precio de una clase suelta, y la base no los distingue con ningún campo.
+ * El único indicio es el nombre. Es frágil a propósito y está anotado como
+ * deuda — lo correcto sería una columna en `activities`.
+ */
+export function priceLabelFor(kind: TreatmentKind, name: string): string {
+  if (kind === "training") return "el curso";
+  if (kind === "activity") {
+    return /clase suelta|prueba/i.test(name) ? "por clase" : "por mes";
+  }
+  return "por sesión";
+}
 
 export type PromotionResult = {
   id: string;
@@ -33,11 +61,13 @@ export type SearchResults = {
 };
 
 /**
- * Búsqueda híbrida: encuentra servicios similares usando embeddings vectoriales,
- * luego busca promociones que contengan esos servicios.
+ * Búsqueda híbrida: encuentra servicios, actividades y capacitaciones similares
+ * usando embeddings vectoriales (UNION ALL de las tres tablas de embeddings),
+ * luego busca promociones que contengan los SERVICIOS encontrados.
  *
  * - `embedding`: vector de 1536 dimensiones (embeddings semánticos de la query)
- * - `limit`: cantidad máxima de servicios a retornar (default 10)
+ * - `limit`: cantidad máxima de resultados a retornar (default 10), aplicado
+ *   sobre el conjunto ya unido de las tres fuentes
  * - `similarityThreshold`: valor mínimo de similitud coseno (0-1, default 0.3)
  */
 export async function searchTreatments(
@@ -56,14 +86,20 @@ export async function searchTreatments(
   // Vector literal para pgvector: '[n1,n2,...]'
   const vectorLiteral = `[${embedding.join(",")}]`;
 
-  // 1. Búsqueda de servicios por similitud vectorial
-  const treatments = await db.execute<TreatmentResult>(
+  // 1. Búsqueda por similitud vectorial, unida entre las tres fuentes.
+  // Cada rama proyecta las MISMAS columnas en el MISMO orden: donde una tabla
+  // no tiene el dato (p.ej. `benefits` en activities) se castea NULL al tipo
+  // correcto — Postgres es estricto con los tipos en un UNION y sin el cast
+  // explícito puede fallar al resolver el tipo de la columna combinada.
+  const rows = await db.execute<TreatmentQueryRow>(
     sql`
       SELECT
         s.id,
         s.name,
         s.description,
         s.unit_price_list,
+        s.unit_price_list AS price,
+        'service'::text AS kind,
         s.benefits,
         s.contraindications,
         s.special_attention_notes,
@@ -71,18 +107,69 @@ export async function searchTreatments(
       FROM service_embeddings se
       JOIN service s ON se.service_id = s.id
       WHERE se.embedding IS NOT NULL
-        AND (1 - (se.embedding <=> ${vectorLiteral}::vector)) >= ${threshold}
         AND s.is_active = true
+        AND (1 - (se.embedding <=> ${vectorLiteral}::vector)) >= ${threshold}
+
+      UNION ALL
+
+      SELECT
+        a.id,
+        a.name,
+        a.description,
+        NULL::numeric AS unit_price_list,
+        a.monthly_base_price AS price,
+        'activity'::text AS kind,
+        NULL::text AS benefits,
+        NULL::text AS contraindications,
+        NULL::text AS special_attention_notes,
+        ROUND((1 - (ae.embedding <=> ${vectorLiteral}::vector))::numeric, 3)::float AS similarity_score
+      FROM activity_embeddings ae
+      JOIN activities a ON ae.activity_id = a.id
+      WHERE ae.embedding IS NOT NULL
+        AND a.is_active = true
+        AND (1 - (ae.embedding <=> ${vectorLiteral}::vector)) >= ${threshold}
+
+      UNION ALL
+
+      SELECT
+        t.id,
+        t.name,
+        t.description,
+        NULL::numeric AS unit_price_list,
+        t.list_price AS price,
+        'training'::text AS kind,
+        NULL::text AS benefits,
+        NULL::text AS contraindications,
+        NULL::text AS special_attention_notes,
+        ROUND((1 - (te.embedding <=> ${vectorLiteral}::vector))::numeric, 3)::float AS similarity_score
+      FROM training_embeddings te
+      JOIN training t ON te.training_id = t.id
+      WHERE te.embedding IS NOT NULL
+        AND t.is_active = true
+        AND (1 - (te.embedding <=> ${vectorLiteral}::vector)) >= ${threshold}
+
       ORDER BY similarity_score DESC
       LIMIT ${limit}
     `,
   );
 
-  // 2. Buscar promociones que contengan los servicios encontrados
+  // Se calcula `price_label` en TS (no en SQL) porque depende de una regex
+  // sobre el nombre — ver `priceLabelFor`.
+  const treatments: TreatmentResult[] = rows.map((row) => ({
+    ...row,
+    price_label: priceLabelFor(row.kind, row.name),
+  }));
+
+  // 2. Buscar promociones que contengan los servicios encontrados.
+  // 🚨 `promotion_service` solo conoce ids de SERVICIOS: un id de actividad o
+  // capacitación no existe ahí y ensuciaría la consulta (o directamente
+  // fallaría si algún día se agrega una FK). Se filtra por kind === "service"
+  // antes de armar la lista.
   let promotions: PromotionResult[] = [];
 
-  if (treatments.length > 0) {
-    const serviceIds = treatments.map((t) => t.id);
+  const serviceIds = treatments.filter((t) => t.kind === "service").map((t) => t.id);
+
+  if (serviceIds.length > 0) {
     // Construir la lista de UUIDs de forma segura
     const uuidList = serviceIds.map((id) => `'${id}'`).join(",");
 
