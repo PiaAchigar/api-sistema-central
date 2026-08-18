@@ -1,13 +1,14 @@
 // api-sistema-central/src/workers/embedding-calculator.ts
 //
-// Recalcula los embeddings de `service_embeddings` y `activity_embeddings`
-// que quedaron en NULL: los triggers `trg_service_embeddings_sync` (1.4.0) y
-// `trg_activity_embeddings_sync` (1.26.0/06) resetean `content` y dejan
-// `embedding = NULL` cada vez que se crea/edita un `service` o una
-// `activity`. Este worker toma hasta 10 filas pendientes por invocación
-// (para no acercarse al límite de tiempo de un Worker), mezclando ambas
-// tablas, y les calcula el vector usando OpenAI text-embedding-3-small
-// (embeddings semánticos reales).
+// Recalcula los embeddings de `service_embeddings`, `activity_embeddings` y
+// `training_embeddings` que quedaron en NULL: los triggers
+// `trg_service_embeddings_sync` (1.4.0), `trg_activity_embeddings_sync`
+// (1.26.0/06) y `trg_training_embeddings_sync` (1.27.0/01) resetean
+// `content` y dejan `embedding = NULL` cada vez que se crea/edita un
+// `service`, una `activity` o una `training`. Este worker toma hasta 10
+// filas pendientes por invocación (para no acercarse al límite de tiempo de
+// un Worker), mezclando las tres tablas, y les calcula el vector usando
+// OpenAI text-embedding-3-small (embeddings semánticos reales).
 //
 // Se puede disparar de dos formas (misma lógica, `recalculateEmbeddings`):
 //   1. HTTP: POST /api/webhooks/recalculate-embeddings (requiere auth, ver
@@ -25,8 +26,20 @@ import type { AppBindings, Variables } from "../env";
 const BATCH_LIMIT = 10;
 
 // `source` distingue de qué tabla vino la fila (ver el UNION ALL más abajo)
-// para saber a cuál de las dos hay que escribirle el vector calculado.
-type PendingEmbeddingRow = { id: string; content: string; source: "service" | "activity" };
+// para saber a cuál de las tres hay que escribirle el vector calculado.
+export type EmbeddingSource = "service" | "activity" | "training";
+
+type PendingEmbeddingRow = { id: string; content: string; source: EmbeddingSource };
+
+/**
+ * Mapea `source` a su tabla de embeddings. Extraído a función y exportado
+ * para poder testear el mapeo sin necesidad de una base levantada.
+ */
+export function tableForSource(source: EmbeddingSource): string {
+  if (source === "activity") return "activity_embeddings";
+  if (source === "training") return "training_embeddings";
+  return "service_embeddings";
+}
 
 export type RecalculateResultRow = { id: string; status: "success" | "failed"; error?: string };
 
@@ -50,9 +63,11 @@ export async function recalculateEmbeddings(
     return { error: "No hay credencial de OpenAI activa configurada en ai_provider_credentials. Ve a /automatizacion/llm-config en front-crm para agregar una." };
   }
 
-  // UNION ALL: un mismo batch puede traer filas pendientes de servicios y de
-  // actividades. No hay riesgo de mezclar sus IDs porque cada UPDATE de abajo
-  // apunta a la tabla correcta según `source`.
+  // UNION ALL: un mismo batch puede traer filas pendientes de servicios, de
+  // actividades y de capacitaciones. No hay riesgo de mezclar sus IDs porque
+  // el UPDATE de abajo resuelve la tabla correcta con `tableForSource`. El
+  // LIMIT aplica al resultado combinado de las tres ramas (un lote de hasta
+  // 10 filas en total, no 10 por tabla).
   const rows = await db.execute<PendingEmbeddingRow>(
     sql`SELECT id, content, 'service' AS source
           FROM service_embeddings
@@ -60,6 +75,10 @@ export async function recalculateEmbeddings(
         UNION ALL
         SELECT id, content, 'activity' AS source
           FROM activity_embeddings
+         WHERE embedding IS NULL
+        UNION ALL
+        SELECT id, content, 'training' AS source
+          FROM training_embeddings
          WHERE embedding IS NULL
         LIMIT ${BATCH_LIMIT}`,
   );
@@ -75,19 +94,17 @@ export async function recalculateEmbeddings(
       const embedding = await generateEmbedding(row.content, credential.apiKey, "openai", credential.model);
       // pgvector acepta el literal de texto "[n1,n2,...]" con cast a ::vector.
       const vectorLiteral = `[${embedding.join(",")}]`;
-      if (row.source === "activity") {
-        await db.execute(
-          sql`UPDATE activity_embeddings
-              SET embedding = ${vectorLiteral}::vector, updated_at = now()
-              WHERE id = ${row.id}`,
-        );
-      } else {
-        await db.execute(
-          sql`UPDATE service_embeddings
-              SET embedding = ${vectorLiteral}::vector, updated_at = now()
-              WHERE id = ${row.id}`,
-        );
-      }
+      // El nombre de tabla no puede ir como parámetro bindeado en un `sql``
+      // template (Postgres no acepta parámetros donde va un identificador):
+      // hay que interpolarlo con `sql.raw()`. Es seguro porque `tableForSource`
+      // devuelve un literal cerrado del código, nunca un valor de `row` ni
+      // ninguna otra entrada externa.
+      const table = tableForSource(row.source);
+      await db.execute(
+        sql`UPDATE ${sql.raw(table)}
+            SET embedding = ${vectorLiteral}::vector, updated_at = now()
+            WHERE id = ${row.id}`,
+      );
       results.push({ id: row.id, status: "success" });
     } catch (err) {
       console.error(`[embedding-calculator] Fallo al generar embedding para ${row.id}:`, err);
