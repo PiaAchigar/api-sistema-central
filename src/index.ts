@@ -5,7 +5,7 @@ import { api } from "./routes";
 import { whatsappWebhookRouter } from "./routes/webhooks/whatsapp";
 import { requireAuth, requirePermission } from "./middleware/auth";
 import { createDb } from "./db/client";
-import { recalculateEmbeddings, recalculateEmbeddingsWorker } from "./workers/embedding-calculator";
+import { drenarPendientes, recalculateEmbeddingsWorker } from "./workers/embedding-calculator";
 import { processMessageQueue } from "./workers/queue-processor";
 import { cleanupOldBuckets } from "./services/rate-limiter.service";
 import { trainingSubscriptionsRepository } from "./repositories/trainingSubscriptionsRepository";
@@ -19,6 +19,7 @@ import type { AppBindings, Variables } from "./env";
 // este mismo string para decidir qué handler correr — ver wrangler.toml
 // ([triggers] crons) donde se registra el trigger real.
 const MESSAGE_QUEUE_CRON = "* * * * *";
+const EMBEDDINGS_CRON = "0 * * * *";
 
 const app = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 
@@ -137,15 +138,18 @@ export default {
       return;
     }
 
-    // Cron trigger opcional para recalcular embeddings pendientes (ver
-    // wrangler.toml — comentado por default: cada corrida gasta la
-    // credencial de Anthropic y, tal como está hoy, "embedding" no es
-    // semánticamente real — ver embedding.ts). Si se habilita ese cron en
-    // wrangler.toml, cae acá.
-    ctx.waitUntil(
-      recalculateEmbeddings(db, env as unknown as AppBindings).then((result) => {
-        console.log("[embedding-calculator] cron run:", result);
-      }),
-    );
+    // Comparación explícita, no un `else`: antes cualquier cron que no fuera
+    // el de la cola caía acá, así que agregar un tercer cron habría disparado
+    // recálculos que nadie pidió.
+    if (event.cron === EMBEDDINGS_CRON) {
+      ctx.waitUntil(
+        drenarPendientes(db, env as unknown as AppBindings).then((r) => {
+          console.log("[embedding-calculator] cron:", r);
+        }),
+      );
+      return;
+    }
+
+    console.warn(`[scheduled] cron sin handler: ${event.cron}`);
   },
 } satisfies ExportedHandler<Env>;

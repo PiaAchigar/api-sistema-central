@@ -35,18 +35,24 @@ SUPABASE_URL = "https://pfemndbftxhlcvyhpbfg.supabase.co"
 # corrida por minuto da máx 10 msgs/min, que es exactamente el rate limit de
 # automatizaciones pedido (no hace falta el "cada 10s" para cumplirlo).
 [triggers]
-crons = ["* * * * *"]
+# "* * * * *"  → cola de mensajes de WhatsApp + limpieza de rate limits.
+# "0 * * * *"  → recálculo de embeddings pendientes (cada hora, en punto).
+crons = ["* * * * *", "0 * * * *"]
 
-# Para agregar el cron de recalcular embeddings pendientes
-# (service_embeddings.embedding IS NULL — ver src/workers/embedding-calculator.ts),
-# sumar su patrón al array de arriba, ej: crons = ["* * * * *", "*/5 * * * *"].
-# Deshabilitado por default: cada corrida gasta la credencial de Anthropic
-# activa en ai_provider_credentials, y tal como está implementado hoy el
-# "embedding" generado NO es un embedding semántico real (Claude no tiene
-# endpoint de embeddings, ver advertencia en src/lib/embedding.ts) —
-# habilitarlo antes de resolver ese punto solo gasta plata sin acercar la
-# búsqueda semántica a funcionar. Sumar cuando se migre a un proveedor con
-# embeddings reales (Voyage AI u OpenAI).
+# Sobre el cron de embeddings: recalcula las filas con `embedding IS NULL` en
+# service_embeddings / activity_embeddings / training_embeddings, que es lo que
+# dejan los triggers cuando Laura edita un servicio, una actividad o una
+# capacitación. Sin esto, un ítem editado desaparece del buscador de la web
+# hasta que alguien apriete el botón del dashboard.
+#
+# Costo: despreciable. El catálogo completo son ~10.056 tokens y
+# text-embedding-3-small cuesta US$0,02 por millón — reindexar los 247 ítems
+# sale US$0,0002 (medido el 2026-08-18). Cuando no hay pendientes la corrida
+# ni siquiera llama a OpenAI: es una consulta que devuelve cero filas.
+#
+# Los triggers están sobre las tablas de ORIGEN (service, activities,
+# training), no sobre las de embeddings, así que escribir el vector no vuelve
+# a disparar el trigger: no hay bucle posible.
 
 # Secretos — NO van en este archivo. Configurar con:
 #   wrangler secret put API_KEY               ← API key estática (para backend-to-backend / dev)
