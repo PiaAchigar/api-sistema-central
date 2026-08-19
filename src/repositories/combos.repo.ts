@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray, ne } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { combos, comboService, service } from "../db/schema";
-import { computeComboFinalPrice, computeComboSubtotal } from "../lib/combo-pricing";
+import { computeComboFinalPrice, computeComboSubtotal, precioDeServicio } from "../lib/combo-pricing";
 
 export type ComboLineInput = {
   serviceId: string;
@@ -104,11 +104,17 @@ async function freezePrices(db: Db, lines: ComboLineInput[]) {
   const ids = lines.map((l) => l.serviceId);
   const priced = ids.length
     ? await db
-        .select({ id: service.id, price: service.unitPriceList })
+        .select({
+          id: service.id,
+          priceList: service.unitPriceList,
+          priceCash: service.unitPriceCash,
+        })
         .from(service)
         .where(inArray(service.id, ids))
     : [];
-  const priceById = new Map(priced.map((p) => [p.id, p.price ? Number(p.price) : 0]));
+  // Lista si hay, y si no efectivo: 79 de 213 servicios activos en producción
+  // no tienen precio de lista. Ver precioDeServicio().
+  const priceById = new Map(priced.map((p) => [p.id, precioDeServicio(p.priceList, p.priceCash)]));
   return lines.map((l) => ({ ...l, servicePrice: priceById.get(l.serviceId) ?? 0 }));
 }
 

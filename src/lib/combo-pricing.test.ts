@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeComboFinalPrice, computeComboSubtotal } from "./combo-pricing";
+import { computeComboFinalPrice, computeComboSubtotal, precioDeServicio } from "./combo-pricing";
 
 describe("computeComboSubtotal", () => {
   it("multiplica el precio de cada servicio por sus sesiones", () => {
@@ -51,5 +51,30 @@ describe("computeComboFinalPrice", () => {
     expect(computeComboFinalPrice(100000, "fixed", null, null)).toBe(100000);
     expect(computeComboFinalPrice(100000, "percentage", null, null)).toBe(100000);
     expect(computeComboFinalPrice(100000, null, null, null)).toBe(100000);
+  });
+});
+
+describe("precioDeServicio", () => {
+  it("usa el precio de lista cuando está cargado", () => {
+    expect(precioDeServicio("45000.00", "40000.00")).toBe(45000);
+  });
+
+  it("cae al precio de efectivo cuando no hay lista", () => {
+    // El caso real de producción: 79 de 213 servicios activos sólo tienen
+    // unit_price_cash. Antes de este respaldo, el combo se congelaba en $0.
+    expect(precioDeServicio(null, "30000.00")).toBe(30000);
+  });
+
+  it("devuelve 0 si el servicio no tiene ningún precio cargado", () => {
+    expect(precioDeServicio(null, null)).toBe(0);
+    expect(precioDeServicio(undefined, undefined)).toBe(0);
+  });
+
+  it("acepta números además de los decimal string de Drizzle", () => {
+    expect(precioDeServicio(45000, null)).toBe(45000);
+  });
+
+  it("no devuelve NaN ante un valor no numérico", () => {
+    expect(precioDeServicio("no es un precio", null)).toBe(0);
   });
 });

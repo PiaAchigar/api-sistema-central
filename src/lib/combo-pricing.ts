@@ -36,3 +36,23 @@ export function computeComboFinalPrice(
   }
   return subtotal;
 }
+
+/**
+ * Precio unitario a usar para un servicio dentro de un combo.
+ *
+ * Se prefiere el precio de lista, pero **hay que caer al de efectivo cuando no
+ * hay lista**: en producción 79 de 213 servicios activos tienen
+ * `unit_price_list` en NULL y sólo `unit_price_cash` cargado. Sin este
+ * respaldo, cualquier combo armado con esos servicios se congelaba en $0 y el
+ * combo entero terminaba valiendo $0 —que fue exactamente lo que pasó con el
+ * primer combo que se cargó en producción.
+ */
+export function precioDeServicio(
+  unitPriceList: number | string | null | undefined,
+  unitPriceCash: number | string | null | undefined,
+): number {
+  const elegido = unitPriceList ?? unitPriceCash;
+  if (elegido == null) return 0;
+  const n = Number(elegido);
+  return Number.isFinite(n) ? n : 0;
+}
