@@ -16,6 +16,7 @@ import { getEmbeddingsStatus } from "../repositories/embeddings-status.repo";
 import { createDb } from "../db/client";
 import { encrypt } from "../services/crypto.service";
 import { mapearErrorOpenAI } from "../lib/openai-errors";
+import { EMBEDDING_DIMENSIONS } from "../lib/embedding";
 import {
   createCredentialSchema,
   validateApiKeySchema,
@@ -87,6 +88,11 @@ async function testOpenAIKey(apiKey: string, model: string): Promise<ValidationR
       body: JSON.stringify({
         model,
         input: "test",
+        // Mismo parámetro que manda `generateOpenAIEmbedding` (lib/embedding.ts)
+        // para la generación real: si acá faltaba, una key podía "validar" OK
+        // y después fallar (o devolver otra dimensión) en el 100% de los
+        // ítems al recalcular de verdad.
+        dimensions: EMBEDDING_DIMENSIONS,
       }),
     });
 

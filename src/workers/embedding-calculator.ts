@@ -5,17 +5,18 @@
 // `trg_service_embeddings_sync` (1.4.0), `trg_activity_embeddings_sync`
 // (1.26.0/06) y `trg_training_embeddings_sync` (1.27.0/01) resetean
 // `content` y dejan `embedding = NULL` cada vez que se crea/edita un
-// `service`, una `activity` o una `training`. Este worker toma hasta 10
-// filas pendientes por invocación (para no acercarse al límite de tiempo de
-// un Worker), mezclando las tres tablas, y les calcula el vector usando
-// OpenAI text-embedding-3-small (embeddings semánticos reales).
+// `service`, una `activity` o una `training`. `recalculateEmbeddings` toma
+// hasta 10 filas pendientes por llamada (para no acercarse al límite de
+// tiempo de un Worker), mezclando las tres tablas, y les calcula el vector
+// usando OpenAI text-embedding-3-small (embeddings semánticos reales).
 //
-// Se puede disparar de dos formas (misma lógica, `recalculateEmbeddings`):
+// Se dispara de dos formas, ambas activas:
 //   1. HTTP: POST /api/webhooks/recalculate-embeddings (requiere auth, ver
-//      index.ts) — para correrlo a mano o desde otro sistema interno.
-//   2. Cron: Cloudflare Cron Trigger → `scheduled()` en index.ts (opcional,
-//      comentado en wrangler.toml — puede habilitarse una vez confirmado que
-//      funciona con OpenAI).
+//      index.ts) — un lote de hasta 10 por llamada; lo usa el botón
+//      "Actualizar buscador" del dashboard, que lo llama en loop.
+//   2. Cron: Cloudflare Cron Trigger horario → `scheduled()` en index.ts,
+//      que llama a `drenarPendientes` (ver más abajo) para correr varios
+//      lotes seguidos hasta un tope de lotes/ítems/tiempo, no solo uno.
 
 import type { Context } from "hono";
 import { sql } from "drizzle-orm";
@@ -46,7 +47,20 @@ export type RecalculateResultRow = { id: string; status: "success" | "failed"; e
 export type RecalculateOutcome =
   | { error: string }
   | { message: string }
-  | { processed: number; results: RecalculateResultRow[]; sinCredito: boolean };
+  | {
+      processed: number;
+      results: RecalculateResultRow[];
+      sinCredito: boolean;
+      /**
+       * Cuántos de `results` terminaron en `status: "failed"`. `processed`
+       * cuenta fallidos igual que éxitos (es `results.length`), así que un
+       * caller que solo mira `processed` no puede distinguir un lote que
+       * hizo trabajo real de uno que falló entero — ver `fallidos ===
+       * processed` como "no se escribió ni un vector" en `drenarPendientes`
+       * y en el loop del front (InteligenciaArtificialPage.tsx).
+       */
+      fallidos: number;
+    };
 
 /**
  * Lógica compartida por el endpoint HTTP (`recalculateEmbeddingsWorker`) y el
@@ -60,7 +74,10 @@ export async function recalculateEmbeddings(
 ): Promise<RecalculateOutcome> {
   const credential = await getActiveCredential(db, env.CREDENTIALS_ENCRYPTION_KEY, "openai");
   if (!credential) {
-    return { error: "No hay credencial de OpenAI activa configurada en ai_provider_credentials. Ve a /automatizacion/llm-config en front-crm para agregar una." };
+    return {
+      error:
+        "Todavía no cargaste una credencial de OpenAI. Andá a Configuración → Inteligencia Artificial para cargarla.",
+    };
   }
 
   // UNION ALL: un mismo batch puede traer filas pendientes de servicios, de
@@ -123,7 +140,8 @@ export async function recalculateEmbeddings(
     }
   }
 
-  return { processed: results.length, results, sinCredito };
+  const fallidos = results.filter((r) => r.status === "failed").length;
+  return { processed: results.length, results, sinCredito, fallidos };
 }
 
 export async function recalculateEmbeddingsWorker(
@@ -149,7 +167,8 @@ export type MotivoCorte =
   | "tope-items"
   | "tope-tiempo"
   | "sin-credito"
-  | "sin-credencial";
+  | "sin-credencial"
+  | "todos-fallaron";
 
 export type DrenarOpciones = {
   maxLotes?: number;
@@ -166,6 +185,12 @@ export type DrenarResultado = {
   procesados: number;
   sinCredito: boolean;
   motivo: MotivoCorte;
+  /**
+   * Primer error de ítem del lote que causó el corte por `"todos-fallaron"`.
+   * Solo se completa en ese caso — queda en el log del cron para que se
+   * pueda diagnosticar sin ir a mirar `console.error` por id.
+   */
+  error?: string;
 };
 
 /**
@@ -211,5 +236,17 @@ export async function drenarPendientes(
 
     procesados += salida.processed;
     if (salida.sinCredito) return { lotes, procesados, sinCredito: true, motivo: "sin-credito" };
+
+    // Un lote sin un solo éxito (`fallidos === processed`) significa que no
+    // se escribió ni un vector: sin este corte, el `LIMIT 10` de la próxima
+    // vuelta trae exactamente las mismas filas y el drenado repite el mismo
+    // error para siempre (ver IMPORTANT 1 del review de rama). Se corta acá
+    // en vez de reintentar — igual que el corte por `sinCredito` — porque un
+    // fallo por ítem que no sea falta de crédito (key revocada, modelo
+    // inválido, etc.) tampoco se va a arreglar solo reintentando.
+    if (salida.processed > 0 && salida.fallidos === salida.processed) {
+      const primerError = salida.results.find((r) => r.status === "failed")?.error;
+      return { lotes, procesados, sinCredito: false, motivo: "todos-fallaron", error: primerError };
+    }
   }
 }

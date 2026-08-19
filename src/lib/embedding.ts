@@ -12,8 +12,13 @@ import type { Db } from "../db/client";
 import { mapearErrorOpenAI } from "./openai-errors";
 
 const OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings";
-const EMBEDDING_DIMENSIONS = 1536;
-const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
+// Exportadas para que `ai-config.ts` (POST /validate) y `ai-config.schema.ts`
+// (createCredentialSchema) usen los mismos valores que la generación real:
+// una key puede "validar" con un modelo/params distintos a los que se usan
+// después para calcular el vector de verdad, y ahí se cuela un desalineado
+// silencioso (ver IMPORTANT 1 y 3 del review de rama).
+export const EMBEDDING_DIMENSIONS = 1536;
+export const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
 
 export class EmbeddingError extends Error {
   status?: number;

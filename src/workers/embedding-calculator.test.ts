@@ -19,7 +19,7 @@ describe("tableForSource", () => {
 const db = {} as never;
 const env = { CREDENTIALS_ENCRYPTION_KEY: "x" } as never;
 
-/** Lote falso que devuelve `porLote` items las primeras `veces` llamadas. */
+/** Lote falso que devuelve `porLote` items exitosos las primeras `veces` llamadas. */
 function loteFalso(veces: number, porLote = 10) {
   let llamadas = 0;
   return async () => {
@@ -29,6 +29,7 @@ function loteFalso(veces: number, porLote = 10) {
       processed: porLote,
       results: Array.from({ length: porLote }, (_, i) => ({ id: `${llamadas}-${i}`, status: "success" as const })),
       sinCredito: false,
+      fallidos: 0,
     };
   };
 }
@@ -67,7 +68,7 @@ describe("drenarPendientes", () => {
 
   it("corta apenas un lote avisa que no hay crédito", async () => {
     const r = await drenarPendientes(db, env, {
-      correrLote: async () => ({ processed: 0, results: [], sinCredito: true }),
+      correrLote: async () => ({ processed: 0, results: [], sinCredito: true, fallidos: 0 }),
     });
     expect(r.motivo).toBe("sin-credito");
     expect(r.sinCredito).toBe(true);
@@ -80,5 +81,43 @@ describe("drenarPendientes", () => {
     });
     expect(r.motivo).toBe("sin-credencial");
     expect(r.procesados).toBe(0);
+  });
+
+  it("corta si un lote no tuvo ni un solo éxito, en vez de repetir el mismo error 10 veces", async () => {
+    const r = await drenarPendientes(db, env, {
+      correrLote: async () => ({
+        processed: 10,
+        results: [
+          { id: "a", status: "failed" as const, error: "invalid_api_key: la clave no es válida" },
+          ...Array.from({ length: 9 }, (_, i) => ({ id: `b${i}`, status: "failed" as const, error: "otro error" })),
+        ],
+        sinCredito: false,
+        fallidos: 10,
+      }),
+    });
+    expect(r.motivo).toBe("todos-fallaron");
+    expect(r.lotes).toBe(1);
+    expect(r.error).toBe("invalid_api_key: la clave no es válida");
+  });
+
+  it("no corta si el lote tuvo al menos un éxito, aunque haya fallidos mezclados", async () => {
+    let llamadas = 0;
+    const r = await drenarPendientes(db, env, {
+      correrLote: async () => {
+        llamadas++;
+        if (llamadas > 2) return { message: "No hay embeddings para recalcular" };
+        return {
+          processed: 10,
+          results: [
+            { id: "ok", status: "success" as const },
+            ...Array.from({ length: 9 }, (_, i) => ({ id: `f${i}`, status: "failed" as const, error: "e" })),
+          ],
+          sinCredito: false,
+          fallidos: 9,
+        };
+      },
+    });
+    expect(r.motivo).toBe("sin-pendientes");
+    expect(r.lotes).toBe(2);
   });
 });

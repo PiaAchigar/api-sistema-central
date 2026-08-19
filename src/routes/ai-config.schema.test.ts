@@ -55,6 +55,25 @@ describe("createCredentialSchema", () => {
     });
     expect(r.success).toBe(false);
   });
+  it("acepta openai con el modelo fijo text-embedding-3-small", () => {
+    const r = createCredentialSchema.safeParse({
+      provider: "openai",
+      api_key: "sk-123",
+      model: "text-embedding-3-small",
+    });
+    expect(r.success).toBe(true);
+  });
+  it("rechaza openai con cualquier otro modelo (evita mezclar espacios de embeddings)", () => {
+    const r = createCredentialSchema.safeParse({
+      provider: "openai",
+      api_key: "sk-123",
+      model: "text-embedding-3-large",
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues[0]?.message).toContain("text-embedding-3-small");
+    }
+  });
 });
 
 describe("validateApiKeySchema", () => {

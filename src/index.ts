@@ -139,9 +139,13 @@ export default {
     // recálculos que nadie pidió.
     if (event.cron === EMBEDDINGS_CRON) {
       ctx.waitUntil(
-        drenarPendientes(db, env as unknown as AppBindings).then((r) => {
-          console.log("[embedding-calculator] cron:", r);
-        }),
+        drenarPendientes(db, env as unknown as AppBindings)
+          .then((r) => {
+            console.log("[embedding-calculator] cron:", r);
+          })
+          .catch((err) => {
+            console.error("[embedding-calculator] cron falló:", err);
+          }),
       );
       return;
     }
