@@ -167,51 +167,71 @@ export async function listPublicCombos(db: Db) {
   return out;
 }
 
+/**
+ * `writeLines` borra todas las líneas del combo y las vuelve a insertar: sin
+ * transacción, si el INSERT falla después del DELETE el combo queda activo,
+ * visible y vacío (0 servicios, $0), sin forma de deshacerlo. Por eso todo el
+ * alta va en una única transacción.
+ */
 export async function createCombo(db: Db, header: ComboHeaderInput, lines: ComboLineInput[]) {
-  const frozen = await freezePrices(db, lines);
-  const [created] = await db
-    .insert(combos)
-    .values({
-      name: header.name,
-      description: header.description ?? null,
-      priceType: header.priceType,
-      fixedPrice: dec(header.fixedPrice ?? null),
-      discountPercentage: dec(header.discountPercentage ?? null),
-      validityMonths: header.validityMonths,
-      isActive: true,
-      isVisibleWeb: header.isVisibleWeb ?? true,
-      displayOrder: header.displayOrder ?? 0,
-    })
-    .returning({ id: combos.id });
-  if (!created) return null;
-  await writeLines(db, created.id, frozen);
-  return getComboById(db, created.id);
+  const createdId = await db.transaction(async (tx) => {
+    const frozen = await freezePrices(tx, lines);
+    const [created] = await tx
+      .insert(combos)
+      .values({
+        name: header.name,
+        description: header.description ?? null,
+        priceType: header.priceType,
+        fixedPrice: dec(header.fixedPrice ?? null),
+        discountPercentage: dec(header.discountPercentage ?? null),
+        validityMonths: header.validityMonths,
+        isActive: true,
+        isVisibleWeb: header.isVisibleWeb ?? true,
+        displayOrder: header.displayOrder ?? 0,
+      })
+      .returning({ id: combos.id });
+    if (!created) return null;
+    await writeLines(tx, created.id, frozen);
+    return created.id;
+  });
+  if (!createdId) return null;
+  // getComboById va DESPUÉS del commit, no adentro de la transacción: es una
+  // lectura de lo que ya quedó confirmado, y no tiene sentido alargar el
+  // bloqueo de la transacción con un SELECT que no necesita ver datos "en
+  // vuelo" ni participar del rollback.
+  return getComboById(db, createdId);
 }
 
+/** Mismo motivo que `createCombo`: DELETE + INSERT de las líneas en una sola transacción. */
 export async function updateCombo(
   db: Db,
   id: string,
   header: ComboHeaderInput,
   lines: ComboLineInput[],
 ) {
-  const frozen = await freezePrices(db, lines);
-  const updated = await db
-    .update(combos)
-    .set({
-      name: header.name,
-      description: header.description ?? null,
-      priceType: header.priceType,
-      fixedPrice: dec(header.fixedPrice ?? null),
-      discountPercentage: dec(header.discountPercentage ?? null),
-      validityMonths: header.validityMonths,
-      isVisibleWeb: header.isVisibleWeb ?? true,
-      displayOrder: header.displayOrder ?? 0,
-    })
-    .where(eq(combos.id, id))
-    .returning({ id: combos.id });
-  if (updated.length === 0) return null;
-  await writeLines(db, id, frozen);
-  return getComboById(db, id);
+  const updatedId = await db.transaction(async (tx) => {
+    const frozen = await freezePrices(tx, lines);
+    const updated = await tx
+      .update(combos)
+      .set({
+        name: header.name,
+        description: header.description ?? null,
+        priceType: header.priceType,
+        fixedPrice: dec(header.fixedPrice ?? null),
+        discountPercentage: dec(header.discountPercentage ?? null),
+        validityMonths: header.validityMonths,
+        isVisibleWeb: header.isVisibleWeb ?? true,
+        displayOrder: header.displayOrder ?? 0,
+      })
+      .where(eq(combos.id, id))
+      .returning({ id: combos.id });
+    if (updated.length === 0) return null;
+    await writeLines(tx, id, frozen);
+    return updated[0]!.id;
+  });
+  if (!updatedId) return null;
+  // Mismo criterio que en createCombo: lectura post-commit, fuera de la transacción.
+  return getComboById(db, updatedId);
 }
 
 export async function setComboStatus(db: Db, id: string, isActive: boolean) {

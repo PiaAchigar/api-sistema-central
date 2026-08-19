@@ -17,9 +17,17 @@ import type { AppBindings, Variables } from "../../env";
 
 const combosRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 
+/** Tope de sesiones por línea: 999 sobra para este negocio y evita que un
+ *  número desmedido reviente el INSERT (int4 de Postgres) como un 500. */
+const MAX_SESSIONS_INCLUDED = 999;
+
 const lineSchema = z.object({
-  serviceId: z.string().uuid(),
-  sessionsIncluded: z.number().int().min(1, "Cada servicio tiene que llevar al menos 1 sesión"),
+  serviceId: z.string().uuid({ message: "El servicio no es válido" }),
+  sessionsIncluded: z
+    .number({ invalid_type_error: "Las sesiones tienen que ser un número" })
+    .int("Las sesiones tienen que ser un número entero")
+    .min(1, "Cada servicio tiene que llevar al menos 1 sesión")
+    .max(MAX_SESSIONS_INCLUDED, `Las sesiones no pueden superar ${MAX_SESSIONS_INCLUDED}`),
 });
 
 /**
@@ -29,17 +37,36 @@ const lineSchema = z.object({
  */
 export const comboBody = z
   .object({
-    name: z.string().min(1, "El nombre es obligatorio").max(200),
-    description: z.string().max(2000).nullish(),
-    priceType: z.enum(["fixed", "percentage"]),
-    fixedPrice: z.number().nonnegative().nullish(),
-    discountPercentage: z.number().min(0).max(100).nullish(),
+    name: z
+      .string()
+      .min(1, "El nombre es obligatorio")
+      .max(200, "El nombre no puede superar los 200 caracteres"),
+    description: z
+      .string()
+      .max(2000, "La descripción no puede superar los 2000 caracteres")
+      .nullish(),
+    priceType: z.enum(["fixed", "percentage"], {
+      errorMap: () => ({ message: "El tipo de precio tiene que ser fijo o por porcentaje" }),
+    }),
+    fixedPrice: z
+      .number({ invalid_type_error: "El precio tiene que ser un número" })
+      .nonnegative("El precio no puede ser negativo")
+      .nullish(),
+    discountPercentage: z
+      .number({ invalid_type_error: "El porcentaje tiene que ser un número" })
+      .min(0, "El porcentaje no puede ser negativo")
+      .max(100, "El porcentaje no puede superar el 100%")
+      .nullish(),
     validityMonths: z
-      .number()
-      .int()
+      .number({ invalid_type_error: "La vigencia tiene que ser un número" })
+      .int("La vigencia tiene que ser un número entero de meses")
       .min(1, "La vigencia tiene que ser de al menos 1 mes"),
     isVisibleWeb: z.boolean().nullish(),
-    displayOrder: z.number().int().nonnegative().nullish(),
+    displayOrder: z
+      .number({ invalid_type_error: "El orden tiene que ser un número" })
+      .int("El orden tiene que ser un número entero")
+      .nonnegative("El orden no puede ser negativo")
+      .nullish(),
     lines: z.array(lineSchema).min(1, "El combo tiene que incluir al menos un servicio"),
   })
   .superRefine((v, ctx) => {
