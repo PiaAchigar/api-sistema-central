@@ -427,3 +427,33 @@ export const activityAttendance = pgTable("activity_attendance", {
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
+
+// ── Combos (Migración 1.30.0) ───────────────────────────────────────────────
+// Paquete de sesiones que la clienta compra y consume. NO es una promo: la
+// promo caduca, el combo se consume. La compra y el consumo son fases 2 y 3.
+export const combos = pgTable("combos", {
+  id: id(),
+  name: varchar("name", { length: 200 }),
+  description: text("description"),
+  priceType: varchar("price_type", { length: 20 }), // 'fixed' | 'percentage'
+  fixedPrice: decimal("fixed_price", { precision: 10, scale: 2 }),
+  discountPercentage: decimal("discount_percentage", { precision: 5, scale: 2 }),
+  validityMonths: integer("validity_months"),
+  isActive: boolean("is_active"),
+  isVisibleWeb: boolean("is_visible_web"),
+  displayOrder: integer("display_order"),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export const comboService = pgTable("combo_service", {
+  id: id(),
+  comboId: uuid("combo_id"),
+  serviceId: uuid("service_id"),
+  sessionsIncluded: integer("sessions_included"),
+  // Congelado al guardar desde service.unit_price_list. Si se leyera el precio
+  // vivo, subirle el precio a un servicio cambiaría retroactivamente lo que
+  // muestran todos los combos que lo incluyen.
+  servicePrice: decimal("service_price", { precision: 10, scale: 2 }),
+  createdAt: createdAt(),
+});
