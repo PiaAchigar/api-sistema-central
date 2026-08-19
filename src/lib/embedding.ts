@@ -9,12 +9,22 @@
 import { decrypt } from "../services/crypto.service";
 import { getActiveAICredential } from "../repositories/ai-credentials.repo";
 import type { Db } from "../db/client";
+import { mapearErrorOpenAI } from "./openai-errors";
 
 const OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings";
 const EMBEDDING_DIMENSIONS = 1536;
 const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
 
-export class EmbeddingError extends Error {}
+export class EmbeddingError extends Error {
+  status?: number;
+  codigo?: string;
+  constructor(message: string, status?: number, codigo?: string) {
+    super(message);
+    this.name = "EmbeddingError";
+    this.status = status;
+    this.codigo = codigo;
+  }
+}
 
 type OpenAIEmbeddingsResponse = {
   data: Array<{
@@ -46,10 +56,15 @@ async function generateOpenAIEmbedding(
 
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    const message =
-      (body as { error?: { message?: string } } | null)?.error?.message ??
-      `OpenAI respondió ${res.status}`;
-    throw new EmbeddingError(`Fallo al llamar a OpenAI Embeddings API: ${message}`);
+    // Se conserva el código además del mensaje: `recalculateEmbeddings` lo
+    // usa para cortar el drenado cuando la cuenta se quedó sin crédito, en
+    // vez de reintentar 10 lotes contra una cuenta vacía.
+    const info = mapearErrorOpenAI(res.status, body);
+    throw new EmbeddingError(
+      `Fallo al llamar a OpenAI Embeddings API: ${info.detalle ?? info.mensaje}`,
+      res.status,
+      info.codigo,
+    );
   }
 
   const data = (await res.json()) as OpenAIEmbeddingsResponse;

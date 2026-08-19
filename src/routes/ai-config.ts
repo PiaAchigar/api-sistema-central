@@ -14,6 +14,7 @@ import {
 } from "../repositories/ai-credentials.repo";
 import { createDb } from "../db/client";
 import { encrypt } from "../services/crypto.service";
+import { mapearErrorOpenAI } from "../lib/openai-errors";
 import {
   createCredentialSchema,
   validateApiKeySchema,
@@ -40,7 +41,12 @@ function toResponse(row: {
 }
 
 /** Resultado de probar la key contra el proveedor real. */
-type ValidationResult = { valid: boolean; error?: string };
+type ValidationResult = {
+  valid: boolean;
+  error?: string;
+  detalle?: string;
+  esFaltaDeCredito?: boolean;
+};
 
 async function testAnthropicKey(apiKey: string, model: string): Promise<ValidationResult> {
   try {
@@ -94,9 +100,12 @@ async function testOpenAIKey(apiKey: string, model: string): Promise<ValidationR
         model,
       });
     }
+    const info = mapearErrorOpenAI(res.status, text);
     return {
       valid: false,
-      error: text,
+      error: info.mensaje,
+      detalle: info.detalle,
+      esFaltaDeCredito: info.esFaltaDeCredito,
     };
   } catch (err) {
     console.error(err,{model: model});
