@@ -92,11 +92,9 @@ app.route("/api/webhooks/whatsapp", whatsappWebhookRouter);
 
 // A diferencia de /api/webhooks/whatsapp (que Meta llama sin login), este
 // endpoint no tiene ningún caller externo legítimo sin autenticar — dejarlo
-// público permitiría a cualquiera disparar llamadas a la API de Anthropic
+// público permitiría a cualquiera disparar llamadas al proveedor de embeddings
 // (con costo real) usando la credencial guardada. Se exige login + el mismo
 // permiso que ya protege /api/ai-config (gestión de credenciales de IA).
-// Ver src/workers/embedding-calculator.ts para la lógica y la advertencia
-// sobre qué tan "reales" son estos embeddings.
 app.post(
   "/api/webhooks/recalculate-embeddings",
   requireAuth,
@@ -106,12 +104,10 @@ app.post(
 
 export default {
   fetch: app.fetch,
-  // Cloudflare invoca `scheduled()` para cada cron trigger definido en
-  // wrangler.toml ([triggers] crons); `event.cron` trae el patrón que disparó
-  // esta corrida puntual, así que hay que ramificar por él — si no,
-  // cualquier cron activo dispararía TODOS los jobs de acá abajo, incluido
-  // recalculateEmbeddings (que gasta la credencial de Anthropic activa y
-  // está deliberadamente deshabilitado — ver wrangler.toml).
+  // Cloudflare invoca `scheduled()` una vez por cada patrón cron definido en
+  // wrangler.toml ([triggers] crons); `event.cron` trae el patrón exacto que
+  // disparó esta corrida, así que hay que ramificar por él para saber cuál
+  // handler ejecutar — ver wrangler.toml para los patrones vigentes.
   async scheduled(event, env, ctx) {
     // `env` acá viene tipado como `Env` (generado por `wrangler types`);
     // `AppBindings` es ese mismo shape con ARCA_MODE acotado a un literal
