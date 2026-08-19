@@ -12,6 +12,7 @@ import {
   deactivateAICredential,
   listAICredentials,
 } from "../repositories/ai-credentials.repo";
+import { getEmbeddingsStatus } from "../repositories/embeddings-status.repo";
 import { createDb } from "../db/client";
 import { encrypt } from "../services/crypto.service";
 import { mapearErrorOpenAI } from "../lib/openai-errors";
@@ -174,6 +175,20 @@ aiConfigRouter.patch(
     const row = await deactivateAICredential(db, id);
     if (!row) throw notFound("Credencial");
     return c.json(toResponse(row));
+  },
+);
+
+// Estado del buscador semántico: cuántos ítems están indexados y cuántos
+// quedan pendientes. Lo consume el dashboard para el cartel de aviso y para
+// el número que muestra el modal de confirmación antes de recalcular.
+// Permiso `crm:view` (solo lectura, igual que GET /credentials).
+aiConfigRouter.get(
+  "/embeddings-status",
+  requireAuth,
+  requirePermission("crm", "view"),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json(await getEmbeddingsStatus(db));
   },
 );
 
