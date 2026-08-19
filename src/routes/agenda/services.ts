@@ -135,7 +135,13 @@ services.get("/:id", async (c) => {
 // Campos editables del servicio (incluye los web settings que ya usaba el dashboard).
 const serviceBody = z.object({
   name: z.string().min(1).max(255).optional(),
-  description: z.string().max(255).nullish(),
+  // 2000, no 255: la columna en la base es `text` (sin límite) y el tope de 255
+  // era una restricción arbitraria del API que no coincidía con ella. Cinco
+  // servicios reales ya tenían descripciones de 262 a 303 caracteres — cargados
+  // por fuera del dashboard — y eso los volvía imposibles de guardar desde el
+  // modal: el PATCH fallaba con 400 antes de llegar a las categorías, y el
+  // error se veía en pantalla como "[object Object]".
+  description: z.string().max(2000).nullish(),
   code: z.string().max(50).nullish(),
   unitPriceList: z.number().nonnegative().nullish(),
   unitPriceCash: z.number().nonnegative().nullish(),
