@@ -141,7 +141,7 @@ aiConfigRouter.get("/credentials", requireAuth, requirePermission("crm", "view")
 // del mismo proveedor (solo una activa a la vez, ver índice único en la
 // migración). No valida contra el proveedor acá — el frontend llama primero
 // a /validate y recién si eso da ok manda el POST a /credentials.
-aiConfigRouter.post("/credentials", requireAuth, requirePermission("crm", "manage"), async (c) => {
+aiConfigRouter.post("/credentials", requireAuth, requirePermission("crm-config", "manage"), async (c) => {
   const body = await c.req.json().catch(() => null);
   const parsed = createCredentialSchema.safeParse(body);
   if (!parsed.success) {
@@ -159,7 +159,7 @@ aiConfigRouter.post("/credentials", requireAuth, requirePermission("crm", "manag
 
 // Prueba la api_key contra el proveedor real (request mínima, max_tokens=10)
 // SIN guardar nada. El frontend usa esto antes de guardar la credencial.
-aiConfigRouter.post("/validate", requireAuth, requirePermission("crm", "manage"), async (c) => {
+aiConfigRouter.post("/validate", requireAuth, requirePermission("crm-config", "manage"), async (c) => {
   const body = await c.req.json().catch(() => null);
   const parsed = validateApiKeySchema.safeParse(body);
   if (!parsed.success) {
@@ -174,7 +174,7 @@ aiConfigRouter.post("/validate", requireAuth, requirePermission("crm", "manage")
 aiConfigRouter.patch(
   "/credentials/:id/deactivate",
   requireAuth,
-  requirePermission("crm", "manage"),
+  requirePermission("crm-config", "manage"),
   async (c) => {
     const id = c.req.param("id");
     const db = createDb(c.env);

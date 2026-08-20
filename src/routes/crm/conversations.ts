@@ -148,7 +148,7 @@ conversationsRouter.patch(
 conversationsRouter.post(
   "/:id/simulate-inbound",
   requireAuth,
-  requirePermission("crm", "manage"),
+  requirePermission("crm-config", "manage"),
   zValidator("json", z.object({ content: z.string().min(1) })),
   async (c) => {
     const db = createDb(c.env);

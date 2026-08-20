@@ -22,7 +22,7 @@ automationFaqsRouter.get("/", requireAuth, requirePermission("crm", "view"), asy
 automationFaqsRouter.post(
   "/",
   requireAuth,
-  requirePermission("crm", "manage"),
+  requirePermission("crm-config", "manage"),
   zValidator("json", faqBody),
   async (c) => {
     const db = createDb(c.env);
@@ -40,7 +40,7 @@ automationFaqsRouter.post(
 automationFaqsRouter.patch(
   "/:id",
   requireAuth,
-  requirePermission("crm", "manage"),
+  requirePermission("crm-config", "manage"),
   zValidator("json", faqBody),
   async (c) => {
     const db = createDb(c.env);
@@ -56,7 +56,7 @@ automationFaqsRouter.patch(
   },
 );
 
-automationFaqsRouter.delete("/:id", requireAuth, requirePermission("crm", "manage"), async (c) => {
+automationFaqsRouter.delete("/:id", requireAuth, requirePermission("crm-config", "manage"), async (c) => {
   const db = createDb(c.env);
   const deleted = await deleteFaq(db, c.req.param("id"));
   if (!deleted) throw notFound("Faq");

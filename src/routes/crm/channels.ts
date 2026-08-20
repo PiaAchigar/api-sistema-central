@@ -46,7 +46,7 @@ channelsRouter.get("/", requireAuth, requirePermission("crm", "view"), async (c)
 channelsRouter.put(
   "/:channelType",
   requireAuth,
-  requirePermission("crm", "manage"),
+  requirePermission("crm-config", "manage"),
   async (c) => {
     const ct = c.req.param("channelType");
     if (!isChannelType(ct)) throw badRequest("Canal desconocido");

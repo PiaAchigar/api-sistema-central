@@ -36,7 +36,7 @@ automationsRouter.get(
 automationsRouter.post(
   "/",
   requireAuth,
-  requirePermission("crm", "manage"),
+  requirePermission("crm-config", "manage"),
   zValidator("json", ruleBody),
   async (c) => {
     const db = createDb(c.env);
@@ -56,7 +56,7 @@ automationsRouter.post(
 automationsRouter.patch(
   "/:id",
   requireAuth,
-  requirePermission("crm", "manage"),
+  requirePermission("crm-config", "manage"),
   zValidator("json", ruleBody),
   async (c) => {
     const db = createDb(c.env);
@@ -74,7 +74,7 @@ automationsRouter.patch(
   },
 );
 
-automationsRouter.delete("/:id", requireAuth, requirePermission("crm", "manage"), async (c) => {
+automationsRouter.delete("/:id", requireAuth, requirePermission("crm-config", "manage"), async (c) => {
   const db = createDb(c.env);
   const deleted = await deleteRule(db, c.req.param("id"));
   if (!deleted) throw notFound("Rule");
