@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { todayLocal } from "../../lib/time";
 
 export const CONTACT_STATUS = ["prospect", "customer", "inactive"] as const;
 
@@ -13,7 +14,16 @@ export const contactInput = z.object({
   facebookId: z.string().optional(),
   birthdate: z
     .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .regex(/^\d{4}-\d{2}-\d{2}$/, { message: "La fecha tiene que ser AAAA-MM-DD" })
+    // Una fecha de nacimiento en el futuro nunca es válida, y no es hipotético:
+    // la importación original dejó 1403 contactos —el 25% de los que tenían
+    // fecha— nacidos entre 2029 y 2075, porque leyó los años en dos dígitos.
+    // Se reparó en la migración 1.33.0; esto evita que vuelvan a entrar.
+    // El límite es el DÍA del negocio (ART), no UTC: entre las 21 y las 24
+    // `new Date()` ya está en el día siguiente y dejaría pasar un día de más.
+    .refine((v) => v <= todayLocal(), {
+      message: "La fecha de nacimiento no puede ser futura",
+    })
     .optional(),
   tags: z.array(z.string()).optional(),
   preferredService: z.string().optional(),

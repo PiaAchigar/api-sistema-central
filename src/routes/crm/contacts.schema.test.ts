@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { contactInput, listQuery } from "./contacts.schema";
+import { todayLocal } from "../../lib/time";
 
 describe("contactInput", () => {
   it("acepta un contacto mínimo (solo name) y aplica status default", () => {
@@ -40,6 +41,26 @@ describe("contactInput", () => {
 
   it("rechaza birthdate mal formado", () => {
     expect(contactInput.safeParse({ name: "Ana", birthdate: "20/05/1990" }).success).toBe(false);
+  });
+
+  it("rechaza una fecha de nacimiento futura", () => {
+    // La importación original dejó 1403 contactos nacidos entre 2029 y 2075
+    // (años leídos en dos dígitos). Se repararon en la migración 1.33.0; esto
+    // evita que vuelvan a entrar por la API.
+    const r = contactInput.safeParse({ name: "Ana", birthdate: "2075-12-23" });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues[0]?.message).toBe("La fecha de nacimiento no puede ser futura");
+    }
+  });
+
+  it("acepta una fecha de nacimiento pasada y también la de hoy", () => {
+    expect(contactInput.safeParse({ name: "Ana", birthdate: "1965-03-14" }).success).toBe(true);
+    expect(contactInput.safeParse({ name: "Ana", birthdate: todayLocal() }).success).toBe(true);
+  });
+
+  it("acepta que no venga birthdate", () => {
+    expect(contactInput.safeParse({ name: "Ana" }).success).toBe(true);
   });
 
   it("partial() acepta solo isArchived (para PATCH de archivar)", () => {

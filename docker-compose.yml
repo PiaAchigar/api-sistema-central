@@ -49,6 +49,7 @@ services:
       - ./src/db/migrations/1.30.0/01-combos.sql:/docker-entrypoint-initdb.d/36-combos.sql:ro
       - ./src/db/migrations/1.31.0/01-reparar-precios-combo.sql:/docker-entrypoint-initdb.d/37-reparar-precios-combo.sql:ro
       - ./src/db/migrations/1.32.0/01-limpiar-markdown-servicios.sql:/docker-entrypoint-initdb.d/38-limpiar-markdown-servicios.sql:ro
+      - ./src/db/migrations/1.33.0/01-reparar-fechas-nacimiento.sql:/docker-entrypoint-initdb.d/39-reparar-fechas-nacimiento.sql:ro
       #
       # Las que faltan de 1.26.0 (01-dedupe, 02-restructure, 03-eje-corporal,
       # 04-eje-dermatologia, 05-limpieza-eje, 07-archivar-eje-viejo,
@@ -63,7 +64,7 @@ services:
       #
       # Cada migración de ESQUEMA nueva se agrega acá arriba; el seed va último
       # porque Postgres corre /docker-entrypoint-initdb.d en orden alfabético.
-      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/39-seed.sql:ro
+      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/40-seed.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]
