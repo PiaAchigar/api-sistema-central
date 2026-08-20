@@ -98,7 +98,13 @@ export async function searchTreatments(
         s.name,
         s.description,
         s.unit_price_list,
-        s.unit_price_list AS price,
+        -- 59 de los 213 servicios activos tienen el precio SOLO en
+        -- unit_price_cash; leyendo unicamente la lista, el buscador los
+        -- mostraba sin precio. Misma regla que precioDeServicio() en
+        -- src/lib/combo-pricing.ts: la lista manda, el efectivo es el respaldo.
+        -- El 0 se descarta igual que el NULL porque en esta base significa
+        -- "no cargado", no "gratis".
+        NULLIF(COALESCE(NULLIF(s.unit_price_list, 0), NULLIF(s.unit_price_cash, 0)), 0) AS price,
         'service'::text AS kind,
         s.benefits,
         s.contraindications,
