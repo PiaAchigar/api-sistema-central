@@ -43,7 +43,27 @@ services:
       - ./src/db/migrations/1.24.0/classes-agenda.sql:/docker-entrypoint-initdb.d/30-classes-agenda.sql:ro
       - ./src/db/migrations/1.24.1/reconcile-billing-cycles-nullability.sql:/docker-entrypoint-initdb.d/31-reconcile-billing-cycles-nullability.sql:ro
       - ./src/db/migrations/1.25.0/credit-movements.sql:/docker-entrypoint-initdb.d/32-credit-movements.sql:ro
-      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/33-seed.sql:ro
+      - ./src/db/migrations/1.26.0/00-safety.sql:/docker-entrypoint-initdb.d/33-safety.sql:ro
+      - ./src/db/migrations/1.26.0/06-activity-embeddings.sql:/docker-entrypoint-initdb.d/34-activity-embeddings.sql:ro
+      - ./src/db/migrations/1.27.0/01-training-embeddings.sql:/docker-entrypoint-initdb.d/35-training-embeddings.sql:ro
+      - ./src/db/migrations/1.30.0/01-combos.sql:/docker-entrypoint-initdb.d/36-combos.sql:ro
+      - ./src/db/migrations/1.31.0/01-reparar-precios-combo.sql:/docker-entrypoint-initdb.d/37-reparar-precios-combo.sql:ro
+      - ./src/db/migrations/1.32.0/01-limpiar-markdown-servicios.sql:/docker-entrypoint-initdb.d/38-limpiar-markdown-servicios.sql:ro
+      #
+      # Las que faltan de 1.26.0 (01-dedupe, 02-restructure, 03-eje-corporal,
+      # 04-eje-dermatologia, 05-limpieza-eje, 07-archivar-eje-viejo,
+      # 08-cosmetologia-facial), 1.28.0 y 1.29.0 NO se montan y no es un olvido:
+      # son migraciones de DATOS que traen UUIDs de producción hardcodeados.
+      # Contra una base recién creada fallan con
+      #   ERROR: insert or update on table "categories" violates foreign key
+      #          constraint "fk_cat_parent"
+      # y ahí el entrypoint de Postgres aborta, dejando la base a medio armar
+      # (sin `combos`, entre otras). Si alguna vez hacen falta en local, hay que
+      # reescribirlas resolviendo las categorías por nombre en vez de por id.
+      #
+      # Cada migración de ESQUEMA nueva se agrega acá arriba; el seed va último
+      # porque Postgres corre /docker-entrypoint-initdb.d en orden alfabético.
+      - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/39-seed.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]
