@@ -66,6 +66,18 @@ describe("contactInput", () => {
   it("partial() acepta solo isArchived (para PATCH de archivar)", () => {
     expect(contactInput.partial().safeParse({ isArchived: true }).success).toBe(true);
   });
+
+  it("partial() NO afloja la guarda de fecha futura", () => {
+    // El PATCH de contactos valida con `contactInput.partial()`. Si `.partial()`
+    // descartara el refine, la guarda solo cubriría el alta y se podría meter
+    // una fecha futura editando un contacto — que es el camino más usado.
+    const r = contactInput.partial().safeParse({ birthdate: "2075-12-23" });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues[0]?.message).toBe("La fecha de nacimiento no puede ser futura");
+    }
+    expect(contactInput.partial().safeParse({ birthdate: "1965-03-14" }).success).toBe(true);
+  });
 });
 
 describe("listQuery", () => {
