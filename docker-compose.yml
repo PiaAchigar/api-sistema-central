@@ -50,6 +50,7 @@ services:
       - ./src/db/migrations/1.31.0/01-reparar-precios-combo.sql:/docker-entrypoint-initdb.d/37-reparar-precios-combo.sql:ro
       - ./src/db/migrations/1.32.0/01-limpiar-markdown-servicios.sql:/docker-entrypoint-initdb.d/38-limpiar-markdown-servicios.sql:ro
       - ./src/db/migrations/1.33.0/01-reparar-fechas-nacimiento.sql:/docker-entrypoint-initdb.d/39-reparar-fechas-nacimiento.sql:ro
+      - ./src/db/migrations/1.35.0/01-depilacion-zonas.sql:/docker-entrypoint-initdb.d/39b-depilacion-zonas.sql:ro
       #
       # Las que faltan de 1.26.0 (01-dedupe, 02-restructure, 03-eje-corporal,
       # 04-eje-dermatologia, 05-limpieza-eje, 07-archivar-eje-viejo,
