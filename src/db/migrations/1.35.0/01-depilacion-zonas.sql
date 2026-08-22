@@ -221,13 +221,17 @@ BEGIN
     END IF;
 
     -- ── 7. Borrado en orden (solo service_embeddings tiene CASCADE) ──────
+    -- `provider_rates_per_hour` NO se borra acá: es una VIEW sobre
+    -- `service_provider_service` (src/db/migrations/1.1.0/sync.sql), sin
+    -- trigger INSTEAD OF — un DELETE contra ella falla con "cannot delete
+    -- from view". Ya queda limpia sola al borrar la tabla base dos líneas
+    -- arriba.
     DELETE FROM service_category   WHERE service_id = ANY(serv_borrar);
     DELETE FROM service_embeddings WHERE service_id = ANY(serv_borrar);
     DELETE FROM combo_service      WHERE service_id = ANY(serv_borrar);
     DELETE FROM service_machine    WHERE service_id = ANY(serv_borrar);
     DELETE FROM service_provider_service WHERE service_id = ANY(serv_borrar);
     DELETE FROM promotion_service  WHERE service_id = ANY(serv_borrar);
-    DELETE FROM provider_rates_per_hour  WHERE service_id = ANY(serv_borrar);
     DELETE FROM service WHERE id = ANY(serv_borrar);
     RAISE NOTICE 'Borradas % filas de zona de service.', array_length(serv_borrar,1);
   END IF;
