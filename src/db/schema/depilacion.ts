@@ -97,9 +97,15 @@ export const depilationPricingConfig = pgTable("depilation_pricing_config", {
 //     no "cobrame este monto fijo".
 // `choice_zone_count` es cuántas zonas de las incluidas son "a elección" del
 // cliente (ver `depilation_combo_zone`) en vez de fijas en el pack.
+//
+// `name` es UNIQUE (`ux_depilation_combo_name`). Sin esto el `ON CONFLICT DO
+// NOTHING` del seed no tiene índice contra qué chocar —el `id` siempre es un
+// uuid nuevo— y re-pegar la migración duplicaría los 3 packs. No es teórico:
+// ya pasó con la 1.34.0 en el SQL Editor de Supabase (cortó a mitad, la
+// usuaria la corrió de nuevo).
 export const depilationCombo = pgTable("depilation_combo", {
   id: id(),
-  name: varchar("name", { length: 200 }),
+  name: varchar("name", { length: 200 }).unique("ux_depilation_combo_name"),
   description: text("description"),
   kind: varchar("kind", { length: 20 }), // pack_fijo | guardado
   fixedPrice: numeric("fixed_price", { precision: 10, scale: 2 }),

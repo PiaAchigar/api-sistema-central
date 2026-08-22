@@ -28,7 +28,18 @@
 -- un fallo.
 --
 -- Idempotente: `CREATE TABLE IF NOT EXISTS` + `ON CONFLICT DO NOTHING` en todos
--- los inserts. Correrla dos veces contra la misma base no duplica nada.
+-- los inserts. Correrla dos veces contra la misma base no duplica nada — cosa
+-- que ya pasó de verdad con la 1.34.0 (error a mitad en el SQL Editor de
+-- Supabase, la usuaria la volvió a pegar). Para que `ON CONFLICT DO NOTHING`
+-- tenga algo contra qué chocar, las 5 tablas necesitan un índice único de
+-- arbitraje sobre las columnas que definen "la misma fila": `body_zone` lo
+-- tiene parcial sobre `lower(name)`, `zone_exclusion` con
+-- `ux_zone_exclusion (zone_id, excludes_zone_id)`, `depilation_pricing_config`
+-- con `ux_dpc_singleton (singleton)`, `depilation_combo_zone` con
+-- `ux_dcz (combo_id, zone_id)` — y `depilation_combo` con
+-- `ux_depilation_combo_name (name)`: sin esa constraint, el `id` (siempre un
+-- `gen_random_uuid()` nuevo) es la única PK y nunca choca, así que una
+-- segunda pasada insertaría los 3 packs de nuevo.
 
 DO $$
 DECLARE
@@ -101,7 +112,8 @@ BEGIN
     CONSTRAINT ck_dc_kind CHECK (kind IN ('pack_fijo','guardado')),
     CONSTRAINT ck_dc_precio_pack CHECK (kind <> 'pack_fijo' OR fixed_price IS NOT NULL),
     CONSTRAINT ck_dc_precio_guardado CHECK (kind <> 'guardado' OR fixed_price IS NULL),
-    CONSTRAINT ck_dc_eleccion CHECK (choice_zone_count >= 0)
+    CONSTRAINT ck_dc_eleccion CHECK (choice_zone_count >= 0),
+    CONSTRAINT ux_depilation_combo_name UNIQUE (name)
   );
 
   CREATE TABLE IF NOT EXISTS depilation_combo_zone (
