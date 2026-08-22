@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { Hono } from "hono";
+import postgres from "postgres";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { eq, ilike, inArray, or } from "drizzle-orm";
 import { depilacionRouter, zonaBody, estadoBody, exclusionesBody, configBody } from "./depilacion";
 import {
   agruparZonasPorCategoria,
@@ -7,7 +11,74 @@ import {
   leerConfig,
   guardarExclusiones,
 } from "../../repositories/depilacion.repo";
+import * as schema from "../../db/schema";
+import { bodyZone, zoneExclusion } from "../../db/schema";
+import type { Db } from "../../db/client";
+import type { AppBindings } from "../../env";
 import type { DepilationConfig } from "../../lib/depilation-pricing";
+
+// ── Harness de integración contra Postgres local ────────────────────────────
+// Casos 1, 2 y "borra las dos direcciones" del guardado de exclusiones son
+// validaciones que viven en la base (FK, índice único parcial, la propia
+// simetría del DELETE): un doble de `Db` que no ejecuta SQL de verdad no
+// puede detectar una regresión ahí — solo puede detectar que el código
+// *llamó* a delete/insert, no que el WHERE hizo lo correcto. Por eso estos
+// bloques corren contra el Postgres local de `npm run db:up` (mismo que usa
+// `wrangler dev`), igual que documenta el CLAUDE.md del repo para QA manual.
+// Si no hay DB levantada, estos tests fallan con un error de conexión, no en
+// silencio — señal correcta de "correé `npm run db:up` primero".
+const LOCAL_DB_URL = "postgresql://piubella:piubella@localhost:5499/piubella";
+const QA_PREFIX = "ZZ_QA_DEPILACION_TEST_";
+
+const pgClient = postgres(LOCAL_DB_URL, { max: 1 });
+const testDb = drizzle(pgClient, { schema }) as unknown as Db;
+
+const ADMIN_ENV = {
+  HYPERDRIVE: { connectionString: LOCAL_DB_URL },
+  API_KEY: "qa-depilacion-test-key",
+} as unknown as AppBindings;
+const ADMIN_HEADERS = {
+  "x-api-key": "qa-depilacion-test-key",
+  "Content-Type": "application/json",
+};
+
+// `depilacionRouter.request(...)` a secas NO pasa por `app.onError` de
+// index.ts (ese handler solo está registrado en el Hono raíz) — un error
+// tirado con `badRequest()`/`conflict()`/`notFound()` sale con el manejo por
+// default de Hono (texto plano), no como `{ error: "..." }`. Para que los
+// tests de abajo verifiquen el contrato JSON real que ve el front, se monta
+// el router bajo un Hono con el MISMO onError que index.ts (copiado, no
+// importado, para no engancharse a cambios ahí).
+const testApp = new Hono<{ Bindings: AppBindings }>();
+testApp.onError((err, c) => {
+  if ("status" in err && typeof err.status === "number") {
+    return c.json(
+      { error: err.message },
+      err.status as 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502,
+    );
+  }
+  return c.json({ error: "Internal server error" }, 500);
+});
+testApp.route("/", depilacionRouter);
+
+async function crearZonaQA(nombre: string, isActive = true) {
+  const [z] = await testDb
+    .insert(bodyZone)
+    .values({ name: `${QA_PREFIX}${nombre}`, category: "chica", displayOrder: 0, isActive })
+    .returning({ id: bodyZone.id, name: bodyZone.name });
+  if (!z) throw new Error("no se pudo crear la zona QA");
+  return z;
+}
+
+// Barre cualquier basura de una corrida anterior que haya muerto antes de
+// limpiar (ej. Ctrl+C a mitad), y cierra la conexión al final del archivo.
+beforeAll(async () => {
+  await testDb.delete(bodyZone).where(ilike(bodyZone.name, `${QA_PREFIX}%`));
+});
+afterAll(async () => {
+  await testDb.delete(bodyZone).where(ilike(bodyZone.name, `${QA_PREFIX}%`));
+  await pgClient.end();
+});
 
 // ── Fixtures: las 24 zonas y las 8 exclusiones (x2 direcciones) reales del
 //    seed de la migración 1.35.0, para que el test de agrupación no dependa
@@ -201,7 +272,7 @@ describe("guardarExclusiones", () => {
     expect(llamadas.indexOf("tx.insert")).toBeGreaterThan(llamadas.indexOf("tx.delete"));
   });
 
-  it("al reemplazar exclusiones (quitar C, dejar B) inserta solo los pares de B", async () => {
+  it("con una nueva selección, inserta exactamente las filas de filasDeExclusion", async () => {
     const { db, getValoresInsertados } = fakeDb();
     await guardarExclusiones(db as never, "A", ["B"]);
     expect(getValoresInsertados()).toEqual(filasDeExclusion("A", ["B"]));
@@ -212,6 +283,68 @@ describe("guardarExclusiones", () => {
     await guardarExclusiones(db as never, "A", []);
     expect(llamadas).toContain("tx.delete");
     expect(llamadas).not.toContain("tx.insert");
+  });
+});
+
+// El fakeDb de arriba resuelve `tx.delete().where(...)` SIN mirar el
+// argumento de `.where()` — por diseño: solo puede confirmar que se llamó a
+// delete/insert en el orden correcto, dentro de la transacción. No puede
+// detectar si el WHERE real (`or(eq(zoneId,...), eq(excludesZoneId,...))`)
+// deja de cubrir alguna de las dos direcciones. Ese caso concreto —"borra
+// las dos direcciones, no una"— se prueba acá contra Postgres real, y SÍ se
+// verificó por mutación (romper el `or(...)` real, confirmar que este test
+// falla, restaurar, confirmar que vuelve a pasar) — evidencia en
+// task-4-report.md.
+describe("guardarExclusiones — borra las dos direcciones (integración real contra Postgres local)", () => {
+  let A = "";
+  let B = "";
+  let C = "";
+
+  beforeAll(async () => {
+    A = (await crearZonaQA("BORRA_A")).id;
+    B = (await crearZonaQA("BORRA_B")).id;
+    C = (await crearZonaQA("BORRA_C")).id;
+  });
+
+  afterAll(async () => {
+    await testDb.delete(bodyZone).where(inArray(bodyZone.id, [A, B, C]));
+  });
+
+  async function filasQueTocanA() {
+    return testDb
+      .select({ zoneId: zoneExclusion.zoneId, excludesZoneId: zoneExclusion.excludesZoneId })
+      .from(zoneExclusion)
+      .where(or(eq(zoneExclusion.zoneId, A), eq(zoneExclusion.excludesZoneId, A)));
+  }
+
+  it("escribe las dos direcciones del par contra la base real", async () => {
+    await guardarExclusiones(testDb, A, [B]);
+    const filas = await filasQueTocanA();
+    expect(filas).toHaveLength(2);
+    expect(filas).toEqual(
+      expect.arrayContaining([
+        { zoneId: A, excludesZoneId: B },
+        { zoneId: B, excludesZoneId: A },
+      ]),
+    );
+  });
+
+  it("al sacar una zona de la selección (B), borra las DOS filas del par viejo — no una", async () => {
+    await guardarExclusiones(testDb, A, [B, C]);
+    await guardarExclusiones(testDb, A, [C]); // se saca B de la selección
+
+    const filas = await filasQueTocanA();
+
+    // Ninguna fila debe mencionar a B, en ninguna dirección.
+    expect(filas.some((f) => f.zoneId === B || f.excludesZoneId === B)).toBe(false);
+    // El par con C sigue, en las dos direcciones.
+    expect(filas).toHaveLength(2);
+    expect(filas).toEqual(
+      expect.arrayContaining([
+        { zoneId: A, excludesZoneId: C },
+        { zoneId: C, excludesZoneId: A },
+      ]),
+    );
   });
 });
 
@@ -243,14 +376,22 @@ describe("nombreDeZonaEnUso", () => {
 });
 
 describe("leerConfig", () => {
+  // 19 valores CENTINELA, todos distintos entre sí (101..119, uno por
+  // columna, en el mismo orden en que aparecen en el schema/brief). No son
+  // realistas a propósito: si el mapeo cruzara dos columnas — el riesgo real
+  // que marca el spec, ej. confundir `minutosPrecio` (unisex) con
+  // `minutosTurno.hombre` — con valores realistas como 10/10 o 5/5 el
+  // `toEqual` de abajo podría pasar igual por coincidencia. Con valores
+  // únicos, cualquier cruce mueve un número a la casilla equivocada y el
+  // test lo detecta.
   const filaCompleta = {
-    priceGrande: 19000, priceMediana: 17000, priceChica: 12000,
-    pricingMinutesGrande: 10, pricingMinutesMediana: 7, pricingMinutesChica: 5,
-    tier1RatePerMinute: 1200, tier2RatePerMinute: 1000,
-    slotMinutesFemaleGrande: 9, slotMinutesFemaleMediana: 6, slotMinutesFemaleChica: 3,
-    slotMinutesMaleGrande: 10, slotMinutesMaleMediana: 8, slotMinutesMaleChica: 5,
-    slotRoundingStep: 5, slotMinimumMinutes: 10,
-    packSessions: 3, packDiscountPercentage: 15, packRoundingBase: 1000,
+    priceGrande: 101, priceMediana: 102, priceChica: 103,
+    pricingMinutesGrande: 104, pricingMinutesMediana: 105, pricingMinutesChica: 106,
+    tier1RatePerMinute: 107, tier2RatePerMinute: 108,
+    slotMinutesFemaleGrande: 109, slotMinutesFemaleMediana: 110, slotMinutesFemaleChica: 111,
+    slotMinutesMaleGrande: 112, slotMinutesMaleMediana: 113, slotMinutesMaleChica: 114,
+    slotRoundingStep: 115, slotMinimumMinutes: 116,
+    packSessions: 117, packDiscountPercentage: 118, packRoundingBase: 119,
   };
 
   function dbConFila(fila: typeof filaCompleta | undefined) {
@@ -266,21 +407,28 @@ describe("leerConfig", () => {
   it("mapea las 19 columnas planas al objeto anidado DepilationConfig", async () => {
     const config = await leerConfig(dbConFila(filaCompleta) as never);
     const esperado: DepilationConfig = {
-      precioLista: { grande: 19000, mediana: 17000, chica: 12000 },
-      minutosPrecio: { grande: 10, mediana: 7, chica: 5 },
-      tarifaEscalon1: 1200,
-      tarifaEscalon2: 1000,
+      precioLista: { grande: 101, mediana: 102, chica: 103 },
+      minutosPrecio: { grande: 104, mediana: 105, chica: 106 },
+      tarifaEscalon1: 107,
+      tarifaEscalon2: 108,
       minutosTurno: {
-        mujer: { grande: 9, mediana: 6, chica: 3 },
-        hombre: { grande: 10, mediana: 8, chica: 5 },
+        mujer: { grande: 109, mediana: 110, chica: 111 },
+        hombre: { grande: 112, mediana: 113, chica: 114 },
       },
-      redondeoTurno: 5,
-      turnoMinimo: 10,
-      packSesiones: 3,
-      packDescuentoPct: 15,
-      packRedondeo: 1000,
+      redondeoTurno: 115,
+      turnoMinimo: 116,
+      packSesiones: 117,
+      packDescuentoPct: 118,
+      packRedondeo: 119,
     };
     expect(config).toEqual(esperado);
+
+    // Chequeo extra, explícito: los 19 valores del objeto plano de entrada
+    // son todos distintos entre sí. Si alguna vez alguien "simplifica" el
+    // fixture y sin querer repite un valor entre familias de columnas, este
+    // assert avisa ANTES de que el toEqual de arriba deje de ser confiable.
+    const valores = Object.values(filaCompleta);
+    expect(new Set(valores).size).toBe(valores.length);
   });
 
   it("sin fila, falla ruidosamente en vez de devolver ceros/undefined", async () => {
@@ -418,5 +566,142 @@ describe("GET /zonas sin token", () => {
   it("devuelve 401", async () => {
     const res = await depilacionRouter.request("/zonas", {}, {} as never);
     expect(res.status).toBe(401);
+  });
+});
+
+// ── Hallazgo 1: PUT /zonas/:id/exclusiones tiene que validar existencia ────
+// Antes: `:id` inexistente + excludes:[] respondía 200 sin haber hecho nada
+// (éxito falso), y un id inexistente/inactivo en `excludes` rompía el
+// INSERT por la FK como un 500 genérico. Integración real porque la validez
+// depende de qué hay en la tabla, no de una regla en memoria.
+describe("PUT /zonas/:id/exclusiones — validación de existencia (integración real)", () => {
+  let zonaId = "";
+
+  beforeAll(async () => {
+    zonaId = (await crearZonaQA("EXCL_BASE")).id;
+  });
+
+  afterAll(async () => {
+    await testDb.delete(bodyZone).where(eq(bodyZone.id, zonaId));
+  });
+
+  it(":id que no es ninguna zona -> 404, incluso con excludes vacío", async () => {
+    const inexistente = "00000000-0000-0000-0000-000000000000";
+    const res = await testApp.request(
+      `/zonas/${inexistente}/exclusiones`,
+      { method: "PUT", headers: ADMIN_HEADERS, body: JSON.stringify({ excludes: [] }) },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("excludes con un uuid que no es ninguna zona -> 400 nombrando cuál", async () => {
+    const fantasma = "11111111-2222-3333-4444-555555555555";
+    const res = await testApp.request(
+      `/zonas/${zonaId}/exclusiones`,
+      { method: "PUT", headers: ADMIN_HEADERS, body: JSON.stringify({ excludes: [fantasma] }) },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain(fantasma);
+  });
+
+  it("excludes con una zona que existe pero está archivada -> 400", async () => {
+    const inactiva = await crearZonaQA("EXCL_INACTIVA", false);
+    try {
+      const res = await testApp.request(
+        `/zonas/${zonaId}/exclusiones`,
+        { method: "PUT", headers: ADMIN_HEADERS, body: JSON.stringify({ excludes: [inactiva.id] }) },
+        ADMIN_ENV,
+      );
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toContain(inactiva.id);
+    } finally {
+      await testDb.delete(bodyZone).where(eq(bodyZone.id, inactiva.id));
+    }
+  });
+
+  it("excludes con una zona activa real -> 200 y no revienta", async () => {
+    const otra = await crearZonaQA("EXCL_VALIDA");
+    try {
+      const res = await testApp.request(
+        `/zonas/${zonaId}/exclusiones`,
+        { method: "PUT", headers: ADMIN_HEADERS, body: JSON.stringify({ excludes: [otra.id] }) },
+        ADMIN_ENV,
+      );
+      expect(res.status).toBe(200);
+    } finally {
+      // Cascada: borrar la zona borra sus filas de zone_exclusion.
+      await testDb.delete(bodyZone).where(eq(bodyZone.id, otra.id));
+    }
+  });
+});
+
+// ── Hallazgo 2: PATCH /zonas/:id/estado no puede reventar al reactivar ────
+// Antes: reactivar una zona archivada cuyo nombre ya lo tiene una activa
+// chocaba contra `ux_body_zone_name` (único parcial WHERE is_active) y
+// salía como 500 en vez del 409 que ya usan POST/PATCH /zonas. El índice es
+// parcial, así que crear una fila activa y otra archivada con el MISMO
+// nombre es válido — es exactamente el escenario del bug.
+describe("PATCH /zonas/:id/estado — colisión de nombre al reactivar (integración real)", () => {
+  let activaId = "";
+  let archivadaId = "";
+  const nombreCompartido = `${QA_PREFIX}ESTADO_COLISION`;
+
+  beforeAll(async () => {
+    const [act] = await testDb
+      .insert(bodyZone)
+      .values({ name: nombreCompartido, category: "chica", displayOrder: 0, isActive: true })
+      .returning({ id: bodyZone.id });
+    const [arch] = await testDb
+      .insert(bodyZone)
+      .values({ name: nombreCompartido, category: "chica", displayOrder: 0, isActive: false })
+      .returning({ id: bodyZone.id });
+    activaId = act!.id;
+    archivadaId = arch!.id;
+  });
+
+  afterAll(async () => {
+    await testDb.delete(bodyZone).where(inArray(bodyZone.id, [activaId, archivadaId]));
+  });
+
+  it("reactivar la archivada con nombre ya usado por la activa -> 409, no 500", async () => {
+    const res = await testApp.request(
+      `/zonas/${archivadaId}/estado`,
+      { method: "PATCH", headers: ADMIN_HEADERS, body: JSON.stringify({ isActive: true }) },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/ya existe una zona activa/i);
+  });
+
+  it("archivar (isActive:false) no choca aunque el nombre esté repetido", async () => {
+    const res = await testApp.request(
+      `/zonas/${activaId}/estado`,
+      { method: "PATCH", headers: ADMIN_HEADERS, body: JSON.stringify({ isActive: false }) },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(200);
+    // Reactivarla de nuevo: ya no hay otra activa con ese nombre (se acaba
+    // de archivar a sí misma), así que esto SÍ tiene que andar.
+    const res2 = await testApp.request(
+      `/zonas/${activaId}/estado`,
+      { method: "PATCH", headers: ADMIN_HEADERS, body: JSON.stringify({ isActive: true }) },
+      ADMIN_ENV,
+    );
+    expect(res2.status).toBe(200);
+  });
+
+  it("PATCH estado con id inexistente -> 404", async () => {
+    const inexistente = "00000000-0000-0000-0000-000000000000";
+    const res = await testApp.request(
+      `/zonas/${inexistente}/estado`,
+      { method: "PATCH", headers: ADMIN_HEADERS, body: JSON.stringify({ isActive: true }) },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(404);
   });
 });

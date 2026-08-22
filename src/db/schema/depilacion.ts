@@ -29,12 +29,12 @@ const updatedAt = () =>
 // mismo nombre sin chocar con la fila archivada.
 export const bodyZone = pgTable("body_zone", {
   id: id(),
-  name: varchar("name", { length: 100 }),
-  category: varchar("category", { length: 10 }), // grande | mediana | chica
-  displayOrder: integer("display_order"),
-  isActive: boolean("is_active"),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
+  name: varchar("name", { length: 100 }).notNull(),
+  category: varchar("category", { length: 10 }).notNull(), // grande | mediana | chica
+  displayOrder: integer("display_order").notNull(),
+  isActive: boolean("is_active").notNull(),
+  createdAt: createdAt().notNull(),
+  updatedAt: updatedAt().notNull(),
 });
 
 // Pares de zonas que no tiene sentido vender juntas porque una incluye a la
@@ -43,8 +43,8 @@ export const bodyZone = pgTable("body_zone", {
 // cualquiera de los dos sentidos sin tener que armar el OR a mano.
 export const zoneExclusion = pgTable("zone_exclusion", {
   id: id(),
-  zoneId: uuid("zone_id"),
-  excludesZoneId: uuid("excludes_zone_id"),
+  zoneId: uuid("zone_id").notNull(),
+  excludesZoneId: uuid("excludes_zone_id").notNull(),
 });
 
 // Fila única (CHECK + UNIQUE sobre `singleton`) porque estos parámetros son
@@ -63,27 +63,27 @@ export const zoneExclusion = pgTable("zone_exclusion", {
 // Confundirlas cobraría o agendaría mal.
 export const depilationPricingConfig = pgTable("depilation_pricing_config", {
   id: id(),
-  singleton: boolean("singleton"),
-  priceGrande: integer("price_grande"),
-  priceMediana: integer("price_mediana"),
-  priceChica: integer("price_chica"),
-  pricingMinutesGrande: integer("pricing_minutes_grande"),
-  pricingMinutesMediana: integer("pricing_minutes_mediana"),
-  pricingMinutesChica: integer("pricing_minutes_chica"),
-  tier1RatePerMinute: integer("tier1_rate_per_minute"),
-  tier2RatePerMinute: integer("tier2_rate_per_minute"),
-  slotMinutesFemaleGrande: integer("slot_minutes_female_grande"),
-  slotMinutesFemaleMediana: integer("slot_minutes_female_mediana"),
-  slotMinutesFemaleChica: integer("slot_minutes_female_chica"),
-  slotMinutesMaleGrande: integer("slot_minutes_male_grande"),
-  slotMinutesMaleMediana: integer("slot_minutes_male_mediana"),
-  slotMinutesMaleChica: integer("slot_minutes_male_chica"),
-  slotRoundingStep: integer("slot_rounding_step"),
-  slotMinimumMinutes: integer("slot_minimum_minutes"),
-  packSessions: integer("pack_sessions"),
-  packDiscountPercentage: integer("pack_discount_percentage"),
-  packRoundingBase: integer("pack_rounding_base"),
-  updatedAt: updatedAt(),
+  singleton: boolean("singleton").notNull(),
+  priceGrande: integer("price_grande").notNull(),
+  priceMediana: integer("price_mediana").notNull(),
+  priceChica: integer("price_chica").notNull(),
+  pricingMinutesGrande: integer("pricing_minutes_grande").notNull(),
+  pricingMinutesMediana: integer("pricing_minutes_mediana").notNull(),
+  pricingMinutesChica: integer("pricing_minutes_chica").notNull(),
+  tier1RatePerMinute: integer("tier1_rate_per_minute").notNull(),
+  tier2RatePerMinute: integer("tier2_rate_per_minute").notNull(),
+  slotMinutesFemaleGrande: integer("slot_minutes_female_grande").notNull(),
+  slotMinutesFemaleMediana: integer("slot_minutes_female_mediana").notNull(),
+  slotMinutesFemaleChica: integer("slot_minutes_female_chica").notNull(),
+  slotMinutesMaleGrande: integer("slot_minutes_male_grande").notNull(),
+  slotMinutesMaleMediana: integer("slot_minutes_male_mediana").notNull(),
+  slotMinutesMaleChica: integer("slot_minutes_male_chica").notNull(),
+  slotRoundingStep: integer("slot_rounding_step").notNull(),
+  slotMinimumMinutes: integer("slot_minimum_minutes").notNull(),
+  packSessions: integer("pack_sessions").notNull(),
+  packDiscountPercentage: integer("pack_discount_percentage").notNull(),
+  packRoundingBase: integer("pack_rounding_base").notNull(),
+  updatedAt: updatedAt().notNull(),
 });
 
 // Un combo de depilación es un paquete de zonas, no de servicios (a
@@ -105,23 +105,23 @@ export const depilationPricingConfig = pgTable("depilation_pricing_config", {
 // usuaria la corrió de nuevo).
 export const depilationCombo = pgTable("depilation_combo", {
   id: id(),
-  name: varchar("name", { length: 200 }).unique("ux_depilation_combo_name"),
+  name: varchar("name", { length: 200 }).notNull().unique("ux_depilation_combo_name"),
   description: text("description"),
-  kind: varchar("kind", { length: 20 }), // pack_fijo | guardado
+  kind: varchar("kind", { length: 20 }).notNull(), // pack_fijo | guardado
   fixedPrice: numeric("fixed_price", { precision: 10, scale: 2 }),
   fixedDurationMinutes: integer("fixed_duration_minutes"),
-  choiceZoneCount: integer("choice_zone_count"),
-  isPublishedWeb: boolean("is_published_web"),
-  displayOrder: integer("display_order"),
-  isActive: boolean("is_active"),
-  createdAt: createdAt(),
-  updatedAt: updatedAt(),
+  choiceZoneCount: integer("choice_zone_count").notNull(),
+  isPublishedWeb: boolean("is_published_web").notNull(),
+  displayOrder: integer("display_order").notNull(),
+  isActive: boolean("is_active").notNull(),
+  createdAt: createdAt().notNull(),
+  updatedAt: updatedAt().notNull(),
 });
 
 // Qué zonas trae cada combo. UNIQUE (combo_id, zone_id) en la migración
 // evita que una misma zona quede cargada dos veces en el mismo combo.
 export const depilationComboZone = pgTable("depilation_combo_zone", {
   id: id(),
-  comboId: uuid("combo_id"),
-  zoneId: uuid("zone_id"),
+  comboId: uuid("combo_id").notNull(),
+  zoneId: uuid("zone_id").notNull(),
 });

@@ -12,6 +12,8 @@ import {
   guardarExclusiones,
   leerConfig,
   listarZonas,
+  obtenerZona,
+  obtenerZonasActivasPorId,
   setEstadoZona,
 } from "../../repositories/depilacion.repo";
 import type { AppBindings, Variables } from "../../env";
@@ -153,8 +155,21 @@ depilacionRouter.patch(
   zValidator("json", estadoBody),
   async (c) => {
     const db = createDb(c.env);
+    const id = c.req.param("id");
     const { isActive } = c.req.valid("json");
-    const updated = await setEstadoZona(db, c.req.param("id"), isActive);
+
+    const zona = await obtenerZona(db, id);
+    if (!zona) throw notFound("Zona");
+
+    // Reactivar una zona archivada cuyo nombre ya lo tiene otra zona activa
+    // choca contra `ux_body_zone_name` (único parcial WHERE is_active) y
+    // sin este chequeo sale como 500 en vez del 409 amable que ya usan
+    // POST y PATCH /zonas.
+    if (isActive && (await existeZonaActivaConNombre(db, zona.name, id))) {
+      throw conflict(`Ya existe una zona activa llamada "${zona.name}"`);
+    }
+
+    const updated = await setEstadoZona(db, id, isActive);
     if (!updated) throw notFound("Zona");
     return c.json(updated);
   },
@@ -171,6 +186,21 @@ depilacionRouter.put(
     const id = c.req.param("id");
     const { excludes } = c.req.valid("json");
     if (excludes.includes(id)) throw badRequest("Una zona no puede excluirse a sí misma");
+
+    // Sin esto: `:id` inexistente + excludes=[] respondía 200 sin haber
+    // hecho nada (éxito falso), y un id inexistente en `excludes` rompía el
+    // INSERT por FK como un 500 genérico en vez de un 400 entendible.
+    const zona = await obtenerZona(db, id);
+    if (!zona) throw notFound("Zona");
+
+    if (excludes.length > 0) {
+      const activas = await obtenerZonasActivasPorId(db, excludes);
+      const faltante = excludes.find((zoneId) => !activas.has(zoneId));
+      if (faltante) {
+        throw badRequest(`La zona "${faltante}" no existe o no está activa`);
+      }
+    }
+
     await guardarExclusiones(db, id, excludes);
     return c.json({ zoneId: id, excludes });
   },

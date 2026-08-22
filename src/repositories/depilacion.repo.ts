@@ -1,4 +1,4 @@
-import { asc, eq, or } from "drizzle-orm";
+import { and, asc, eq, inArray, or } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { bodyZone, depilationPricingConfig, zoneExclusion } from "../db/schema";
 import type { Categoria, DepilationConfig } from "../lib/depilation-pricing";
@@ -7,10 +7,10 @@ import type { Categoria, DepilationConfig } from "../lib/depilation-pricing";
 
 export type ZonaRow = {
   id: string;
-  name: string | null;
-  category: string | null;
-  displayOrder: number | null;
-  isActive: boolean | null;
+  name: string;
+  category: string;
+  displayOrder: number;
+  isActive: boolean;
 };
 
 export type ExclusionRow = { zoneId: string; excludesZoneId: string };
@@ -18,6 +18,14 @@ export type ExclusionRow = { zoneId: string; excludesZoneId: string };
 export type ZonaConExclusiones = ZonaRow & { exclusions: string[] };
 
 const CATEGORIAS: Categoria[] = ["grande", "mediana", "chica"];
+
+const zonaFields = {
+  id: bodyZone.id,
+  name: bodyZone.name,
+  category: bodyZone.category,
+  displayOrder: bodyZone.displayOrder,
+  isActive: bodyZone.isActive,
+};
 
 /**
  * Agrupa las zonas por categoría y les adjunta el array de ids que excluyen.
@@ -37,7 +45,7 @@ export function agruparZonasPorCategoria(
 
   const grupos: Record<Categoria, ZonaConExclusiones[]> = { grande: [], mediana: [], chica: [] };
   for (const zona of zonas) {
-    if (!zona.category || !CATEGORIAS.includes(zona.category as Categoria)) continue;
+    if (!CATEGORIAS.includes(zona.category as Categoria)) continue;
     grupos[zona.category as Categoria].push({
       ...zona,
       exclusions: exclusionesPorZona.get(zona.id) ?? [],
@@ -50,32 +58,44 @@ export function agruparZonasPorCategoria(
 }
 
 export async function listarExclusiones(db: Db): Promise<ExclusionRow[]> {
-  const rows = await db
+  return db
     .select({ zoneId: zoneExclusion.zoneId, excludesZoneId: zoneExclusion.excludesZoneId })
     .from(zoneExclusion);
-  // El esquema Drizzle de la Task 1 no marca las columnas `.notNull()` aunque
-  // la migración sí las declara NOT NULL; se filtra acá en vez de forzar el
-  // tipo con `as`, así un NULL inesperado desaparece en vez de romper el
-  // agrupado con un id "undefined".
-  return rows.filter((r): r is ExclusionRow => r.zoneId != null && r.excludesZoneId != null);
 }
 
 /** GET /zonas: las 24 zonas agrupadas por categoría, cada una con sus exclusiones. */
 export async function listarZonas(db: Db): Promise<Record<Categoria, ZonaConExclusiones[]>> {
   const [zonas, exclusiones] = await Promise.all([
     db
-      .select({
-        id: bodyZone.id,
-        name: bodyZone.name,
-        category: bodyZone.category,
-        displayOrder: bodyZone.displayOrder,
-        isActive: bodyZone.isActive,
-      })
+      .select(zonaFields)
       .from(bodyZone)
       .orderBy(asc(bodyZone.displayOrder), asc(bodyZone.name)),
     listarExclusiones(db),
   ]);
   return agruparZonasPorCategoria(zonas, exclusiones);
+}
+
+export async function obtenerZona(db: Db, id: string): Promise<ZonaRow | null> {
+  const [zona] = await db.select(zonaFields).from(bodyZone).where(eq(bodyZone.id, id)).limit(1);
+  return zona ?? null;
+}
+
+/**
+ * Trae, de la lista de ids pedida, solo las que existen Y están activas.
+ * Usado por `PUT /zonas/:id/exclusiones` para rechazar con un 400 (en vez
+ * de dejar que el INSERT reviente la FK con un 500) cualquier id que no sea
+ * una zona activa real.
+ */
+export async function obtenerZonasActivasPorId(
+  db: Db,
+  ids: string[],
+): Promise<Map<string, ZonaRow>> {
+  if (ids.length === 0) return new Map();
+  const rows = await db
+    .select(zonaFields)
+    .from(bodyZone)
+    .where(and(inArray(bodyZone.id, ids), eq(bodyZone.isActive, true)));
+  return new Map(rows.map((z) => [z.id, z]));
 }
 
 /**
@@ -86,13 +106,13 @@ export async function listarZonas(db: Db): Promise<Record<Categoria, ZonaConExcl
  * servicios repetidos en JS en vez de dejar que reviente el UNIQUE.
  */
 export function nombreDeZonaEnUso(
-  zonasActivas: { id: string; name: string | null }[],
+  zonasActivas: { id: string; name: string }[],
   nombre: string,
   excludeId?: string,
 ): boolean {
   const buscado = nombre.trim().toLowerCase();
   return zonasActivas.some(
-    (z) => z.id !== excludeId && (z.name ?? "").trim().toLowerCase() === buscado,
+    (z) => z.id !== excludeId && z.name.trim().toLowerCase() === buscado,
   );
 }
 
@@ -177,6 +197,10 @@ export function filasDeExclusion(zonaId: string, otras: string[]): ExclusionRow[
  * nueva) hasta el próximo guardado exitoso. Es el mismo antipatrón de
  * `promotions.repo.ts` (DELETE + INSERT sin transacción) que el brief pide
  * no repetir.
+ *
+ * Precondición: el caller (la ruta) ya validó que `zonaId` existe y que
+ * todos los ids de `otras` son zonas activas — acá no se vuelve a chequear
+ * a propósito, para no duplicar ida y vuelta a la base.
  */
 export async function guardarExclusiones(db: Db, zonaId: string, otras: string[]): Promise<void> {
   await db.transaction(async (tx) => {
@@ -223,36 +247,42 @@ export type ConfigInput = {
  * existir una, sembrada por la migración 1.35.0), y devolver ceros/undefined
  * en su lugar dejaría que TODOS los precios del negocio salgan mal en
  * silencio en vez de que la pantalla explote con un error visible.
+ *
+ * Las columnas son `.notNull()` en el esquema Drizzle (reflejando los `NOT
+ * NULL` reales de la migración 1.35.0), así que una vez que `f` existe, el
+ * mapeo no necesita `!` ni chequeos extra: si algún día hay un NULL ahí, es
+ * Postgres el que lo rechaza al escribir, no algo que este código deba
+ * adivinar.
  */
 export async function leerConfig(db: Db): Promise<DepilationConfig> {
   const [f] = await db.select().from(depilationPricingConfig).limit(1);
   if (!f) throw new Error("Falta la fila de depilation_pricing_config");
   return {
-    precioLista: { grande: f.priceGrande!, mediana: f.priceMediana!, chica: f.priceChica! },
+    precioLista: { grande: f.priceGrande, mediana: f.priceMediana, chica: f.priceChica },
     minutosPrecio: {
-      grande: f.pricingMinutesGrande!,
-      mediana: f.pricingMinutesMediana!,
-      chica: f.pricingMinutesChica!,
+      grande: f.pricingMinutesGrande,
+      mediana: f.pricingMinutesMediana,
+      chica: f.pricingMinutesChica,
     },
-    tarifaEscalon1: f.tier1RatePerMinute!,
-    tarifaEscalon2: f.tier2RatePerMinute!,
+    tarifaEscalon1: f.tier1RatePerMinute,
+    tarifaEscalon2: f.tier2RatePerMinute,
     minutosTurno: {
       mujer: {
-        grande: f.slotMinutesFemaleGrande!,
-        mediana: f.slotMinutesFemaleMediana!,
-        chica: f.slotMinutesFemaleChica!,
+        grande: f.slotMinutesFemaleGrande,
+        mediana: f.slotMinutesFemaleMediana,
+        chica: f.slotMinutesFemaleChica,
       },
       hombre: {
-        grande: f.slotMinutesMaleGrande!,
-        mediana: f.slotMinutesMaleMediana!,
-        chica: f.slotMinutesMaleChica!,
+        grande: f.slotMinutesMaleGrande,
+        mediana: f.slotMinutesMaleMediana,
+        chica: f.slotMinutesMaleChica,
       },
     },
-    redondeoTurno: f.slotRoundingStep!,
-    turnoMinimo: f.slotMinimumMinutes!,
-    packSesiones: f.packSessions!,
-    packDescuentoPct: f.packDiscountPercentage!,
-    packRedondeo: f.packRoundingBase!,
+    redondeoTurno: f.slotRoundingStep,
+    turnoMinimo: f.slotMinimumMinutes,
+    packSesiones: f.packSessions,
+    packDescuentoPct: f.packDiscountPercentage,
+    packRedondeo: f.packRoundingBase,
   };
 }
 
