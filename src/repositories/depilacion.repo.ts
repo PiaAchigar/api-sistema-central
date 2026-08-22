@@ -1,7 +1,22 @@
 import { and, asc, eq, inArray, or } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { bodyZone, depilationPricingConfig, zoneExclusion } from "../db/schema";
-import type { Categoria, DepilationConfig } from "../lib/depilation-pricing";
+import {
+  bodyZone,
+  depilationCombo,
+  depilationComboZone,
+  depilationPricingConfig,
+  zoneExclusion,
+} from "../db/schema";
+import {
+  calcularDuracionTurno,
+  calcularPrecioCombo,
+  type Categoria,
+  type DepilationConfig,
+  type Exclusion,
+  type PackFijo,
+  type Sexo,
+  type ZonaParaCotizar,
+} from "../lib/depilation-pricing";
 
 // ── Zonas ────────────────────────────────────────────────────────────────
 
@@ -61,6 +76,32 @@ export async function listarExclusiones(db: Db): Promise<ExclusionRow[]> {
   return db
     .select({ zoneId: zoneExclusion.zoneId, excludesZoneId: zoneExclusion.excludesZoneId })
     .from(zoneExclusion);
+}
+
+/** `listarExclusiones` habla en columnas (`zoneId`/`excludesZoneId`); el motor
+ *  (Task 2) espera `{ zonaId, excluyeA }`. Función pura, un mapeo de nombres. */
+export function exclusionesParaMotor(rows: ExclusionRow[]): Exclusion[] {
+  return rows.map((r) => ({ zonaId: r.zoneId, excluyeA: r.excludesZoneId }));
+}
+
+/**
+ * Detecta si la selección YA trae, las dos adentro, un par de zonas que se
+ * pisan (ej. Pierna entera + Media pierna). Distinto de `zonasBloqueadas`
+ * del motor (Task 2): esa función mira zonas FUERA de la selección, para que
+ * la UI las deshabilite antes de que se puedan agregar. Acá el caso es que
+ * las dos YA están adentro — algo que el frontend previene deshabilitando,
+ * pero que el backend tiene que revalidar solo, porque nunca hay que confiar
+ * en que el cliente respetó esa regla.
+ */
+export function conflictoEnSeleccion(
+  seleccion: string[],
+  exclusiones: Exclusion[],
+): Exclusion | null {
+  const set = new Set(seleccion);
+  for (const e of exclusiones) {
+    if (set.has(e.zonaId) && set.has(e.excluyeA)) return e;
+  }
+  return null;
 }
 
 /** GET /zonas: las 24 zonas agrupadas por categoría, cada una con sus exclusiones. */
@@ -295,4 +336,294 @@ export async function guardarConfig(db: Db, input: ConfigInput): Promise<Depilat
     .returning({ id: depilationPricingConfig.id });
   if (updated.length === 0) throw new Error("Falta la fila de depilation_pricing_config");
   return leerConfig(db);
+}
+
+// ── Packs fijos (para /cotizar) ─────────────────────────────────────────────
+
+/**
+ * Los packs fijos activos, con sus zonas base convertidas al `PackFijo` que
+ * espera `buscarPackFijo` (Task 2). Solo `pack_fijo` puede "ganarle" a la
+ * fórmula — un `guardado` nunca entra acá.
+ */
+export async function listarPacksFijos(db: Db): Promise<PackFijo[]> {
+  const combos = await db
+    .select({
+      id: depilationCombo.id,
+      name: depilationCombo.name,
+      fixedPrice: depilationCombo.fixedPrice,
+      fixedDurationMinutes: depilationCombo.fixedDurationMinutes,
+      choiceZoneCount: depilationCombo.choiceZoneCount,
+    })
+    .from(depilationCombo)
+    .where(and(eq(depilationCombo.kind, "pack_fijo"), eq(depilationCombo.isActive, true)));
+  if (combos.length === 0) return [];
+
+  const comboIds = combos.map((c) => c.id);
+  const zoneRows = await db
+    .select({ comboId: depilationComboZone.comboId, zoneId: depilationComboZone.zoneId })
+    .from(depilationComboZone)
+    .where(inArray(depilationComboZone.comboId, comboIds));
+  const zonasPorCombo = new Map<string, string[]>();
+  for (const r of zoneRows) {
+    const lista = zonasPorCombo.get(r.comboId) ?? [];
+    lista.push(r.zoneId);
+    zonasPorCombo.set(r.comboId, lista);
+  }
+
+  return combos.map((c) => ({
+    id: c.id,
+    nombre: c.name,
+    zonasBase: zonasPorCombo.get(c.id) ?? [],
+    zonasAEleccion: c.choiceZoneCount,
+    precioFijo: Number(c.fixedPrice),
+    duracionFija: c.fixedDurationMinutes,
+  }));
+}
+
+// ── Combos (Solapa Combos: guardado y CRUD de packs) ────────────────────────
+
+/**
+ * Categoría con la que se simulan las zonas "a elección" que un pack fijo
+ * todavía no tiene resueltas (ver diseño §4.7). Se usa SOLO para calcular
+ * `precioCalculado` en el catálogo (sin una clienta concreta eligiendo, no
+ * hay zona real que sumar): "chica" es la categoría más barata, así que el
+ * invariante "el pack fijo es más barato que su fórmula" queda probado para
+ * el peor caso posible — cualquier zona real que se elija en la práctica es
+ * igual o más cara, nunca más barata, así que la fórmula real nunca baja de
+ * este número.
+ */
+const CATEGORIA_ELECCION: Categoria = "chica";
+
+/**
+ * Sexo usado para mostrar `duracionMinutos` en el catálogo de combos (GET
+ * /combos), donde no hay una clienta concreta todavía. Es solo para
+ * referencia en la pantalla de administración — la duración que de verdad se
+ * bloquea en la agenda siempre sale de `/cotizar` con el sexo real.
+ */
+const SEXO_DURACION_CATALOGO: Sexo = "mujer";
+
+/**
+ * Precio de referencia de un combo para el catálogo (PDF §6 / diseño §4.7):
+ * la fórmula sobre sus zonas fijas más `zonasAEleccion` zonas fantasma de la
+ * categoría más barata. Función pura, testeable sin base.
+ */
+export function precioFormulaDeCombo(
+  zonasFijas: ZonaParaCotizar[],
+  zonasAEleccion: number,
+  config: DepilationConfig,
+): number {
+  const fantasmas: ZonaParaCotizar[] = Array.from({ length: zonasAEleccion }, (_, i) => ({
+    id: `eleccion-${i}`,
+    nombre: "Zona a elección",
+    categoria: CATEGORIA_ELECCION,
+  }));
+  return calcularPrecioCombo([...zonasFijas, ...fantasmas], config).total;
+}
+
+export type DepilationComboRow = {
+  id: string;
+  name: string;
+  description: string | null;
+  kind: string;
+  fixedPrice: string | number | null;
+  fixedDurationMinutes: number | null;
+  choiceZoneCount: number;
+  isPublishedWeb: boolean;
+  displayOrder: number;
+  isActive: boolean;
+};
+
+export type DepilationComboAssembled = {
+  id: string;
+  name: string;
+  description: string | null;
+  kind: string;
+  fixedPrice: number | null;
+  fixedDurationMinutes: number | null;
+  choiceZoneCount: number;
+  isPublishedWeb: boolean;
+  displayOrder: number;
+  isActive: boolean;
+  zonas: { id: string; name: string; category: Categoria }[];
+  /** La fórmula, siempre — nunca un precio guardado. */
+  precioCalculado: number;
+  /** El fijo si es `pack_fijo`, si no el calculado. Nunca lee `fixedPrice`
+   *  para un `guardado`: esa es toda la razón de ser del diseño. */
+  precioFinal: number;
+  duracionMinutos: number;
+};
+
+/**
+ * Arma la vista completa de un combo: precioCalculado (fórmula, siempre),
+ * precioFinal (el fijo solo si es pack_fijo) y duracionMinutos. Función pura:
+ * recibe las zonas reales ya resueltas y la config, no toca la base.
+ */
+export function assembleDepilationCombo(
+  combo: DepilationComboRow,
+  zonasReales: ZonaParaCotizar[],
+  config: DepilationConfig,
+): DepilationComboAssembled {
+  const fixedPrice = combo.fixedPrice == null ? null : Number(combo.fixedPrice);
+  const precioCalculado = precioFormulaDeCombo(zonasReales, combo.choiceZoneCount, config);
+  // Nunca leer `fixedPrice` para un `guardado`: el CHECK de la base ya lo
+  // garantiza NULL, pero este `combo.kind === "pack_fijo"` es la barrera en
+  // código — aunque `fixedPrice` viniera cargado por error, un `guardado`
+  // jamás lo usaría como precio.
+  const precioFinal = combo.kind === "pack_fijo" ? (fixedPrice ?? precioCalculado) : precioCalculado;
+  const duracionMinutos =
+    combo.fixedDurationMinutes ?? calcularDuracionTurno(zonasReales, SEXO_DURACION_CATALOGO, config);
+
+  return {
+    id: combo.id,
+    name: combo.name,
+    description: combo.description,
+    kind: combo.kind,
+    fixedPrice,
+    fixedDurationMinutes: combo.fixedDurationMinutes,
+    choiceZoneCount: combo.choiceZoneCount,
+    isPublishedWeb: combo.isPublishedWeb,
+    displayOrder: combo.displayOrder,
+    isActive: combo.isActive,
+    zonas: zonasReales.map((z) => ({ id: z.id, name: z.nombre, category: z.categoria })),
+    precioCalculado,
+    precioFinal,
+    duracionMinutos,
+  };
+}
+
+const comboFields = {
+  id: depilationCombo.id,
+  name: depilationCombo.name,
+  description: depilationCombo.description,
+  kind: depilationCombo.kind,
+  fixedPrice: depilationCombo.fixedPrice,
+  fixedDurationMinutes: depilationCombo.fixedDurationMinutes,
+  choiceZoneCount: depilationCombo.choiceZoneCount,
+  isPublishedWeb: depilationCombo.isPublishedWeb,
+  displayOrder: depilationCombo.displayOrder,
+  isActive: depilationCombo.isActive,
+};
+
+async function zonasDelCombo(db: Db, comboId: string): Promise<ZonaParaCotizar[]> {
+  const rows = await db
+    .select({ id: bodyZone.id, name: bodyZone.name, category: bodyZone.category })
+    .from(depilationComboZone)
+    .innerJoin(bodyZone, eq(depilationComboZone.zoneId, bodyZone.id))
+    .where(eq(depilationComboZone.comboId, comboId));
+  return rows.map((r) => ({ id: r.id, nombre: r.name, categoria: r.category as Categoria }));
+}
+
+export async function listarCombos(db: Db): Promise<DepilationComboAssembled[]> {
+  const [combos, config] = await Promise.all([
+    db
+      .select(comboFields)
+      .from(depilationCombo)
+      .orderBy(asc(depilationCombo.displayOrder), asc(depilationCombo.name)),
+    leerConfig(db),
+  ]);
+  const out: DepilationComboAssembled[] = [];
+  for (const c of combos) out.push(assembleDepilationCombo(c, await zonasDelCombo(db, c.id), config));
+  return out;
+}
+
+export async function obtenerCombo(db: Db, id: string): Promise<DepilationComboAssembled | null> {
+  const [c] = await db.select(comboFields).from(depilationCombo).where(eq(depilationCombo.id, id)).limit(1);
+  if (!c) return null;
+  const config = await leerConfig(db);
+  return assembleDepilationCombo(c, await zonasDelCombo(db, id), config);
+}
+
+export type DepilationComboInput = {
+  name: string;
+  description?: string | null;
+  kind: "pack_fijo" | "guardado";
+  fixedPrice?: number | null;
+  fixedDurationMinutes?: number | null;
+  choiceZoneCount?: number | null;
+  isPublishedWeb?: boolean | null;
+  displayOrder?: number | null;
+  zonaIds: string[];
+};
+
+async function writeComboZonas(db: Db, comboId: string, zonaIds: string[]) {
+  await db.delete(depilationComboZone).where(eq(depilationComboZone.comboId, comboId));
+  if (zonaIds.length === 0) return;
+  await db.insert(depilationComboZone).values(zonaIds.map((zoneId) => ({ comboId, zoneId })));
+}
+
+/**
+ * DELETE + INSERT de las zonas en la misma transacción que el alta: mismo
+ * motivo que `createCombo` en `combos.repo.ts` — sin transacción, si el
+ * INSERT de zonas fallara después de crear la cabecera, el combo quedaría
+ * activo y sin ninguna zona.
+ */
+export async function crearCombo(
+  db: Db,
+  input: DepilationComboInput,
+): Promise<DepilationComboAssembled | null> {
+  const createdId = await db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(depilationCombo)
+      .values({
+        name: input.name,
+        description: input.description ?? null,
+        kind: input.kind,
+        fixedPrice: input.fixedPrice == null ? null : String(input.fixedPrice),
+        fixedDurationMinutes: input.fixedDurationMinutes ?? null,
+        choiceZoneCount: input.choiceZoneCount ?? 0,
+        isPublishedWeb: input.isPublishedWeb ?? false,
+        displayOrder: input.displayOrder ?? 0,
+        isActive: true,
+      })
+      .returning({ id: depilationCombo.id });
+    if (!created) return null;
+    await writeComboZonas(tx, created.id, input.zonaIds);
+    return created.id;
+  });
+  if (!createdId) return null;
+  return obtenerCombo(db, createdId);
+}
+
+/** Mismo motivo que `crearCombo`: DELETE + INSERT de zonas en una transacción. */
+export async function actualizarCombo(
+  db: Db,
+  id: string,
+  input: DepilationComboInput,
+): Promise<DepilationComboAssembled | null> {
+  const updatedId = await db.transaction(async (tx) => {
+    const updated = await tx
+      .update(depilationCombo)
+      .set({
+        name: input.name,
+        description: input.description ?? null,
+        kind: input.kind,
+        fixedPrice: input.fixedPrice == null ? null : String(input.fixedPrice),
+        fixedDurationMinutes: input.fixedDurationMinutes ?? null,
+        choiceZoneCount: input.choiceZoneCount ?? 0,
+        isPublishedWeb: input.isPublishedWeb ?? false,
+        displayOrder: input.displayOrder ?? 0,
+        updatedAt: new Date(),
+      })
+      .where(eq(depilationCombo.id, id))
+      .returning({ id: depilationCombo.id });
+    if (updated.length === 0) return null;
+    await writeComboZonas(tx, id, input.zonaIds);
+    return updated[0]!.id;
+  });
+  if (!updatedId) return null;
+  return obtenerCombo(db, updatedId);
+}
+
+export async function setEstadoCombo(
+  db: Db,
+  id: string,
+  isActive: boolean,
+): Promise<DepilationComboAssembled | null> {
+  const rows = await db
+    .update(depilationCombo)
+    .set({ isActive })
+    .where(eq(depilationCombo.id, id))
+    .returning({ id: depilationCombo.id });
+  if (rows.length === 0) return null;
+  return obtenerCombo(db, id);
 }

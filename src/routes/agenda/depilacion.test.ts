@@ -3,16 +3,27 @@ import { Hono } from "hono";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { eq, ilike, inArray, or } from "drizzle-orm";
-import { depilacionRouter, zonaBody, estadoBody, exclusionesBody, configBody } from "./depilacion";
+import {
+  depilacionRouter,
+  zonaBody,
+  estadoBody,
+  exclusionesBody,
+  configBody,
+  cotizarBody,
+  comboDepilacionBody,
+} from "./depilacion";
 import {
   agruparZonasPorCategoria,
   filasDeExclusion,
   nombreDeZonaEnUso,
   leerConfig,
   guardarExclusiones,
+  exclusionesParaMotor,
+  conflictoEnSeleccion,
+  precioFormulaDeCombo,
 } from "../../repositories/depilacion.repo";
 import * as schema from "../../db/schema";
-import { bodyZone, zoneExclusion } from "../../db/schema";
+import { bodyZone, zoneExclusion, depilationCombo, depilationComboZone } from "../../db/schema";
 import type { Db } from "../../db/client";
 import type { AppBindings } from "../../env";
 import type { DepilationConfig } from "../../lib/depilation-pricing";
@@ -703,5 +714,425 @@ describe("PATCH /zonas/:id/estado — colisión de nombre al reactivar (integrac
       ADMIN_ENV,
     );
     expect(res.status).toBe(404);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Task 5: cotización y CRUD de combos
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("exclusionesParaMotor", () => {
+  it("mapea zoneId/excludesZoneId a zonaId/excluyeA", () => {
+    expect(exclusionesParaMotor([{ zoneId: "A", excludesZoneId: "B" }])).toEqual([
+      { zonaId: "A", excluyeA: "B" },
+    ]);
+  });
+
+  it("lista vacía da lista vacía", () => {
+    expect(exclusionesParaMotor([])).toEqual([]);
+  });
+});
+
+describe("conflictoEnSeleccion", () => {
+  const exclusiones = [
+    { zonaId: "pierna", excluyeA: "media-pierna" },
+    { zonaId: "media-pierna", excluyeA: "pierna" },
+  ];
+
+  it("detecta el par cuando las dos zonas están en la selección", () => {
+    const c = conflictoEnSeleccion(["pierna", "media-pierna", "axila"], exclusiones);
+    expect(c).not.toBeNull();
+    expect([c?.zonaId, c?.excluyeA].sort()).toEqual(["media-pierna", "pierna"]);
+  });
+
+  it("no marca conflicto si solo una de las dos está en la selección", () => {
+    expect(conflictoEnSeleccion(["pierna", "axila"], exclusiones)).toBeNull();
+  });
+
+  it("no marca conflicto con selección vacía", () => {
+    expect(conflictoEnSeleccion([], exclusiones)).toBeNull();
+  });
+});
+
+describe("precioFormulaDeCombo", () => {
+  // Config real del seed 1.35.0: price_grande=19000, pricing_minutes_chica=5,
+  // tier1=1200, tier2=1000. Con esta config, agregar 1 zona fantasma "chica"
+  // siempre cae en escalón 2 (5×1000=$5.000) si ya hay 2+ zonas cargadas.
+  const config: DepilationConfig = {
+    precioLista: { grande: 19000, mediana: 17000, chica: 12000 },
+    minutosPrecio: { grande: 10, mediana: 7, chica: 5 },
+    tarifaEscalon1: 1200,
+    tarifaEscalon2: 1000,
+    minutosTurno: { mujer: { grande: 9, mediana: 6, chica: 3 }, hombre: { grande: 10, mediana: 8, chica: 5 } },
+    redondeoTurno: 5,
+    turnoMinimo: 10,
+    packSesiones: 3,
+    packDescuentoPct: 15,
+    packRedondeo: 1000,
+  };
+
+  const zona = (id: string, categoria: "grande" | "mediana" | "chica") => ({
+    id,
+    nombre: id,
+    categoria,
+  });
+
+  it("sin zonas a elección, es la fórmula tal cual (Cuerpo Full: $86.000)", () => {
+    const zonas = [
+      ...Array.from({ length: 5 }, (_, i) => zona(`g${i}`, "grande" as const)),
+      ...Array.from({ length: 5 }, (_, i) => zona(`c${i}`, "chica" as const)),
+    ];
+    expect(precioFormulaDeCombo(zonas, 0, config)).toBe(86000);
+  });
+
+  it("con 1 zona a elección, suma una zona chica extra (Cuerpo Completo: $61.000)", () => {
+    const zonas = [
+      ...Array.from({ length: 3 }, (_, i) => zona(`g${i}`, "grande" as const)),
+      ...Array.from({ length: 3 }, (_, i) => zona(`c${i}`, "chica" as const)),
+    ];
+    expect(precioFormulaDeCombo(zonas, 1, config)).toBe(61000);
+  });
+
+  it("con 1 zona a elección, suma una zona chica extra (Esenciales: $51.000)", () => {
+    const zonas = [
+      ...Array.from({ length: 2 }, (_, i) => zona(`g${i}`, "grande" as const)),
+      ...Array.from({ length: 3 }, (_, i) => zona(`c${i}`, "chica" as const)),
+    ];
+    expect(precioFormulaDeCombo(zonas, 1, config)).toBe(51000);
+  });
+});
+
+describe("cotizarBody", () => {
+  const A = "11111111-1111-1111-1111-111111111111";
+
+  it("acepta zonaIds + sexo válidos", () => {
+    expect(cotizarBody.safeParse({ zonaIds: [A], sexo: "mujer" }).success).toBe(true);
+  });
+
+  it("acepta zonaIds vacío (selección vacía es válida)", () => {
+    expect(cotizarBody.safeParse({ zonaIds: [], sexo: "hombre" }).success).toBe(true);
+  });
+
+  it("rechaza un sexo fuera de mujer|hombre, con mensaje en castellano", () => {
+    const r = cotizarBody.safeParse({ zonaIds: [A], sexo: "otro" });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.message).toMatch(/mujer o hombre/i);
+  });
+
+  it("rechaza un zonaId que no es uuid", () => {
+    expect(cotizarBody.safeParse({ zonaIds: ["no-es-uuid"], sexo: "mujer" }).success).toBe(false);
+  });
+});
+
+describe("comboDepilacionBody", () => {
+  const A = "11111111-1111-1111-1111-111111111111";
+  const B = "22222222-2222-2222-2222-222222222222";
+  const guardadoValido = { name: "Combo X", kind: "guardado" as const, zonaIds: [A] };
+  const packFijoValido = { name: "Pack X", kind: "pack_fijo" as const, fixedPrice: 50000, zonaIds: [A] };
+
+  it("acepta un combo guardado sin precio", () => {
+    expect(comboDepilacionBody.safeParse(guardadoValido).success).toBe(true);
+  });
+
+  it("acepta un pack fijo con precio", () => {
+    expect(comboDepilacionBody.safeParse(packFijoValido).success).toBe(true);
+  });
+
+  it("rechaza un guardado con fixedPrice cargado, con mensaje en castellano", () => {
+    const r = comboDepilacionBody.safeParse({ ...guardadoValido, fixedPrice: 1000 });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.message).toMatch(/no lleva precio propio/i);
+  });
+
+  it("rechaza un pack_fijo sin fixedPrice", () => {
+    const r = comboDepilacionBody.safeParse({ name: "Pack X", kind: "pack_fijo", zonaIds: [A] });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.message).toMatch(/necesita el precio fijo/i);
+  });
+
+  it("rechaza zonaIds vacío", () => {
+    const r = comboDepilacionBody.safeParse({ ...guardadoValido, zonaIds: [] });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.message).toMatch(/al menos una zona/i);
+  });
+
+  it("rechaza una zona repetida", () => {
+    const r = comboDepilacionBody.safeParse({ ...guardadoValido, zonaIds: [A, A] });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.message).toMatch(/repetida/i);
+  });
+
+  it("acepta dos zonas distintas", () => {
+    expect(comboDepilacionBody.safeParse({ ...guardadoValido, zonaIds: [A, B] }).success).toBe(true);
+  });
+});
+
+// ── Helpers contra el catálogo REAL sembrado por la migración 1.35.0 ───────
+// A diferencia de crearZonaQA (zonas descartables para probar CRUD), estos
+// tests de cotización y de los packs fijos necesitan las zonas y los 3 packs
+// reales — no tiene sentido inventar una categoría o un pack de prueba
+// cuando lo que se está probando es que la fórmula real da los números
+// reales del PDF.
+async function idDeZonaReal(nombre: string): Promise<string> {
+  const [z] = await testDb.select({ id: bodyZone.id }).from(bodyZone).where(eq(bodyZone.name, nombre)).limit(1);
+  if (!z) throw new Error(`no está seedeada la zona real "${nombre}" (¿corriste npm run db:up?)`);
+  return z.id;
+}
+
+async function idsDeZonasDelCombo(nombreCombo: string): Promise<string[]> {
+  const [combo] = await testDb
+    .select({ id: depilationCombo.id })
+    .from(depilationCombo)
+    .where(eq(depilationCombo.name, nombreCombo))
+    .limit(1);
+  if (!combo) throw new Error(`no está seedeado el combo "${nombreCombo}"`);
+  const rows = await testDb
+    .select({ zoneId: depilationComboZone.zoneId })
+    .from(depilationComboZone)
+    .where(eq(depilationComboZone.comboId, combo.id));
+  return rows.map((r) => r.zoneId);
+}
+
+type Cotizacion = {
+  total: number;
+  lineas: unknown[];
+  duracionMinutos: number;
+  pack: { sesiones: number; total: number; ahorro: number };
+  packFijo: { id: string; nombre: string; precio: number; precioFormula: number } | null;
+};
+
+async function cotizarRaw(zonaIds: string[], sexo: "mujer" | "hombre") {
+  return testApp.request(
+    "/cotizar",
+    { method: "POST", headers: ADMIN_HEADERS, body: JSON.stringify({ zonaIds, sexo }) },
+    ADMIN_ENV,
+  );
+}
+
+async function cotizar(zonaIds: string[], sexo: "mujer" | "hombre"): Promise<Cotizacion> {
+  const res = await cotizarRaw(zonaIds, sexo);
+  if (res.status !== 200) throw new Error(`cotizar devolvió ${res.status}: ${await res.text()}`);
+  return res.json() as Promise<Cotizacion>;
+}
+
+describe("POST /cotizar (integración real)", () => {
+  let piernaId = "";
+  let cavadoId = "";
+  let axilaId = "";
+  let mediaPiernaId = "";
+  let zonasCuerpoFull: string[] = [];
+
+  beforeAll(async () => {
+    piernaId = await idDeZonaReal("Pierna entera");
+    cavadoId = await idDeZonaReal("Cavado");
+    axilaId = await idDeZonaReal("Axila");
+    mediaPiernaId = await idDeZonaReal("Media pierna");
+    zonasCuerpoFull = await idsDeZonasDelCombo("Cuerpo Full");
+  });
+
+  it("cotiza pierna + cavado + axila para hombre", async () => {
+    const body = await cotizar([piernaId, cavadoId, axilaId], "hombre");
+    expect(body.total).toBe(30000);
+    expect(body.duracionMinutos).toBe(20); // 10 + 5 + 5
+    expect(body.pack.total).toBe(77000); // 30000 × 3 × 0,85 = 76500 → 77000
+    expect(body.pack.ahorro).toBe(13000); // 90000 − 77000
+    expect(body.packFijo).toBeNull();
+  });
+
+  it("aplica el pack fijo cuando la selección coincide", async () => {
+    const body = await cotizar(zonasCuerpoFull, "mujer");
+    expect(body.packFijo).toMatchObject({ nombre: "Cuerpo Full", precio: 65000, precioFormula: 86000 });
+    expect(body.total).toBe(65000);
+  });
+
+  it("rechaza una selección con dos zonas que se pisan", async () => {
+    const res = await cotizarRaw([piernaId, mediaPiernaId], "mujer");
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("Media pierna");
+  });
+
+  it("rechaza un zonaId que no existe", async () => {
+    const res = await cotizarRaw([crypto.randomUUID()], "mujer");
+    expect(res.status).toBe(400);
+  });
+
+  it("selección vacía cotiza $0 sin romper", async () => {
+    const body = await cotizar([], "mujer");
+    expect(body.total).toBe(0);
+    expect(body.duracionMinutos).toBe(0);
+    expect(body.lineas).toEqual([]);
+    expect(body.packFijo).toBeNull();
+  });
+
+  it("sin token -> 401", async () => {
+    const res = await depilacionRouter.request(
+      "/cotizar",
+      { method: "POST", body: JSON.stringify({ zonaIds: [], sexo: "mujer" }) },
+      {} as never,
+    );
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("Combos de depilación (integración real)", () => {
+  let comboCreadoId = "";
+
+  afterAll(async () => {
+    if (comboCreadoId) {
+      await testDb.delete(depilationCombo).where(eq(depilationCombo.id, comboCreadoId));
+    }
+  });
+
+  it("GET /combos devuelve cada combo con su precio calculado, no guardado", async () => {
+    const res = await testApp.request("/combos", { headers: ADMIN_HEADERS }, ADMIN_ENV);
+    expect(res.status).toBe(200);
+    const combos = (await res.json()) as Array<{
+      name: string;
+      kind: string;
+      fixedPrice: number | null;
+      precioCalculado: number;
+      precioFinal: number;
+    }>;
+    const cuerpoFull = combos.find((c) => c.name === "Cuerpo Full");
+    expect(cuerpoFull).toBeDefined();
+    expect(cuerpoFull!.precioCalculado).toBe(86000);
+    // El precio final del pack fijo es el fijo, NUNCA el calculado.
+    expect(cuerpoFull!.precioFinal).toBe(65000);
+  });
+
+  it("ningún pack fijo cuesta más que su propia fórmula", async () => {
+    const res = await testApp.request("/combos", { headers: ADMIN_HEADERS }, ADMIN_ENV);
+    const combos = (await res.json()) as Array<{
+      name: string;
+      kind: string;
+      fixedPrice: string | number | null;
+      precioCalculado: number;
+    }>;
+    const packs = combos.filter((c) => c.kind === "pack_fijo");
+    expect(packs).toHaveLength(3);
+    for (const p of packs) {
+      expect(Number(p.fixedPrice)).toBeLessThan(p.precioCalculado);
+    }
+
+    const porNombre = (n: string) => packs.find((p) => p.name === n)!;
+    expect(porNombre("Cuerpo Full")).toMatchObject({ fixedPrice: 65000, precioCalculado: 86000 });
+    expect(porNombre("Cuerpo Completo")).toMatchObject({ fixedPrice: 58000, precioCalculado: 61000 });
+    expect(porNombre("Combo de Esenciales")).toMatchObject({ fixedPrice: 49000, precioCalculado: 51000 });
+  });
+
+  it("POST /combos con kind guardado y fixedPrice cargado -> 400", async () => {
+    const axilaId = await idDeZonaReal("Axila");
+    const res = await testApp.request(
+      "/combos",
+      {
+        method: "POST",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({
+          name: `${QA_PREFIX}GUARDADO_CON_PRECIO`,
+          kind: "guardado",
+          fixedPrice: 1000,
+          zonaIds: [axilaId],
+        }),
+      },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/no lleva precio propio/i);
+  });
+
+  it("POST /combos sin zonas -> 400", async () => {
+    const res = await testApp.request(
+      "/combos",
+      {
+        method: "POST",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({ name: `${QA_PREFIX}SIN_ZONAS`, kind: "guardado", zonaIds: [] }),
+      },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("crea un combo guardado, lo edita y lo archiva", async () => {
+    const axilaId = await idDeZonaReal("Axila");
+    const cavadoId = await idDeZonaReal("Cavado");
+
+    const createRes = await testApp.request(
+      "/combos",
+      {
+        method: "POST",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({ name: `${QA_PREFIX}GUARDADO_1`, kind: "guardado", zonaIds: [axilaId] }),
+      },
+      ADMIN_ENV,
+    );
+    expect(createRes.status).toBe(201);
+    const created = (await createRes.json()) as {
+      id: string;
+      precioCalculado: number;
+      precioFinal: number;
+      zonas: unknown[];
+    };
+    comboCreadoId = created.id;
+    // Un guardado nunca lee un precio propio: precioFinal === precioCalculado.
+    expect(created.precioFinal).toBe(created.precioCalculado);
+    expect(created.zonas).toHaveLength(1);
+
+    const patchRes = await testApp.request(
+      `/combos/${comboCreadoId}`,
+      {
+        method: "PATCH",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({
+          name: `${QA_PREFIX}GUARDADO_1`,
+          kind: "guardado",
+          zonaIds: [axilaId, cavadoId],
+        }),
+      },
+      ADMIN_ENV,
+    );
+    expect(patchRes.status).toBe(200);
+    const updated = (await patchRes.json()) as { zonas: unknown[] };
+    expect(updated.zonas).toHaveLength(2);
+
+    const estadoRes = await testApp.request(
+      `/combos/${comboCreadoId}/estado`,
+      { method: "PATCH", headers: ADMIN_HEADERS, body: JSON.stringify({ isActive: false }) },
+      ADMIN_ENV,
+    );
+    expect(estadoRes.status).toBe(200);
+    const archived = (await estadoRes.json()) as { isActive: boolean };
+    expect(archived.isActive).toBe(false);
+  });
+
+  it("PATCH /combos/:id con id inexistente -> 404", async () => {
+    const axilaId = await idDeZonaReal("Axila");
+    const inexistente = "00000000-0000-0000-0000-000000000000";
+    const res = await testApp.request(
+      `/combos/${inexistente}`,
+      {
+        method: "PATCH",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({ name: "x", kind: "guardado", zonaIds: [axilaId] }),
+      },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("PATCH /combos/:id/estado con id inexistente -> 404", async () => {
+    const inexistente = "00000000-0000-0000-0000-000000000000";
+    const res = await testApp.request(
+      `/combos/${inexistente}/estado`,
+      { method: "PATCH", headers: ADMIN_HEADERS, body: JSON.stringify({ isActive: false }) },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /combos sin token -> 401", async () => {
+    const res = await depilacionRouter.request("/combos", {}, {} as never);
+    expect(res.status).toBe(401);
   });
 });
