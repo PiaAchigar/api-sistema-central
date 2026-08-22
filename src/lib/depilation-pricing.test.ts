@@ -62,6 +62,13 @@ describe("calcularPrecioCombo — orden y desglose", () => {
     expect(r.lineas[0].motivo).toBe("lista");
     expect(r.lineas[1].motivo).toBe("escalon_1");
   });
+  it("a igual categoría conserva el orden de entrada (desempate estable)", () => {
+    const a = z("chica", "a");
+    const b = z("chica", "b");
+    const c = z("chica", "c");
+    const r = calcularPrecioCombo([a, b, c], CONFIG);
+    expect(r.lineas.map((l) => l.zonaId)).toEqual([a.id, b.id, c.id]);
+  });
   it("la tabla ya resuelta del PDF §4", () => {
     // pos 1 / pos 2 / pos 3+ para cada categoría
     expect(calcularPrecioCombo([G(), G(), G()], CONFIG).lineas.map((l) => l.importe))
@@ -172,5 +179,8 @@ describe("zonasBloqueadas", () => {
   });
   it("sin selección no bloquea nada", () => {
     expect(zonasBloqueadas([], exclusiones).size).toBe(0);
+  });
+  it("si están las dos zonas del par a la vez, ninguna queda bloqueada", () => {
+    expect(zonasBloqueadas(["pierna", "media"], exclusiones).size).toBe(0);
   });
 });
