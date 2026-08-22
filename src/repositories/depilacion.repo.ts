@@ -545,6 +545,25 @@ export type DepilationComboInput = {
   zonaIds: string[];
 };
 
+/**
+ * `ux_depilation_combo_name` es UNIQUE (name) sobre TODA la tabla (no parcial
+ * por is_active, a diferencia de `body_zone`): un combo archivado sigue
+ * ocupando su nombre. Sin este chequeo, crear/editar con un nombre repetido
+ * rompe el INSERT/UPDATE con un 500 genérico en vez del 409 que ya usan las
+ * zonas — mismo agujero que se cerró para `body_zone` en la ronda anterior.
+ */
+export async function existeComboConNombre(
+  db: Db,
+  nombre: string,
+  excludeId?: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ id: depilationCombo.id })
+    .from(depilationCombo)
+    .where(eq(depilationCombo.name, nombre));
+  return rows.some((r) => r.id !== excludeId);
+}
+
 async function writeComboZonas(db: Db, comboId: string, zonaIds: string[]) {
   await db.delete(depilationComboZone).where(eq(depilationComboZone.comboId, comboId));
   if (zonaIds.length === 0) return;

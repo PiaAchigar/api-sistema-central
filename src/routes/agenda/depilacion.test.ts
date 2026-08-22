@@ -21,6 +21,7 @@ import {
   exclusionesParaMotor,
   conflictoEnSeleccion,
   precioFormulaDeCombo,
+  assembleDepilationCombo,
 } from "../../repositories/depilacion.repo";
 import * as schema from "../../db/schema";
 import { bodyZone, zoneExclusion, depilationCombo, depilationComboZone } from "../../db/schema";
@@ -802,6 +803,70 @@ describe("precioFormulaDeCombo", () => {
   });
 });
 
+// ── Ronda de fixes 1, punto 1 (Important) ───────────────────────────────────
+// "Un combo guardado nunca muestra un precio pegado" es la razón de ser de
+// todo el diseño (§4.5-4.7 del spec) — y el mutante que probó el revisor
+// (sacar el `combo.kind === "pack_fijo" ?` de `assembleDepilationCombo`) no
+// lo detectaba ningún test existente, porque el CHECK `ck_dc_precio_guardado`
+// de la base ya garantiza que un `guardado` real nunca tiene `fixed_price`
+// cargado — se probó a mano: crearlo como `pack_fijo` con precio y después
+// `UPDATE depilation_combo SET kind = 'guardado'` es rechazado por Postgres
+// ("violates check constraint ck_dc_precio_guardado"), así que esa vía de
+// integración real es imposible por diseño. Por eso este test prueba
+// DIRECTAMENTE la función pura que arma la respuesta, fabricando la fila
+// "imposible" que la base nunca dejaría existir — es la única forma de
+// ejercitar esa línea de defensa en profundidad.
+describe("assembleDepilationCombo — invariante central: un guardado nunca muestra un precio pegado", () => {
+  const config: DepilationConfig = {
+    precioLista: { grande: 19000, mediana: 17000, chica: 12000 },
+    minutosPrecio: { grande: 10, mediana: 7, chica: 5 },
+    tarifaEscalon1: 1200,
+    tarifaEscalon2: 1000,
+    minutosTurno: { mujer: { grande: 9, mediana: 6, chica: 3 }, hombre: { grande: 10, mediana: 8, chica: 5 } },
+    redondeoTurno: 5,
+    turnoMinimo: 10,
+    packSesiones: 3,
+    packDescuentoPct: 15,
+    packRedondeo: 1000,
+  };
+  const zonaAxila = { id: "z1", nombre: "Axila", categoria: "chica" as const };
+
+  it("con un guardado que (la base nunca dejaría, pero) trae fixed_price, precioFinal es el calculado — nunca el precio pegado", () => {
+    const filaImposible = {
+      id: "c1",
+      name: "Guardado con precio fantasma",
+      description: null,
+      kind: "guardado",
+      fixedPrice: "999999.00",
+      fixedDurationMinutes: null,
+      choiceZoneCount: 0,
+      isPublishedWeb: false,
+      displayOrder: 0,
+      isActive: true,
+    };
+    const resultado = assembleDepilationCombo(filaImposible, [zonaAxila], config);
+    expect(resultado.precioFinal).toBe(resultado.precioCalculado);
+    expect(resultado.precioFinal).not.toBe(999999);
+  });
+
+  it("un pack_fijo SÍ usa fixedPrice como precioFinal (caso normal, de control)", () => {
+    const filaPack = {
+      id: "c2",
+      name: "Pack normal",
+      description: null,
+      kind: "pack_fijo",
+      fixedPrice: "20000.00",
+      fixedDurationMinutes: null,
+      choiceZoneCount: 0,
+      isPublishedWeb: false,
+      displayOrder: 0,
+      isActive: true,
+    };
+    const resultado = assembleDepilationCombo(filaPack, [zonaAxila], config);
+    expect(resultado.precioFinal).toBe(20000);
+  });
+});
+
 describe("cotizarBody", () => {
   const A = "11111111-1111-1111-1111-111111111111";
 
@@ -821,6 +886,12 @@ describe("cotizarBody", () => {
 
   it("rechaza un zonaId que no es uuid", () => {
     expect(cotizarBody.safeParse({ zonaIds: ["no-es-uuid"], sexo: "mujer" }).success).toBe(false);
+  });
+
+  it("rechaza zonaIds repetidos, con mensaje en castellano", () => {
+    const r = cotizarBody.safeParse({ zonaIds: [A, A], sexo: "mujer" });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.message).toMatch(/repetida/i);
   });
 });
 
@@ -864,6 +935,20 @@ describe("comboDepilacionBody", () => {
 
   it("acepta dos zonas distintas", () => {
     expect(comboDepilacionBody.safeParse({ ...guardadoValido, zonaIds: [A, B] }).success).toBe(true);
+  });
+
+  it("rechaza choiceZoneCount > 0 en un guardado, con mensaje en castellano", () => {
+    const r = comboDepilacionBody.safeParse({ ...guardadoValido, choiceZoneCount: 1 });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.message).toMatch(/no puede tener zonas a elección/i);
+  });
+
+  it("acepta choiceZoneCount: 0 en un guardado", () => {
+    expect(comboDepilacionBody.safeParse({ ...guardadoValido, choiceZoneCount: 0 }).success).toBe(true);
+  });
+
+  it("acepta choiceZoneCount > 0 en un pack_fijo", () => {
+    expect(comboDepilacionBody.safeParse({ ...packFijoValido, choiceZoneCount: 1 }).success).toBe(true);
   });
 });
 
@@ -1052,6 +1137,71 @@ describe("Combos de depilación (integración real)", () => {
       ADMIN_ENV,
     );
     expect(res.status).toBe(400);
+  });
+
+  // ── Ronda de fixes 1, punto 2 (Important) ─────────────────────────────────
+  // `ux_depilation_combo_name` es UNIQUE (name) sobre toda la tabla; sin
+  // chequearlo antes del INSERT/UPDATE, un nombre repetido rompía con un 500
+  // genérico (probado en vivo por el revisor). Mismo agujero que se cerró
+  // para `body_zone` en la ronda anterior — acá con el mismo criterio: 409,
+  // no 500.
+  it("POST /combos con un nombre ya usado -> 409, no 500", async () => {
+    const axilaId = await idDeZonaReal("Axila");
+    const res = await testApp.request(
+      "/combos",
+      {
+        method: "POST",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({ name: "Cuerpo Full", kind: "guardado", zonaIds: [axilaId] }),
+      },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/ya existe un combo/i);
+  });
+
+  it("PATCH /combos/:id con el nombre de OTRO combo -> 409; renombrar a su propio nombre sigue andando", async () => {
+    const axilaId = await idDeZonaReal("Axila");
+    const createRes = await testApp.request(
+      "/combos",
+      {
+        method: "POST",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({ name: `${QA_PREFIX}RENOMBRAR`, kind: "guardado", zonaIds: [axilaId] }),
+      },
+      ADMIN_ENV,
+    );
+    expect(createRes.status).toBe(201);
+    const { id } = (await createRes.json()) as { id: string };
+    try {
+      const patchChocando = await testApp.request(
+        `/combos/${id}`,
+        {
+          method: "PATCH",
+          headers: ADMIN_HEADERS,
+          body: JSON.stringify({ name: "Cuerpo Full", kind: "guardado", zonaIds: [axilaId] }),
+        },
+        ADMIN_ENV,
+      );
+      expect(patchChocando.status).toBe(409);
+
+      // El excludeId tiene que evitar que un combo choque contra sí mismo
+      // al "renombrarse" a su propio nombre actual (mismo caso que se
+      // arregló para zonas: reactivar con el nombre propio no puede fallar).
+      const patchMismoNombre = await testApp.request(
+        `/combos/${id}`,
+        {
+          method: "PATCH",
+          headers: ADMIN_HEADERS,
+          body: JSON.stringify({ name: `${QA_PREFIX}RENOMBRAR`, kind: "guardado", zonaIds: [axilaId] }),
+        },
+        ADMIN_ENV,
+      );
+      expect(patchMismoNombre.status).toBe(200);
+    } finally {
+      await testDb.delete(depilationCombo).where(eq(depilationCombo.id, id));
+    }
   });
 
   it("crea un combo guardado, lo edita y lo archiva", async () => {

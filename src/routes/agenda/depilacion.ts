@@ -12,6 +12,7 @@ import {
   crearCombo,
   crearZona,
   exclusionesParaMotor,
+  existeComboConNombre,
   existeZonaActivaConNombre,
   guardarConfig,
   guardarExclusiones,
@@ -115,12 +116,30 @@ export const configBody = z.object({
   packRoundingBase: enteroPositivo("El redondeo del pack"),
 });
 
-export const cotizarBody = z.object({
-  zonaIds: z.array(z.string().uuid({ message: "Hay una zona que no es válida" })),
-  sexo: z.enum(["mujer", "hombre"], {
-    errorMap: () => ({ message: "El sexo tiene que ser mujer o hombre" }),
-  }),
-});
+export const cotizarBody = z
+  .object({
+    zonaIds: z.array(z.string().uuid({ message: "Hay una zona que no es válida" })),
+    sexo: z.enum(["mujer", "hombre"], {
+      errorMap: () => ({ message: "El sexo tiene que ser mujer o hombre" }),
+    }),
+  })
+  .superRefine((v, ctx) => {
+    // Mandar la misma zona dos veces la cuenta dos veces (precio y
+    // duración inflados sin aviso): mismo criterio que `comboDepilacionBody`
+    // más abajo, que ya dedupe `zonaIds` por la misma razón.
+    const vistos = new Set<string>();
+    for (const id of v.zonaIds) {
+      if (vistos.has(id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["zonaIds"],
+          message: "Hay una zona repetida en la selección",
+        });
+        return;
+      }
+      vistos.add(id);
+    }
+  });
 
 /**
  * Validación del combo de depilación. Mensajes en castellano, mismo criterio
@@ -180,6 +199,18 @@ export const comboDepilacionBody = z
         code: z.ZodIssueCode.custom,
         path: ["fixedPrice"],
         message: "Un pack fijo necesita el precio fijo",
+      });
+    }
+    // "Zonas a elección" es un concepto de pack fijo (PDF §6 / diseño §4.7):
+    // un guardado es una selección cerrada, sin nada por elegir después. El
+    // CHECK de la base solo exige >= 0, no lo ata a `pack_fijo` — sin esto,
+    // un guardado con choiceZoneCount > 0 le suma zonas fantasma "chica" a
+    // su precioCalculado sin que tenga sentido.
+    if (v.kind === "guardado" && v.choiceZoneCount != null && v.choiceZoneCount !== 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["choiceZoneCount"],
+        message: "Un combo guardado no puede tener zonas a elección",
       });
     }
     // La base tiene UNIQUE (combo_id, zone_id); si no se chequea acá, una
@@ -420,6 +451,10 @@ depilacionRouter.post(
     const db = createDb(c.env);
     const body = c.req.valid("json");
 
+    if (await existeComboConNombre(db, body.name)) {
+      throw conflict(`Ya existe un combo llamado "${body.name}"`);
+    }
+
     const activas = await obtenerZonasActivasPorId(db, body.zonaIds);
     const faltante = body.zonaIds.find((id) => !activas.has(id));
     if (faltante) throw badRequest(`La zona "${faltante}" no existe o no está activa`);
@@ -439,6 +474,10 @@ depilacionRouter.patch(
     const db = createDb(c.env);
     const id = c.req.param("id");
     const body = c.req.valid("json");
+
+    if (await existeComboConNombre(db, body.name, id)) {
+      throw conflict(`Ya existe un combo llamado "${body.name}"`);
+    }
 
     const activas = await obtenerZonasActivasPorId(db, body.zonaIds);
     const faltante = body.zonaIds.find((id) => !activas.has(id));
