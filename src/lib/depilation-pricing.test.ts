@@ -105,10 +105,16 @@ describe("calcularPrecioPack — los 8 ejemplos del PDF §7", () => {
     expect(calcularPrecioPack(combo, CONFIG)).toBe(esperado);
   });
 
-  it("no arrastra error de coma flotante", () => {
-    // 18000 × 3 × 0,85 en float da 45900.000000000007
-    expect(Number.isInteger(calcularPrecioPack(18000, CONFIG))).toBe(true);
-  });
+  // Ronda de fixes 2, punto 4 (Minor): había acá un test
+  // "no arrastra error de coma flotante" que solo chequeaba
+  // `Number.isInteger(...)` — `calcularPrecioPack` termina en
+  // `Math.round(x) * packRedondeo`, así que SIEMPRE devuelve un entero, sin
+  // importar si el cuerpo de la función está bien o mal. El revisor lo
+  // confirmó reemplazando la función entera por algo mal y en float, y ese
+  // test seguía pasando. Se borra: el `it.each` de arriba —que incluye
+  // justamente el caso 18000 → 46000, el mismo que arrastraría el error de
+  // coma flotante (18000 × 3 × 0,85 da 45900.000000000007)— ya prueba el
+  // valor EXACTO, que es la propiedad que en verdad importa.
 });
 
 describe("calcularDuracionTurno — PDF §8", () => {

@@ -1,11 +1,12 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { createDb } from "../../db/client";
+import { createDb, type Db } from "../../db/client";
 import { badRequest, conflict, notFound } from "../../lib/errors";
 import { zv } from "../../lib/validator";
 import { auth, requireAuth, requirePermission } from "../../middleware/auth";
 import {
+  aConfigAnidada,
   actualizarCombo,
   actualizarZona,
   conflictoEnSeleccion,
@@ -21,16 +22,19 @@ import {
   listarExclusiones,
   listarPacksFijos,
   listarZonas,
+  obtenerKindYPrecioDeCombo,
   obtenerZona,
   obtenerZonasActivasPorId,
   setEstadoCombo,
   setEstadoZona,
+  type ZonaRow,
 } from "../../repositories/depilacion.repo";
 import {
   buscarPackFijo,
   calcularDuracionTurno,
   calcularPrecioCombo,
   calcularPrecioPack,
+  primeraViolacionNoInversion,
   type Categoria,
   type ZonaParaCotizar,
 } from "../../lib/depilation-pricing";
@@ -114,7 +118,49 @@ export const configBody = z.object({
     .min(0, "El descuento del pack no puede ser negativo")
     .max(100, "El descuento del pack no puede superar el 100%"),
   packRoundingBase: enteroPositivo("El redondeo del pack"),
-});
+})
+  .superRefine((v, ctx) => {
+    // Ronda de fixes 1, punto 1 (Important): "agregar una zona nunca puede
+    // bajar el precio" es la promesa central del negocio (PDF §1), y el test
+    // que la protege en depilation-pricing.test.ts corre contra una config
+    // CONGELADA en el archivo — no contra la que la dueña del negocio guarda
+    // acá. Sin esto, un dígito de menos (ej. priceGrande: 1000 en vez de
+    // 19000) se guardaba sin aviso y rompía la garantía en silencio.
+    //
+    // Capa 1, rápida: el orden grande >= mediana >= chica es una condición
+    // necesaria (si una categoría "grande" vale menos que una "chica", cobrar
+    // por posición ya no tiene sentido) y da un mensaje puntual sobre qué
+    // campo mirar. No es suficiente por sí sola —la Capa 2 abajo cubre el
+    // resto del espacio (tarifas de escalón demasiado altas, etc.)— así que
+    // si el orden está bien igual se corre la Capa 2.
+    if (v.priceGrande < v.priceMediana || v.priceMediana < v.priceChica) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["priceGrande"],
+        message:
+          "El precio de zona grande tiene que ser mayor o igual al de zona mediana, y el de zona " +
+          "mediana mayor o igual al de zona chica. Si no, agregar una zona más grande a una " +
+          "selección puede terminar costando MENOS que las zonas más chicas que ya estaban — y eso " +
+          "nunca puede pasar.",
+      });
+      return;
+    }
+
+    // Capa 2, exhaustiva: corre la verificación de no-inversión de verdad
+    // (el motor que ya existe, `primeraViolacionNoInversion`) sobre la
+    // config que se está por guardar. Se mantiene sola si mañana cambia la
+    // fórmula — no hay que acordarse de tocar esta validación a mano.
+    const violacion = primeraViolacionNoInversion(aConfigAnidada(v));
+    if (violacion) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Con estos precios y tarifas, agregar una zona a una selección puede hacer que el total " +
+          "termine costando IGUAL O MENOS que antes de agregarla — y agregar una zona nunca puede " +
+          "bajar el precio. Revisá los precios de lista y las tarifas de escalón antes de guardar.",
+      });
+    }
+  });
 
 export const cotizarBody = z
   .object({
@@ -430,6 +476,33 @@ depilacionRouter.post(
 
 // ── Combos ───────────────────────────────────────────────────────────────
 
+/**
+ * Ronda de fixes 2, punto 2 (Important): `conflictoEnSeleccion` solo se
+ * llamaba en `/cotizar` — POST/PATCH /combos solo chequeaban nombre repetido
+ * y que las zonas existan y estén activas. Resultado: se podía guardar un
+ * combo que después `/cotizar` rechazaba con 400 (un combo que existe y no
+ * se puede cotizar). El camino es real, no teórico: el diseño deja a
+ * propósito dos pares de exclusión sin sembrar (Brazos↔Antebrazo,
+ * Espalda↔Hombros) para que se carguen después desde la pantalla de Zonas —
+ * cuando eso pase, cualquier combo guardado con ese par queda inválido.
+ *
+ * Mismo `conflictoEnSeleccion` y mismo formato de error que usa `/cotizar`,
+ * para que el mensaje sea consistente entre las dos pantallas.
+ */
+async function validarSinExclusionesEnConflicto(
+  db: Db,
+  zonaIds: string[],
+  activas: Map<string, ZonaRow>,
+): Promise<void> {
+  const exclusiones = exclusionesParaMotor(await listarExclusiones(db));
+  const conflicto = conflictoEnSeleccion(zonaIds, exclusiones);
+  if (conflicto) {
+    const nombreExcluyente = activas.get(conflicto.zonaId)?.name ?? conflicto.zonaId;
+    const nombreExcluida = activas.get(conflicto.excluyeA)?.name ?? conflicto.excluyeA;
+    throw badRequest(`"${nombreExcluyente}" y "${nombreExcluida}" no se pueden combinar`);
+  }
+}
+
 depilacionRouter.get(
   "/combos",
   auth,
@@ -458,6 +531,7 @@ depilacionRouter.post(
     const activas = await obtenerZonasActivasPorId(db, body.zonaIds);
     const faltante = body.zonaIds.find((id) => !activas.has(id));
     if (faltante) throw badRequest(`La zona "${faltante}" no existe o no está activa`);
+    await validarSinExclusionesEnConflicto(db, body.zonaIds, activas);
 
     const created = await crearCombo(db, body);
     return c.json(created, 201);
@@ -475,6 +549,29 @@ depilacionRouter.patch(
     const id = c.req.param("id");
     const body = c.req.valid("json");
 
+    // Ronda de fixes 2, punto 5 (Minor): una edición no puede cambiarle el
+    // tipo a un combo existente ni, en consecuencia, borrarle el precio a un
+    // pack fijo. El hook del front siempre manda `kind: "guardado"` sin
+    // `fixedPrice` — sobre un pack fijo eso pasa el schema igual (un
+    // "guardado" sin precio es válido en sí mismo) y silenciosamente lo
+    // convertía en guardado, dejando `fixed_price = null`. Por la interfaz no
+    // se llega (el botón Editar está oculto para los packs fijos), pero por
+    // API un rol con solo `edit` sí podía destruir un pack sembrado.
+    const existente = await obtenerKindYPrecioDeCombo(db, id);
+    if (existente && existente.kind !== body.kind) {
+      throw badRequest(
+        "No se puede cambiar el tipo de un combo (pack fijo / guardado) editándolo — " +
+          "archivalo y creá uno nuevo si necesitás el otro tipo.",
+      );
+    }
+    // Defensa en profundidad: con el chequeo de arriba esto ya no debería
+    // poder pasar (el kind no pudo cambiar, y el schema exige `fixedPrice`
+    // en un `pack_fijo`), pero queda con su propio mensaje por si el día de
+    // mañana esas dos reglas se desalinean.
+    if (existente?.kind === "pack_fijo" && body.fixedPrice == null) {
+      throw badRequest("No se puede borrar el precio fijo de un pack fijo.");
+    }
+
     if (await existeComboConNombre(db, body.name, id)) {
       throw conflict(`Ya existe un combo llamado "${body.name}"`);
     }
@@ -482,6 +579,7 @@ depilacionRouter.patch(
     const activas = await obtenerZonasActivasPorId(db, body.zonaIds);
     const faltante = body.zonaIds.find((id) => !activas.has(id));
     if (faltante) throw badRequest(`La zona "${faltante}" no existe o no está activa`);
+    await validarSinExclusionesEnConflicto(db, body.zonaIds, activas);
 
     const updated = await actualizarCombo(db, id, body);
     if (!updated) throw notFound("Combo");

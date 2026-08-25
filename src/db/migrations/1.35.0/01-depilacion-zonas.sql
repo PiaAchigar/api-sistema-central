@@ -211,6 +211,16 @@ BEGIN
 
   IF serv_borrar IS NULL THEN
     RAISE NOTICE 'No hay filas de zona en service: nada que migrar.';
+  ELSIF array_length(serv_borrar,1) <> 26 THEN
+    -- La lista de nombres de arriba tiene genéricos ('Axila', 'Espalda alta',
+    -- 'Pecho', 'Barba') que a propósito podrían calzar con un servicio de
+    -- estética que NO sea una de las 26 zonas de depilación migradas. Si el
+    -- IN captura de más (o de menos, por un nombre que cambió) hay que
+    -- revisar a mano antes de borrar nada — abortar es más seguro que
+    -- adivinar cuáles de las filas encontradas son realmente zonas.
+    RAISE EXCEPTION
+      'ABORTA: se esperaban 26 filas de zona en service, se encontraron %. Revisar los nombres antes de borrar.',
+      array_length(serv_borrar,1);
   ELSE
     SELECT count(*) INTO n_turnos   FROM appointments WHERE service_id = ANY(serv_borrar);
     SELECT count(*) INTO n_facturas FROM line_items   WHERE service_id = ANY(serv_borrar);

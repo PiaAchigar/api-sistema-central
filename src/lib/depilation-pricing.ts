@@ -137,3 +137,64 @@ export function zonasBloqueadas(
   }
   return bloqueadas;
 }
+
+export type ViolacionNoInversion = {
+  categoriaAgregada: Categoria;
+  antes: Record<Categoria, number>;
+  totalAntes: number;
+  totalDespues: number;
+};
+
+/**
+ * Verifica la propiedad de no-inversión (PDF §1: "agregar una zona nunca baja
+ * el precio") contra una config concreta — a diferencia del test de
+ * `depilation-pricing.test.ts`, que la prueba al azar contra UNA config fija,
+ * esto se corre sobre CUALQUIER config (la que el usuario está por guardar)
+ * para que la garantía no dependa de que nadie vuelva a tipear los mismos 19
+ * números del PDF.
+ *
+ * Exhaustivo, no al azar — y por eso no es flaky: `calcularPrecioCombo`
+ * ordena las zonas por categoría antes de tarifar, así que el total depende
+ * solo de CUÁNTAS zonas de cada categoría hay en la selección, nunca de
+ * cuáles (el desempate por orden de entrada no cambia el precio, solo el
+ * desglose). Recorrer todos los conteos (grande, mediana, chica) hasta
+ * `maxPorCategoria` cubre TODO el espacio de selecciones posibles hasta ese
+ * tamaño, no una muestra — 12 alcanza y sobra: la tabla de precios por
+ * posición se vuelve constante a partir de la 3ª zona de una categoría
+ * (siempre escalón 2), así que si hay una inversión, aparece con pocas zonas.
+ *
+ * Devuelve la primera violación que encuentra (para el mensaje de error) o
+ * `null` si la config es segura.
+ */
+export function primeraViolacionNoInversion(
+  config: DepilationConfig,
+  maxPorCategoria = 12,
+): ViolacionNoInversion | null {
+  const zonaDe = (categoria: Categoria, i: number): ZonaParaCotizar => ({
+    id: `${categoria}-${i}`,
+    nombre: categoria,
+    categoria,
+  });
+  const armar = (conteo: Record<Categoria, number>): ZonaParaCotizar[] => [
+    ...Array.from({ length: conteo.grande }, (_, i) => zonaDe("grande", i)),
+    ...Array.from({ length: conteo.mediana }, (_, i) => zonaDe("mediana", i)),
+    ...Array.from({ length: conteo.chica }, (_, i) => zonaDe("chica", i)),
+  ];
+
+  for (let nG = 0; nG <= maxPorCategoria; nG++) {
+    for (let nM = 0; nM <= maxPorCategoria; nM++) {
+      for (let nC = 0; nC <= maxPorCategoria; nC++) {
+        const antes: Record<Categoria, number> = { grande: nG, mediana: nM, chica: nC };
+        const totalAntes = calcularPrecioCombo(armar(antes), config).total;
+        for (const categoriaAgregada of ["grande", "mediana", "chica"] as const) {
+          const despues = { ...antes, [categoriaAgregada]: antes[categoriaAgregada] + 1 };
+          const totalDespues = calcularPrecioCombo(armar(despues), config).total;
+          if (totalDespues <= totalAntes) {
+            return { categoriaAgregada, antes, totalAntes, totalDespues };
+          }
+        }
+      }
+    }
+  }
+  return null;
+}

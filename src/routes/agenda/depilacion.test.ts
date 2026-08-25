@@ -18,6 +18,7 @@ import {
   filasDeExclusion,
   nombreDeZonaEnUso,
   leerConfig,
+  aConfigAnidada,
   guardarExclusiones,
   exclusionesParaMotor,
   conflictoEnSeleccion,
@@ -25,7 +26,13 @@ import {
   assembleDepilationCombo,
 } from "../../repositories/depilacion.repo";
 import * as schema from "../../db/schema";
-import { bodyZone, zoneExclusion, depilationCombo, depilationComboZone } from "../../db/schema";
+import {
+  bodyZone,
+  zoneExclusion,
+  depilationCombo,
+  depilationComboZone,
+  depilationPricingConfig,
+} from "../../db/schema";
 import type { Db } from "../../db/client";
 import type { AppBindings } from "../../env";
 import type { DepilationConfig } from "../../lib/depilation-pricing";
@@ -597,6 +604,73 @@ describe("configBody", () => {
       expect(r.error.issues[0]?.message).not.toMatch(/expected|received/i);
     }
   });
+
+  // ── Ronda de fixes 2, punto 1 (Important): no-inversión sobre la config REAL ──
+  // Antes, la garantía "agregar una zona nunca baja el precio" solo se probaba
+  // contra la config CONGELADA de depilation-pricing.test.ts — nunca contra lo
+  // que este schema deja guardar. El caso del revisor: priceGrande: 1000 pasa
+  // "entero y positivo" pero rompe el negocio (2 chicas + 1 grande baja de
+  // $18.000 a $12.000).
+  describe("no-inversión", () => {
+    it("rechaza priceGrande: 1000 — el caso concreto del revisor", () => {
+      const r = configBody.safeParse({ ...valido, priceGrande: 1000 });
+      expect(r.success).toBe(false);
+      if (!r.success) {
+        // Mensaje en términos de negocio (zonas y precios), no en jerga
+        // técnica ("no-inversión", "monótono", etc).
+        expect(r.error.issues[0]?.message).toMatch(/agregar una zona/i);
+        expect(r.error.issues[0]?.message).not.toMatch(/no-?inversión|monóton/i);
+      }
+    });
+
+    it("rechaza priceMediana mayor que priceGrande, con mensaje sobre el orden", () => {
+      const r = configBody.safeParse({ ...valido, priceGrande: 15000, priceMediana: 17000 });
+      expect(r.success).toBe(false);
+      if (!r.success) {
+        expect(r.error.issues[0]?.message).toMatch(/zona grande.*mayor o igual.*zona mediana/i);
+      }
+    });
+
+    it("rechaza priceChica mayor que priceMediana, con mensaje sobre el orden", () => {
+      const r = configBody.safeParse({ ...valido, priceMediana: 10000, priceChica: 12000 });
+      expect(r.success).toBe(false);
+    });
+
+    it("acepta priceGrande === priceMediana === priceChica (el orden permite empate)", () => {
+      const r = configBody.safeParse({
+        ...valido,
+        priceGrande: 15000,
+        priceMediana: 15000,
+        priceChica: 15000,
+      });
+      expect(r.success).toBe(true);
+    });
+
+    // El orden de los tres precios de lista puede estar bien y ROMPER la
+    // no-inversión igual: acá el problema está en `pricingMinutes`, no en
+    // `precioLista`, así que la capa 1 (el chequeo de orden) no lo agarra —
+    // demuestra que la capa 2 (la verificación exhaustiva con el motor real)
+    // hace trabajo de verdad y no es redundante con la capa 1.
+    it("rechaza una config con precioLista bien ordenado pero pricingMinutes invertido (capa 2)", () => {
+      const conMinutosInvertidos = {
+        ...valido,
+        priceGrande: 17000, priceMediana: 17000, priceChica: 12000,
+        pricingMinutesGrande: 10, pricingMinutesMediana: 1, pricingMinutesChica: 20,
+        tier1RatePerMinute: 1000, tier2RatePerMinute: 1,
+      };
+      // El orden de precioLista por sí solo pasaría la capa 1.
+      expect(
+        conMinutosInvertidos.priceGrande >= conMinutosInvertidos.priceMediana &&
+          conMinutosInvertidos.priceMediana >= conMinutosInvertidos.priceChica,
+      ).toBe(true);
+
+      const r = configBody.safeParse(conMinutosInvertidos);
+      expect(r.success).toBe(false);
+      if (!r.success) {
+        expect(r.error.issues[0]?.message).toMatch(/agregar una zona/i);
+      }
+    });
+  });
 });
 
 describe("GET /config sin token", () => {
@@ -605,6 +679,64 @@ describe("GET /config sin token", () => {
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body).toEqual({ error: "Unauthorized" });
+  });
+});
+
+// ── Ronda de fixes 2, punto 1 (Important) — integración real ─────────────────
+// Confirma que el rechazo llega hasta la punta: `PUT /config` con
+// `priceGrande: 1000` (lo que la pantalla dejaba tipear) tiene que dar 400,
+// no 200. A propósito NUNCA se manda una config VÁLIDA distinta de la
+// sembrada por acá: `depilation_pricing_config` es singleton y de este mismo
+// archivo dependen otros tests (cotización, packs fijos) que asumen los
+// valores reales de la migración 1.35.0 — un PUT exitoso los rompería.
+describe("PUT /config — no-inversión (integración real, sin tocar la config real)", () => {
+  it("priceGrande: 1000 -> 400, la config real queda intacta", async () => {
+    // Fila completa (no solo el `DepilationConfig` anidado) para poder
+    // restaurarla en el `finally` con un UPDATE directo, columna por
+    // columna — así, si el fix de esta ronda tuviera una regresión y el PUT
+    // terminara escribiendo de verdad, la fila singleton vuelve exactamente
+    // a como estaba de todos modos. `depilation_pricing_config` es singleton
+    // y otros tests de este archivo (cotización, packs fijos) dependen de
+    // los valores reales de la migración 1.35.0: un PUT que se cuela acá
+    // rompería esos tests en cascada, no solo este.
+    const [filaAntes] = await testDb.select().from(depilationPricingConfig).limit(1);
+    if (!filaAntes) throw new Error("falta la fila de depilation_pricing_config");
+
+    try {
+      const res = await testApp.request(
+        "/config",
+        {
+          method: "PUT",
+          headers: ADMIN_HEADERS,
+          body: JSON.stringify({
+            priceGrande: 1000, priceMediana: 17000, priceChica: 12000,
+            pricingMinutesGrande: 10, pricingMinutesMediana: 7, pricingMinutesChica: 5,
+            tier1RatePerMinute: 1200, tier2RatePerMinute: 1000,
+            slotMinutesFemaleGrande: 9, slotMinutesFemaleMediana: 6, slotMinutesFemaleChica: 3,
+            slotMinutesMaleGrande: 10, slotMinutesMaleMediana: 8, slotMinutesMaleChica: 5,
+            slotRoundingStep: 5, slotMinimumMinutes: 10,
+            packSessions: 3, packDiscountPercentage: 15, packRoundingBase: 1000,
+          }),
+        },
+        ADMIN_ENV,
+      );
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: unknown };
+      // zValidator sin hook (a diferencia de `zv`) devuelve el ZodError
+      // crudo; el front ya sabe leer `.issues` (ver textoDeError en
+      // api-client.ts).
+      const issues = (body.error as { issues?: { message?: string }[] }).issues;
+      expect(issues?.[0]?.message).toMatch(/agregar una zona/i);
+
+      // La config singleton no se tocó: sigue siendo la sembrada por 1.35.0.
+      const configDespues = await leerConfig(testDb);
+      expect(configDespues).toEqual(aConfigAnidada(filaAntes));
+    } finally {
+      await testDb
+        .update(depilationPricingConfig)
+        .set({ ...filaAntes })
+        .where(eq(depilationPricingConfig.singleton, true));
+    }
   });
 });
 
@@ -1318,6 +1450,254 @@ describe("Combos de depilación (integración real)", () => {
   it("GET /combos sin token -> 401", async () => {
     const res = await depilacionRouter.request("/combos", {}, {} as never);
     expect(res.status).toBe(401);
+  });
+});
+
+// ── Ronda de fixes 2, punto 2 (Important) ───────────────────────────────────
+// `conflictoEnSeleccion` solo se llamaba en `/cotizar`; POST/PATCH /combos
+// dejaban guardar un combo con dos zonas que se excluyen entre sí, y ese
+// mismo combo después era rechazado por `/cotizar` con 400 — un combo que
+// existe y no se puede cotizar. Camino real: el diseño deja a propósito dos
+// pares de exclusión sin sembrar (Brazos↔Antebrazo, Espalda↔Hombros) para
+// que se carguen después desde Zonas; cuando eso pase, cualquier combo
+// guardado con ese par tiene que dejar de poder guardarse/editarse con ese
+// par adentro.
+describe("POST/PATCH /combos — validan exclusiones (integración real)", () => {
+  let zonaA = "";
+  let zonaB = "";
+  let comboId = "";
+
+  beforeAll(async () => {
+    zonaA = (await crearZonaQA("EXCL_COMBO_A")).id;
+    zonaB = (await crearZonaQA("EXCL_COMBO_B")).id;
+    // Mismo endpoint que usaría la pantalla de Zonas para sembrar el par —
+    // ejercita la validación de punta a punta, no solo la función pura.
+    await testApp.request(
+      `/zonas/${zonaA}/exclusiones`,
+      { method: "PUT", headers: ADMIN_HEADERS, body: JSON.stringify({ excludes: [zonaB] }) },
+      ADMIN_ENV,
+    );
+  });
+
+  afterAll(async () => {
+    if (comboId) await testDb.delete(depilationCombo).where(eq(depilationCombo.id, comboId));
+    await testDb.delete(bodyZone).where(inArray(bodyZone.id, [zonaA, zonaB]));
+  });
+
+  it("POST /combos con dos zonas que se excluyen -> 400, mismo formato que /cotizar", async () => {
+    const res = await testApp.request(
+      "/combos",
+      {
+        method: "POST",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({
+          name: `${QA_PREFIX}COMBO_CON_CONFLICTO`,
+          kind: "guardado",
+          zonaIds: [zonaA, zonaB],
+        }),
+      },
+      ADMIN_ENV,
+    );
+    try {
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toContain("no se pueden combinar");
+      expect(body.error).toContain(`${QA_PREFIX}EXCL_COMBO_A`);
+      expect(body.error).toContain(`${QA_PREFIX}EXCL_COMBO_B`);
+    } finally {
+      // Defensivo: si esta validación tuviera una regresión, el POST de
+      // arriba SÍ crea el combo (pasó de verdad al probar el mutante) — sin
+      // esto, ese combo quedaría vivo con una FK a zonaA/zonaB y el
+      // `afterAll` de más abajo (que borra esas zonas) explotaría con un
+      // error de foreign key en vez de dejar ver el assert que en verdad
+      // falló.
+      if (res.status === 201) {
+        const leaked = (await res.clone().json()) as { id: string };
+        await testDb.delete(depilationCombo).where(eq(depilationCombo.id, leaked.id));
+      }
+    }
+  });
+
+  it("POST /combos con una sola de las dos zonas -> 201, no hay conflicto sin el par completo", async () => {
+    const res = await testApp.request(
+      "/combos",
+      {
+        method: "POST",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({
+          name: `${QA_PREFIX}COMBO_SIN_CONFLICTO`,
+          kind: "guardado",
+          zonaIds: [zonaA],
+        }),
+      },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as { id: string };
+    comboId = created.id;
+  });
+
+  it("PATCH /combos/:id agregando la zona excluida -> 400, y el combo NO queda modificado", async () => {
+    const res = await testApp.request(
+      `/combos/${comboId}`,
+      {
+        method: "PATCH",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({
+          name: `${QA_PREFIX}COMBO_SIN_CONFLICTO`,
+          kind: "guardado",
+          zonaIds: [zonaA, zonaB],
+        }),
+      },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("no se pueden combinar");
+
+    // El combo sigue como estaba: solo zonaA, la validación cortó ANTES de
+    // escribir — no un combo a medio actualizar.
+    const getRes = await testApp.request("/combos", { headers: ADMIN_HEADERS }, ADMIN_ENV);
+    const combos = (await getRes.json()) as Array<{ id: string; zonas: { id: string }[] }>;
+    const combo = combos.find((c) => c.id === comboId);
+    expect(combo?.zonas.map((z) => z.id)).toEqual([zonaA]);
+  });
+});
+
+// ── Ronda de fixes 2, punto 5 (Minor) ───────────────────────────────────────
+// El hook del front (`useGuardarComboDepilacion`) siempre manda
+// `kind: "guardado"` sin `fixedPrice`, y eso pasa el schema igual sobre un
+// combo que hoy es `pack_fijo` (un "guardado" sin precio es válido en sí
+// mismo). Sin este chequeo, `actualizarCombo` lo escribía tal cual — el pack
+// sembrado queda convertido en guardado, con `fixed_price = null`. Por la
+// interfaz no se llega (el botón Editar está oculto para packs fijos), pero
+// por API sí.
+describe("PATCH /combos/:id — no puede cambiar el kind ni borrar el precio de un pack fijo (integración real)", () => {
+  let zonaX = "";
+  let packId = "";
+  let guardadoId = "";
+
+  beforeAll(async () => {
+    zonaX = (await crearZonaQA("PACK_KIND_X")).id;
+  });
+
+  afterAll(async () => {
+    if (packId) await testDb.delete(depilationCombo).where(eq(depilationCombo.id, packId));
+    if (guardadoId) await testDb.delete(depilationCombo).where(eq(depilationCombo.id, guardadoId));
+    await testDb.delete(bodyZone).where(eq(bodyZone.id, zonaX));
+  });
+
+  it("crea un pack fijo QA para las pruebas de abajo", async () => {
+    const res = await testApp.request(
+      "/combos",
+      {
+        method: "POST",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({
+          name: `${QA_PREFIX}PACK_KIND`,
+          kind: "pack_fijo",
+          fixedPrice: 50000,
+          zonaIds: [zonaX],
+        }),
+      },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as { id: string; kind: string; fixedPrice: number | null };
+    packId = created.id;
+    expect(created.kind).toBe("pack_fijo");
+    expect(created.fixedPrice).toBe(50000);
+  });
+
+  it('PATCH con kind: "guardado" sobre un pack fijo -> 400, no lo convierte', async () => {
+    // Exactamente lo que manda el hook del front: kind "guardado", sin
+    // fixedPrice — válido como body EN SÍ MISMO, pero ilegal como edición
+    // de un combo que hoy es pack_fijo.
+    const res = await testApp.request(
+      `/combos/${packId}`,
+      {
+        method: "PATCH",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({
+          name: `${QA_PREFIX}PACK_KIND`,
+          kind: "guardado",
+          choiceZoneCount: 0,
+          zonaIds: [zonaX],
+        }),
+      },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/no se puede cambiar el tipo/i);
+
+    // El pack sigue siendo pack_fijo con su precio intacto — nada se escribió.
+    const getRes = await testApp.request("/combos", { headers: ADMIN_HEADERS }, ADMIN_ENV);
+    const combos = (await getRes.json()) as Array<{
+      id: string;
+      kind: string;
+      fixedPrice: number | null;
+    }>;
+    const pack = combos.find((c) => c.id === packId);
+    expect(pack?.kind).toBe("pack_fijo");
+    expect(pack?.fixedPrice).toBe(50000);
+  });
+
+  it("PATCH con el mismo kind (pack_fijo) y un precio nuevo -> 200, sí se puede editar el precio", async () => {
+    const res = await testApp.request(
+      `/combos/${packId}`,
+      {
+        method: "PATCH",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({
+          name: `${QA_PREFIX}PACK_KIND`,
+          kind: "pack_fijo",
+          fixedPrice: 55000,
+          zonaIds: [zonaX],
+        }),
+      },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(200);
+    const updated = (await res.json()) as { kind: string; fixedPrice: number | null };
+    expect(updated.kind).toBe("pack_fijo");
+    expect(updated.fixedPrice).toBe(55000);
+  });
+
+  it('PATCH con kind: "pack_fijo" sobre un combo guardado -> 400, tampoco se puede ir en la otra dirección', async () => {
+    const createRes = await testApp.request(
+      "/combos",
+      {
+        method: "POST",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({
+          name: `${QA_PREFIX}GUARDADO_KIND`,
+          kind: "guardado",
+          zonaIds: [zonaX],
+        }),
+      },
+      ADMIN_ENV,
+    );
+    expect(createRes.status).toBe(201);
+    guardadoId = (await createRes.json() as { id: string }).id;
+
+    const res = await testApp.request(
+      `/combos/${guardadoId}`,
+      {
+        method: "PATCH",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({
+          name: `${QA_PREFIX}GUARDADO_KIND`,
+          kind: "pack_fijo",
+          fixedPrice: 10000,
+          zonaIds: [zonaX],
+        }),
+      },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/no se puede cambiar el tipo/i);
   });
 });
 

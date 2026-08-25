@@ -281,9 +281,48 @@ export type ConfigInput = {
 };
 
 /**
- * Mapea las 19 columnas planas de `depilation_pricing_config` al
- * `DepilationConfig` anidado que espera `depilation-pricing.ts` (Task 2).
+ * Mapea las 19 columnas planas (mismo shape en la fila de la base y en el
+ * body de `PUT /config`, ver `ConfigInput` arriba) al `DepilationConfig`
+ * anidado que espera `depilation-pricing.ts` (Task 2).
  *
+ * Un solo mapeo para los dos casos: `leerConfig` lo usa sobre la fila ya
+ * guardada, y la validación de no-inversión de `configBody` (ronda de fixes
+ * 1, punto 1) lo usa sobre el body ANTES de guardar. Si hubiera dos mapeos
+ * separados podrían desalinearse — el que valida no sería el mismo que el
+ * que después lee `leerConfig`, y la garantía de no-inversión dejaría de
+ * cubrir lo que en verdad queda guardado.
+ */
+export function aConfigAnidada(input: ConfigInput): DepilationConfig {
+  return {
+    precioLista: { grande: input.priceGrande, mediana: input.priceMediana, chica: input.priceChica },
+    minutosPrecio: {
+      grande: input.pricingMinutesGrande,
+      mediana: input.pricingMinutesMediana,
+      chica: input.pricingMinutesChica,
+    },
+    tarifaEscalon1: input.tier1RatePerMinute,
+    tarifaEscalon2: input.tier2RatePerMinute,
+    minutosTurno: {
+      mujer: {
+        grande: input.slotMinutesFemaleGrande,
+        mediana: input.slotMinutesFemaleMediana,
+        chica: input.slotMinutesFemaleChica,
+      },
+      hombre: {
+        grande: input.slotMinutesMaleGrande,
+        mediana: input.slotMinutesMaleMediana,
+        chica: input.slotMinutesMaleChica,
+      },
+    },
+    redondeoTurno: input.slotRoundingStep,
+    turnoMinimo: input.slotMinimumMinutes,
+    packSesiones: input.packSessions,
+    packDescuentoPct: input.packDiscountPercentage,
+    packRedondeo: input.packRoundingBase,
+  };
+}
+
+/**
  * Falla ruidosamente si no hay fila: la config es singleton (siempre debería
  * existir una, sembrada por la migración 1.35.0), y devolver ceros/undefined
  * en su lugar dejaría que TODOS los precios del negocio salgan mal en
@@ -298,33 +337,7 @@ export type ConfigInput = {
 export async function leerConfig(db: Db): Promise<DepilationConfig> {
   const [f] = await db.select().from(depilationPricingConfig).limit(1);
   if (!f) throw new Error("Falta la fila de depilation_pricing_config");
-  return {
-    precioLista: { grande: f.priceGrande, mediana: f.priceMediana, chica: f.priceChica },
-    minutosPrecio: {
-      grande: f.pricingMinutesGrande,
-      mediana: f.pricingMinutesMediana,
-      chica: f.pricingMinutesChica,
-    },
-    tarifaEscalon1: f.tier1RatePerMinute,
-    tarifaEscalon2: f.tier2RatePerMinute,
-    minutosTurno: {
-      mujer: {
-        grande: f.slotMinutesFemaleGrande,
-        mediana: f.slotMinutesFemaleMediana,
-        chica: f.slotMinutesFemaleChica,
-      },
-      hombre: {
-        grande: f.slotMinutesMaleGrande,
-        mediana: f.slotMinutesMaleMediana,
-        chica: f.slotMinutesMaleChica,
-      },
-    },
-    redondeoTurno: f.slotRoundingStep,
-    turnoMinimo: f.slotMinimumMinutes,
-    packSesiones: f.packSessions,
-    packDescuentoPct: f.packDiscountPercentage,
-    packRedondeo: f.packRoundingBase,
-  };
+  return aConfigAnidada(f);
 }
 
 /** Actualiza la fila única de config y devuelve el objeto anidado ya releído. */
@@ -544,6 +557,32 @@ export type DepilationComboInput = {
   displayOrder?: number | null;
   zonaIds: string[];
 };
+
+export type ComboKindYPrecio = { kind: string; fixedPrice: string | number | null };
+
+/**
+ * Ronda de fixes 2, punto 5 (Minor): lectura liviana (solo `kind` y
+ * `fixedPrice`, sin zonas ni config) para que `PATCH /combos/:id` pueda
+ * comparar el `kind` guardado contra el del body ANTES de escribir. El hook
+ * del front (`useGuardarComboDepilacion`) siempre manda `kind: "guardado"`
+ * sin `fixedPrice` — sobre un combo que hoy es `pack_fijo` eso pasa el
+ * schema igual (un "guardado" sin precio es válido en sí mismo) y
+ * `actualizarCombo` lo escribía tal cual, convirtiendo un pack sembrado en
+ * un guardado y borrándole el precio. Por la interfaz no se llega (el botón
+ * Editar está oculto para los packs fijos), pero por API un rol con solo
+ * `edit` sí podía.
+ */
+export async function obtenerKindYPrecioDeCombo(
+  db: Db,
+  id: string,
+): Promise<ComboKindYPrecio | null> {
+  const [row] = await db
+    .select({ kind: depilationCombo.kind, fixedPrice: depilationCombo.fixedPrice })
+    .from(depilationCombo)
+    .where(eq(depilationCombo.id, id))
+    .limit(1);
+  return row ?? null;
+}
 
 /**
  * `ux_depilation_combo_name` es UNIQUE (name) sobre TODA la tabla (no parcial
