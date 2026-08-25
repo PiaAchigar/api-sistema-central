@@ -4,7 +4,8 @@ import { z } from "zod";
 import { createDb, type Db } from "../../db/client";
 import { badRequest, conflict, notFound } from "../../lib/errors";
 import { zv } from "../../lib/validator";
-import { auth, requireAuth, requirePermission } from "../../middleware/auth";
+import { auth, requireAdmin, requireAuth, requirePermission } from "../../middleware/auth";
+import { isForeignKeyViolation } from "../../lib/db-errors";
 import {
   aConfigAnidada,
   actualizarCombo,
@@ -15,13 +16,18 @@ import {
   exclusionesParaMotor,
   existeComboConNombre,
   existeZonaActivaConNombre,
+  getComboDeleteImpact,
+  getZonaDeleteImpact,
   guardarConfig,
   guardarExclusiones,
+  hardDeleteCombo,
+  hardDeleteZona,
   leerConfig,
   listarCombos,
   listarExclusiones,
   listarPacksFijos,
   listarZonas,
+  obtenerCombo,
   obtenerKindYPrecioDeCombo,
   obtenerZona,
   obtenerZonasActivasPorId,
@@ -385,6 +391,55 @@ depilacionRouter.put(
 
 // ── Config ───────────────────────────────────────────────────────────────
 
+// Impacto de un borrado real de zona: qué se va en cascada y si está
+// bloqueado. Solo admin — es el paso previo al DELETE /zonas/:id/permanent.
+depilacionRouter.get(
+  "/zonas/:id/delete-impact",
+  auth,
+  requireAuth,
+  requireAdmin,
+  async (c) => {
+    const db = createDb(c.env);
+    const id = c.req.param("id");
+    const zona = await obtenerZona(db, id);
+    if (!zona) throw notFound("Zona");
+    return c.json(await getZonaDeleteImpact(db, id));
+  },
+);
+
+// Borrado real, irreversible. Distinto de PATCH /zonas/:id/estado, que
+// archiva. Solo admin y solo si la zona no está en ningún combo.
+depilacionRouter.delete(
+  "/zonas/:id/permanent",
+  auth,
+  requireAuth,
+  requireAdmin,
+  async (c) => {
+    const db = createDb(c.env);
+    const id = c.req.param("id");
+    const zona = await obtenerZona(db, id);
+    if (!zona) throw notFound("Zona");
+
+    const impacto = await getZonaDeleteImpact(db, id);
+    if (impacto.blocked) throw badRequest(impacto.blockReason!);
+
+    try {
+      await hardDeleteZona(db, id);
+    } catch (err) {
+      // Entre el chequeo de impacto y el DELETE alguien pudo meter la zona en
+      // un combo: la FK lo frena y el mensaje tiene que decir qué pasó, no
+      // devolver un 500 opaco.
+      if (isForeignKeyViolation(err)) {
+        throw badRequest(
+          "No se puede eliminar: apareció una referencia nueva justo ahora. Archivala en su lugar.",
+        );
+      }
+      throw err;
+    }
+    return c.json({ ok: true });
+  },
+);
+
 depilacionRouter.get(
   "/config",
   auth,
@@ -601,6 +656,50 @@ depilacionRouter.patch(
     const updated = await setEstadoCombo(db, id, isActive);
     if (!updated) throw notFound("Combo");
     return c.json(updated);
+  },
+);
+
+
+// Impacto de un borrado real de combo. Solo admin. Nunca queda bloqueado
+// (nada referencia `depilation_combo` todavía); informa cuántas zonas se
+// desvinculan para que la confirmación diga algo concreto.
+depilacionRouter.get(
+  "/combos/:id/delete-impact",
+  auth,
+  requireAuth,
+  requireAdmin,
+  async (c) => {
+    const db = createDb(c.env);
+    const id = c.req.param("id");
+    const combo = await obtenerCombo(db, id);
+    if (!combo) throw notFound("Combo");
+    return c.json(await getComboDeleteImpact(db, id));
+  },
+);
+
+// Borrado real, irreversible. Distinto de PATCH /combos/:id/estado, que archiva.
+depilacionRouter.delete(
+  "/combos/:id/permanent",
+  auth,
+  requireAuth,
+  requireAdmin,
+  async (c) => {
+    const db = createDb(c.env);
+    const id = c.req.param("id");
+    const combo = await obtenerCombo(db, id);
+    if (!combo) throw notFound("Combo");
+
+    try {
+      await hardDeleteCombo(db, id);
+    } catch (err) {
+      if (isForeignKeyViolation(err)) {
+        throw badRequest(
+          "No se puede eliminar: apareció una referencia nueva justo ahora. Archivalo en su lugar.",
+        );
+      }
+      throw err;
+    }
+    return c.json({ ok: true });
   },
 );
 

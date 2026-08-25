@@ -685,3 +685,88 @@ export async function setEstadoCombo(
   if (rows.length === 0) return null;
   return obtenerCombo(db, id);
 }
+
+// ── Borrado real (hard-delete) ───────────────────────────────────────────
+// Separado de archivar: archivar deja la fila viva con `is_active = false` y
+// se puede revertir; esto la saca de la base. Mismo contrato que
+// `getServiceDeleteImpact` / `hardDeleteService` en services.repo.ts —
+// `ResourceManager` en el front consume esa forma ({ blocked, blockReason,
+// cascade }) para pintar la confirmación, así que no conviene inventarle otra.
+
+export type DeleteImpact = {
+  blocked: boolean;
+  blockReason?: string;
+  cascade: Record<string, number>;
+};
+
+/**
+ * Una zona incluida en algún combo NO se puede borrar: el combo quedaría con
+ * menos zonas de las que dice vender y su precio cambiaría solo, sin que
+ * nadie lo haya editado. Archivarla sí está permitido (el combo la sigue
+ * mostrando). Las exclusiones, en cambio, se van en cascada: son pares que
+ * sin la zona no significan nada.
+ */
+export async function getZonaDeleteImpact(db: Db, id: string): Promise<DeleteImpact> {
+  const [enCombos, exclusiones] = await Promise.all([
+    db
+      .select({ comboId: depilationComboZone.comboId })
+      .from(depilationComboZone)
+      .where(eq(depilationComboZone.zoneId, id)),
+    db
+      .select({ id: zoneExclusion.id })
+      .from(zoneExclusion)
+      .where(or(eq(zoneExclusion.zoneId, id), eq(zoneExclusion.excludesZoneId, id))),
+  ]);
+
+  return {
+    blocked: enCombos.length > 0,
+    blockReason:
+      enCombos.length > 0
+        ? `Está incluida en ${enCombos.length} combo(s). Sacala de esos combos o archivala en su lugar.`
+        : undefined,
+    cascade: { exclusions: exclusiones.length },
+  };
+}
+
+/** Borra la zona. Sus exclusiones se van solas: las DOS claves foráneas de
+ *  `zone_exclusion` (`zone_id` y `excludes_zone_id`) son ON DELETE CASCADE en
+ *  la migración 1.35.0, así que ambas direcciones del par caen con la zona.
+ *  Borrarlas a mano acá además sería código muerto disfrazado de garantía: un
+ *  test que lo mutara seguiría pasando, porque quien limpia es la base.
+ *
+ *  El caller debe haber verificado que `getZonaDeleteImpact` no esté
+ *  `blocked` antes de llamar esta función. */
+export async function hardDeleteZona(db: Db, id: string): Promise<boolean> {
+  const deleted = await db
+    .delete(bodyZone)
+    .where(eq(bodyZone.id, id))
+    .returning({ id: bodyZone.id });
+  return deleted.length > 0;
+}
+
+/**
+ * Un combo de depilación no lo referencia nadie todavía (no hay turnos ni
+ * facturas colgando de `depilation_combo`), así que borrarlo nunca queda
+ * bloqueado. Se informa igual cuántas zonas se desvinculan para que la
+ * confirmación diga algo concreto.
+ */
+export async function getComboDeleteImpact(db: Db, id: string): Promise<DeleteImpact> {
+  const zonas = await db
+    .select({ id: depilationComboZone.id })
+    .from(depilationComboZone)
+    .where(eq(depilationComboZone.comboId, id));
+
+  return { blocked: false, cascade: { zonas: zonas.length } };
+}
+
+/** Borra el combo y sus zonas asociadas en una transacción. */
+export async function hardDeleteCombo(db: Db, id: string): Promise<boolean> {
+  const deleted = await db.transaction(async (tx) => {
+    await tx.delete(depilationComboZone).where(eq(depilationComboZone.comboId, id));
+    return tx
+      .delete(depilationCombo)
+      .where(eq(depilationCombo.id, id))
+      .returning({ id: depilationCombo.id });
+  });
+  return deleted.length > 0;
+}

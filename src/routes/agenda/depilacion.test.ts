@@ -24,6 +24,12 @@ import {
   conflictoEnSeleccion,
   precioFormulaDeCombo,
   assembleDepilationCombo,
+  getZonaDeleteImpact,
+  getComboDeleteImpact,
+  hardDeleteZona,
+  hardDeleteCombo,
+  obtenerZona,
+  obtenerCombo,
 } from "../../repositories/depilacion.repo";
 import * as schema from "../../db/schema";
 import {
@@ -1742,5 +1748,206 @@ describe("Control de acceso — POST con rol operator debe recibir 403", () => {
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("Forbidden");
+  });
+});
+
+// ── Borrado real (hard-delete) ──────────────────────────────────────────────
+// Contra Postgres de verdad y no contra un doble: lo que hay que probar acá es
+// justamente el alcance de los WHERE (que el DELETE de exclusiones se lleve
+// las DOS direcciones del par y NO las de otras zonas, que borrar un combo no
+// borre las zonas). Un `Db` falso solo podría confirmar que se llamó a
+// delete(), que es la parte que nunca se rompe.
+describe("Hard-delete de zonas y combos (integración real)", () => {
+  const creados: string[] = [];
+  const combosCreados: string[] = [];
+
+  afterEach(async () => {
+    if (combosCreados.length > 0) {
+      await testDb
+        .delete(depilationComboZone)
+        .where(inArray(depilationComboZone.comboId, combosCreados));
+      await testDb.delete(depilationCombo).where(inArray(depilationCombo.id, combosCreados));
+      combosCreados.length = 0;
+    }
+    if (creados.length > 0) {
+      await testDb
+        .delete(zoneExclusion)
+        .where(
+          or(
+            inArray(zoneExclusion.zoneId, creados),
+            inArray(zoneExclusion.excludesZoneId, creados),
+          ),
+        );
+      await testDb.delete(bodyZone).where(inArray(bodyZone.id, creados));
+      creados.length = 0;
+    }
+  });
+
+  async function zonaQA(nombre: string) {
+    const z = await crearZonaQA(nombre);
+    creados.push(z.id);
+    return z;
+  }
+
+  async function comboQA(nombre: string, zonaIds: string[]) {
+    const [c] = await testDb
+      .insert(depilationCombo)
+      .values({
+        name: `${QA_PREFIX}${nombre}`,
+        kind: "guardado",
+        choiceZoneCount: 0,
+        isPublishedWeb: false,
+        displayOrder: 0,
+        isActive: true,
+      })
+      .returning({ id: depilationCombo.id });
+    if (!c) throw new Error("no se pudo crear el combo QA");
+    combosCreados.push(c.id);
+    if (zonaIds.length > 0) {
+      await testDb
+        .insert(depilationComboZone)
+        .values(zonaIds.map((zoneId) => ({ comboId: c.id, zoneId })));
+    }
+    return c;
+  }
+
+  it("getZonaDeleteImpact bloquea una zona que está incluida en un combo", async () => {
+    const z = await zonaQA("BLOQUEADA_POR_COMBO");
+    await comboQA("QUE_LA_USA", [z.id]);
+
+    const impacto = await getZonaDeleteImpact(testDb, z.id);
+    expect(impacto.blocked).toBe(true);
+    expect(impacto.blockReason).toContain("1 combo(s)");
+  });
+
+  it("getZonaDeleteImpact NO bloquea una zona suelta, y cuenta sus exclusiones en las dos direcciones", async () => {
+    const a = await zonaQA("SUELTA_A");
+    const b = await zonaQA("SUELTA_B");
+    // Una fila en cada sentido, como las carga guardarExclusiones.
+    await testDb.insert(zoneExclusion).values([
+      { zoneId: a.id, excludesZoneId: b.id },
+      { zoneId: b.id, excludesZoneId: a.id },
+    ]);
+
+    const impacto = await getZonaDeleteImpact(testDb, a.id);
+    expect(impacto.blocked).toBe(false);
+    expect(impacto.blockReason).toBeUndefined();
+    // Si el WHERE mirara una sola dirección, acá daría 1.
+    expect(impacto.cascade.exclusions).toBe(2);
+  });
+
+  it("hardDeleteZona se lleva las exclusiones de la zona en ambos sentidos (ON DELETE CASCADE), sin tocar las ajenas", async () => {
+    const a = await zonaQA("HD_A");
+    const b = await zonaQA("HD_B");
+    const c = await zonaQA("HD_C");
+    await testDb.insert(zoneExclusion).values([
+      { zoneId: a.id, excludesZoneId: b.id },
+      { zoneId: b.id, excludesZoneId: a.id },
+      // Par ajeno: b↔c no tiene nada que ver con a y debe sobrevivir.
+      { zoneId: b.id, excludesZoneId: c.id },
+      { zoneId: c.id, excludesZoneId: b.id },
+    ]);
+
+    expect(await hardDeleteZona(testDb, a.id)).toBe(true);
+
+    expect(await obtenerZona(testDb, a.id)).toBeNull();
+    // b y c siguen vivas.
+    expect(await obtenerZona(testDb, b.id)).not.toBeNull();
+    expect(await obtenerZona(testDb, c.id)).not.toBeNull();
+
+    const quedan = await testDb
+      .select({ zoneId: zoneExclusion.zoneId, excludesZoneId: zoneExclusion.excludesZoneId })
+      .from(zoneExclusion)
+      .where(
+        or(
+          inArray(zoneExclusion.zoneId, [a.id, b.id, c.id]),
+          inArray(zoneExclusion.excludesZoneId, [a.id, b.id, c.id]),
+        ),
+      );
+    // Solo sobrevive el par b↔c: 2 filas, ninguna mencionando a `a`.
+    expect(quedan).toHaveLength(2);
+    expect(quedan.some((r) => r.zoneId === a.id || r.excludesZoneId === a.id)).toBe(false);
+  });
+
+  it("hardDeleteZona sobre un id inexistente devuelve false", async () => {
+    expect(await hardDeleteZona(testDb, crypto.randomUUID())).toBe(false);
+  });
+
+  it("DELETE /zonas/:id/permanent responde 400 y NO borra si la zona está en un combo", async () => {
+    const z = await zonaQA("API_BLOQUEADA");
+    await comboQA("API_QUE_LA_USA", [z.id]);
+
+    const res = await testApp.request(
+      `/zonas/${z.id}/permanent`,
+      { method: "DELETE", headers: ADMIN_HEADERS },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain("combo(s)");
+    // Lo que importa: sigue existiendo.
+    expect(await obtenerZona(testDb, z.id)).not.toBeNull();
+  });
+
+  it("DELETE /zonas/:id/permanent borra de verdad una zona suelta", async () => {
+    const z = await zonaQA("API_SUELTA");
+
+    const res = await testApp.request(
+      `/zonas/${z.id}/permanent`,
+      { method: "DELETE", headers: ADMIN_HEADERS },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(200);
+    expect(await obtenerZona(testDb, z.id)).toBeNull();
+  });
+
+  it("DELETE /zonas/:id/permanent sobre un id inexistente responde 404", async () => {
+    const res = await testApp.request(
+      `/zonas/${crypto.randomUUID()}/permanent`,
+      { method: "DELETE", headers: ADMIN_HEADERS },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("hardDeleteCombo borra el combo y su vínculo con las zonas, pero NO las zonas", async () => {
+    const z1 = await zonaQA("COMBO_Z1");
+    const z2 = await zonaQA("COMBO_Z2");
+    const combo = await comboQA("A_BORRAR", [z1.id, z2.id]);
+
+    const impacto = await getComboDeleteImpact(testDb, combo.id);
+    expect(impacto.blocked).toBe(false);
+    expect(impacto.cascade.zonas).toBe(2);
+
+    expect(await hardDeleteCombo(testDb, combo.id)).toBe(true);
+
+    expect(await obtenerCombo(testDb, combo.id)).toBeNull();
+    const vinculos = await testDb
+      .select({ id: depilationComboZone.id })
+      .from(depilationComboZone)
+      .where(eq(depilationComboZone.comboId, combo.id));
+    expect(vinculos).toHaveLength(0);
+    // Las zonas son catálogo: borrar un combo no se las lleva puestas.
+    expect(await obtenerZona(testDb, z1.id)).not.toBeNull();
+    expect(await obtenerZona(testDb, z2.id)).not.toBeNull();
+  });
+
+  it("DELETE /combos/:id/permanent borra el combo y responde 404 si no existe", async () => {
+    const z = await zonaQA("API_COMBO_Z");
+    const combo = await comboQA("API_A_BORRAR", [z.id]);
+
+    const ok = await testApp.request(
+      `/combos/${combo.id}/permanent`,
+      { method: "DELETE", headers: ADMIN_HEADERS },
+      ADMIN_ENV,
+    );
+    expect(ok.status).toBe(200);
+    expect(await obtenerCombo(testDb, combo.id)).toBeNull();
+
+    const noExiste = await testApp.request(
+      `/combos/${crypto.randomUUID()}/permanent`,
+      { method: "DELETE", headers: ADMIN_HEADERS },
+      ADMIN_ENV,
+    );
+    expect(noExiste.status).toBe(404);
   });
 });
