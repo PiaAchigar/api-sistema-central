@@ -246,7 +246,7 @@ depilacionRouter.post(
   "/zonas",
   auth,
   requireAuth,
-  requirePermission("catalogo", "edit"),
+  requirePermission("catalogo", "manage"),
   zValidator("json", zonaBody),
   async (c) => {
     const db = createDb(c.env);
@@ -445,7 +445,7 @@ depilacionRouter.post(
   "/combos",
   auth,
   requireAuth,
-  requirePermission("catalogo", "edit"),
+  requirePermission("catalogo", "manage"),
   zv("json", comboDepilacionBody),
   async (c) => {
     const db = createDb(c.env);

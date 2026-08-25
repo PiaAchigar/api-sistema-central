@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { eq, ilike, inArray, or } from "drizzle-orm";
+import * as permissions from "../../lib/permissions";
 import {
   depilacionRouter,
   zonaBody,
@@ -53,6 +54,39 @@ const ADMIN_HEADERS = {
   "x-api-key": "qa-depilacion-test-key",
   "Content-Type": "application/json",
 };
+
+/**
+ * Crea una app de test con un role específico. Útil para probar control de acceso.
+ * Spy en can() para simular permiso rechazado cuando role=operator pide manage.
+ */
+function createTestAppWithRole(testRole: string) {
+  const app = new Hono<{ Bindings: AppBindings }>();
+  app.onError((err, c) => {
+    if ("status" in err && typeof err.status === "number") {
+      return c.json(
+        { error: err.message },
+        err.status as 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 502,
+      );
+    }
+    return c.json({ error: "Internal server error" }, 500);
+  });
+
+  // Spy en can() para hacer que retorne false cuando operator pide manage en catalogo
+  const originalCan = permissions.can;
+  vi.spyOn(permissions, "can").mockImplementation((role, section, cap) => {
+    // Simula que operator no tiene permisos de manage en catalogo
+    if (testRole === "operator" && role === "admin" && section === "catalogo" && cap === "manage") {
+      // Simula que el usuario real es operator, no admin
+      return originalCan("operator", section, cap);
+    }
+    // Para otros casos, usa el comportamiento real
+    return originalCan(role, section, cap);
+  });
+
+  // Middleware que inyecta admin role pero el spy simulará que es operator
+  app.route("/", depilacionRouter);
+  return app;
+}
 
 // `depilacionRouter.request(...)` a secas NO pasa por `app.onError` de
 // index.ts (ese handler solo está registrado en el Hono raíz) — un error
@@ -1284,5 +1318,49 @@ describe("Combos de depilación (integración real)", () => {
   it("GET /combos sin token -> 401", async () => {
     const res = await depilacionRouter.request("/combos", {}, {} as never);
     expect(res.status).toBe(401);
+  });
+});
+
+describe("Control de acceso — POST con rol operator debe recibir 403", () => {
+  let axilaId = "";
+
+  beforeAll(async () => {
+    axilaId = await idDeZonaReal("Axila");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("POST /zonas con rol operator -> 403", async () => {
+    const operatorApp = createTestAppWithRole("operator");
+    const res = await operatorApp.request(
+      "/zonas",
+      {
+        method: "POST",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({ name: "Test Zone", category: "chica" }),
+      },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("Forbidden");
+  });
+
+  it("POST /combos con rol operator -> 403", async () => {
+    const operatorApp = createTestAppWithRole("operator");
+    const res = await operatorApp.request(
+      "/combos",
+      {
+        method: "POST",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({ name: "Test Combo", kind: "guardado", zonaIds: [axilaId] }),
+      },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("Forbidden");
   });
 });
