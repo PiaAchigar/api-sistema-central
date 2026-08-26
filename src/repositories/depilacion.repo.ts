@@ -10,6 +10,8 @@ import {
 import {
   calcularDuracionTurno,
   calcularPrecioCombo,
+  calcularPrecioPack,
+  politicaDePack,
   type Categoria,
   type DepilationConfig,
   type Exclusion,
@@ -441,9 +443,27 @@ export type DepilationComboRow = {
   fixedPrice: string | number | null;
   fixedDurationMinutes: number | null;
   choiceZoneCount: number;
+  packSessions: number | null;
+  packDiscountPercentage: number | null;
+  packRoundingBase: number | null;
   isPublishedWeb: boolean;
   displayOrder: number;
   isActive: boolean;
+};
+
+/** El pack de un combo, ya resuelto y calculado, listo para mostrar. */
+export type PackDeCombo = {
+  sesiones: number;
+  descuentoPct: number;
+  redondeo: number;
+  /** `true` si el combo define el suyo; `false` si hereda el global. */
+  propio: boolean;
+  /** Total del pack, calculado sobre `precioFinal` — o sea que un pack fijo
+   *  lo calcula sobre su precio de catálogo, no sobre el de la fórmula. */
+  precio: number;
+  /** Cuánto se ahorra contra pagar las sesiones sueltas. Un descuento de 0 lo
+   *  deja en 0: es la señal de que ese pack dejó de ser un pack. */
+  ahorro: number;
 };
 
 export type DepilationComboAssembled = {
@@ -454,6 +474,9 @@ export type DepilationComboAssembled = {
   fixedPrice: number | null;
   fixedDurationMinutes: number | null;
   choiceZoneCount: number;
+  packSessions: number | null;
+  packDiscountPercentage: number | null;
+  packRoundingBase: number | null;
   isPublishedWeb: boolean;
   displayOrder: number;
   isActive: boolean;
@@ -464,6 +487,9 @@ export type DepilationComboAssembled = {
    *  para un `guardado`: esa es toda la razón de ser del diseño. */
   precioFinal: number;
   duracionMinutos: number;
+  /** El pack ya resuelto y calculado. Se manda armado desde acá para que ni el
+   *  dashboard ni la web tengan que rehacer la cuenta por su cuenta. */
+  pack: PackDeCombo;
 };
 
 /**
@@ -486,6 +512,24 @@ export function assembleDepilationCombo(
   const duracionMinutos =
     combo.fixedDurationMinutes ?? calcularDuracionTurno(zonasReales, SEXO_DURACION_CATALOGO, config);
 
+  // Las tres columnas van juntas (`ck_dc_pack_completo`), pero acá se exige
+  // que estén las tres igual: si por lo que fuera llegara media política, es
+  // más seguro caer en la global que inventar el número que falta.
+  const propia =
+    combo.packSessions != null &&
+    combo.packDiscountPercentage != null &&
+    combo.packRoundingBase != null
+      ? {
+          sesiones: combo.packSessions,
+          descuentoPct: combo.packDiscountPercentage,
+          redondeo: combo.packRoundingBase,
+        }
+      : null;
+  const politica = politicaDePack(config, propia);
+  // Sobre `precioFinal`, no sobre `precioCalculado`: el pack de un pack fijo
+  // se cobra sobre su precio de catálogo, que es lo que la clienta paga.
+  const precioPack = calcularPrecioPack(precioFinal, config, propia);
+
   return {
     id: combo.id,
     name: combo.name,
@@ -494,6 +538,9 @@ export function assembleDepilationCombo(
     fixedPrice,
     fixedDurationMinutes: combo.fixedDurationMinutes,
     choiceZoneCount: combo.choiceZoneCount,
+    packSessions: combo.packSessions,
+    packDiscountPercentage: combo.packDiscountPercentage,
+    packRoundingBase: combo.packRoundingBase,
     isPublishedWeb: combo.isPublishedWeb,
     displayOrder: combo.displayOrder,
     isActive: combo.isActive,
@@ -501,6 +548,12 @@ export function assembleDepilationCombo(
     precioCalculado,
     precioFinal,
     duracionMinutos,
+    pack: {
+      ...politica,
+      propio: propia !== null,
+      precio: precioPack,
+      ahorro: precioFinal * politica.sesiones - precioPack,
+    },
   };
 }
 
@@ -512,6 +565,9 @@ const comboFields = {
   fixedPrice: depilationCombo.fixedPrice,
   fixedDurationMinutes: depilationCombo.fixedDurationMinutes,
   choiceZoneCount: depilationCombo.choiceZoneCount,
+  packSessions: depilationCombo.packSessions,
+  packDiscountPercentage: depilationCombo.packDiscountPercentage,
+  packRoundingBase: depilationCombo.packRoundingBase,
   isPublishedWeb: depilationCombo.isPublishedWeb,
   displayOrder: depilationCombo.displayOrder,
   isActive: depilationCombo.isActive,
@@ -556,6 +612,12 @@ export type DepilationComboInput = {
   isPublishedWeb?: boolean | null;
   displayOrder?: number | null;
   zonaIds: string[];
+  /** Pack propio del combo. Las tres o ninguna — `ck_dc_pack_completo` en la
+   *  base, y `comboDepilacionBody` en la ruta para dar un mensaje entendible
+   *  en vez de un 500. Ausentes = usa la política global. */
+  packSessions?: number | null;
+  packDiscountPercentage?: number | null;
+  packRoundingBase?: number | null;
 };
 
 export type ComboKindYPrecio = { kind: string; fixedPrice: string | number | null };
@@ -629,6 +691,9 @@ export async function crearCombo(
         fixedPrice: input.fixedPrice == null ? null : String(input.fixedPrice),
         fixedDurationMinutes: input.fixedDurationMinutes ?? null,
         choiceZoneCount: input.choiceZoneCount ?? 0,
+        packSessions: input.packSessions ?? null,
+        packDiscountPercentage: input.packDiscountPercentage ?? null,
+        packRoundingBase: input.packRoundingBase ?? null,
         isPublishedWeb: input.isPublishedWeb ?? false,
         displayOrder: input.displayOrder ?? 0,
         isActive: true,
@@ -658,6 +723,9 @@ export async function actualizarCombo(
         fixedPrice: input.fixedPrice == null ? null : String(input.fixedPrice),
         fixedDurationMinutes: input.fixedDurationMinutes ?? null,
         choiceZoneCount: input.choiceZoneCount ?? 0,
+        packSessions: input.packSessions ?? null,
+        packDiscountPercentage: input.packDiscountPercentage ?? null,
+        packRoundingBase: input.packRoundingBase ?? null,
         isPublishedWeb: input.isPublishedWeb ?? false,
         displayOrder: input.displayOrder ?? 0,
         updatedAt: new Date(),

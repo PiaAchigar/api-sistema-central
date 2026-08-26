@@ -225,6 +225,24 @@ export const comboDepilacionBody = z
       .nonnegative("Las zonas a elección no pueden ser negativas")
       .nullish(),
     isPublishedWeb: z.boolean().nullish(),
+    // Pack propio del combo (migración 1.36.0). Los tres van juntos; el
+    // superRefine de abajo exige que estén los tres o ninguno.
+    packSessions: z
+      .number({ invalid_type_error: "Las sesiones tienen que ser un número" })
+      .int("Las sesiones tienen que ser un número entero")
+      .positive("El pack tiene que tener al menos una sesión")
+      .nullish(),
+    packDiscountPercentage: z
+      .number({ invalid_type_error: "El descuento tiene que ser un número" })
+      .int("El descuento tiene que ser un número entero")
+      .min(0, "El descuento no puede ser negativo")
+      .max(100, "El descuento no puede pasar de 100")
+      .nullish(),
+    packRoundingBase: z
+      .number({ invalid_type_error: "El redondeo tiene que ser un número" })
+      .int("El redondeo tiene que ser un número entero")
+      .positive("El redondeo tiene que ser mayor a cero")
+      .nullish(),
     displayOrder: z
       .number({ invalid_type_error: "El orden tiene que ser un número" })
       .int("El orden tiene que ser un número entero")
@@ -265,6 +283,22 @@ export const comboDepilacionBody = z
         message: "Un combo guardado no puede tener zonas a elección",
       });
     }
+    // Las tres perillas del pack van juntas: media política obligaría a
+    // inventar el número que falta. La base lo garantiza con
+    // `ck_dc_pack_completo`, pero acá el mensaje se entiende.
+    const packCargadas = [v.packSessions, v.packDiscountPercentage, v.packRoundingBase].filter(
+      (x) => x != null,
+    ).length;
+    if (packCargadas > 0 && packCargadas < 3) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["packSessions"],
+        message:
+          "El pack propio necesita las tres cosas: sesiones, descuento y redondeo. " +
+          "Dejalas las tres vacías para usar el pack por defecto.",
+      });
+    }
+
     // La base tiene UNIQUE (combo_id, zone_id); si no se chequea acá, una
     // zona repetida rompe el INSERT como un 500 en vez de un mensaje claro.
     const vistos = new Set<string>();

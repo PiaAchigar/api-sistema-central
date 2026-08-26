@@ -16,6 +16,16 @@ export type DepilationConfig = {
   packRedondeo: number;
 };
 
+/**
+ * Los tres números que definen un pack de sesiones.
+ *
+ * Existen en dos lugares: en `DepilationConfig` como política del negocio (la
+ * que usa toda cotización armada al vuelo) y, opcionalmente, en cada combo
+ * guardado. Laura vende algunos combos en 3 sesiones y otros en 5, con
+ * descuentos distintos, y eso no entra en una sola fila de configuración.
+ */
+export type PackPolitica = { sesiones: number; descuentoPct: number; redondeo: number };
+
 export type MotivoPrecio = "lista" | "escalon_1" | "escalon_2";
 
 export type LineaCotizacion = {
@@ -97,15 +107,40 @@ export function calcularDuracionTurno(
 }
 
 /**
+ * Qué pack corre: el propio del combo si lo tiene, la política global si no.
+ *
+ * `propia` viene de las columnas de `depilation_combo`, que son nullables y
+ * van de a tres (o las tres cargadas, o ninguna — lo garantiza un CHECK). Una
+ * cotización armada al vuelo no tiene combo, así que siempre cae en la global.
+ */
+export function politicaDePack(
+  config: DepilationConfig,
+  propia?: PackPolitica | null,
+): PackPolitica {
+  return (
+    propia ?? {
+      sesiones: config.packSesiones,
+      descuentoPct: config.packDescuentoPct,
+      redondeo: config.packRedondeo,
+    }
+  );
+}
+
+/**
  * Precio del pack de N sesiones (PDF §7).
  *
  * Se redondea UNA SOLA VEZ, al final. El PDF lo marca en mayúsculas: si se
  * redondea el descuento o cada sesión por separado, los números no cierran.
  */
-export function calcularPrecioPack(totalCombo: number, config: DepilationConfig): number {
+export function calcularPrecioPack(
+  totalCombo: number,
+  config: DepilationConfig,
+  propia?: PackPolitica | null,
+): number {
+  const pack = politicaDePack(config, propia);
   // Entero antes de dividir: `× 0,85` en coma flotante da 45900.000000000007.
-  const bruto = (totalCombo * config.packSesiones * (100 - config.packDescuentoPct)) / 100;
-  return Math.round(bruto / config.packRedondeo) * config.packRedondeo;
+  const bruto = (totalCombo * pack.sesiones * (100 - pack.descuentoPct)) / 100;
+  return Math.round(bruto / pack.redondeo) * pack.redondeo;
 }
 
 /**

@@ -1012,6 +1012,9 @@ describe("assembleDepilationCombo — invariante central: un guardado nunca mues
       fixedPrice: "999999.00",
       fixedDurationMinutes: null,
       choiceZoneCount: 0,
+      packSessions: null,
+      packDiscountPercentage: null,
+      packRoundingBase: null,
       isPublishedWeb: false,
       displayOrder: 0,
       isActive: true,
@@ -1030,6 +1033,9 @@ describe("assembleDepilationCombo — invariante central: un guardado nunca mues
       fixedPrice: "20000.00",
       fixedDurationMinutes: null,
       choiceZoneCount: 0,
+      packSessions: null,
+      packDiscountPercentage: null,
+      packRoundingBase: null,
       isPublishedWeb: false,
       displayOrder: 0,
       isActive: true,
@@ -1949,5 +1955,141 @@ describe("Hard-delete de zonas y combos (integración real)", () => {
       ADMIN_ENV,
     );
     expect(noExiste.status).toBe(404);
+  });
+});
+
+// ── Pack propio del combo (migración 1.36.0) ────────────────────────────────
+describe("Pack por combo (integración real)", () => {
+  const creados: string[] = [];
+
+  afterEach(async () => {
+    if (creados.length > 0) {
+      await testDb.delete(depilationComboZone).where(inArray(depilationComboZone.comboId, creados));
+      await testDb.delete(depilationCombo).where(inArray(depilationCombo.id, creados));
+      creados.length = 0;
+    }
+  });
+
+  async function crearPorApi(body: Record<string, unknown>) {
+    const res = await testApp.request(
+      "/combos",
+      { method: "POST", headers: ADMIN_HEADERS, body: JSON.stringify(body) },
+      ADMIN_ENV,
+    );
+    const json = (await res.json()) as { id?: string; error?: string };
+    if (json.id) creados.push(json.id);
+    return { status: res.status, json };
+  }
+
+  it("un combo sin pack propio hereda el global y lo dice", async () => {
+    const axila = await idDeZonaReal("Axila");
+    const { status, json } = await crearPorApi({
+      name: `${QA_PREFIX}SIN_PACK_PROPIO`,
+      kind: "guardado",
+      zonaIds: [axila],
+    });
+    expect(status).toBe(201);
+
+    const combo = json as unknown as { precioFinal: number; pack: Record<string, unknown> };
+    // La config real del seed: 3 sesiones, 15%, redondeo 1.000.
+    expect(combo.pack).toMatchObject({ sesiones: 3, descuentoPct: 15, propio: false });
+    // Axila sola = $12.000 → 12.000 × 3 × 0,85 = 30.600 → 31.000.
+    expect(combo.precioFinal).toBe(12000);
+    expect(combo.pack.precio).toBe(31000);
+    expect(combo.pack.ahorro).toBe(12000 * 3 - 31000);
+  });
+
+  it("un combo con pack propio usa el suyo, no el global", async () => {
+    const axila = await idDeZonaReal("Axila");
+    const { status, json } = await crearPorApi({
+      name: `${QA_PREFIX}CON_PACK_PROPIO`,
+      kind: "guardado",
+      zonaIds: [axila],
+      packSessions: 5,
+      packDiscountPercentage: 22,
+      packRoundingBase: 1000,
+    });
+    expect(status).toBe(201);
+
+    const combo = json as unknown as { pack: Record<string, unknown> };
+    expect(combo.pack).toMatchObject({ sesiones: 5, descuentoPct: 22, propio: true });
+    // 12.000 × 5 = 60.000; −22% = 46.800 → redondeo 1.000 → 47.000.
+    // Con el global daría 31.000: números bien distintos.
+    expect(combo.pack.precio).toBe(47000);
+  });
+
+  it("media política se rechaza con un mensaje entendible, no con un 500", async () => {
+    const axila = await idDeZonaReal("Axila");
+    const { status, json } = await crearPorApi({
+      name: `${QA_PREFIX}MEDIA_POLITICA`,
+      kind: "guardado",
+      zonaIds: [axila],
+      packSessions: 5, // sin descuento ni redondeo
+    });
+    expect(status).toBe(400);
+    expect(json.error).toMatch(/las tres cosas/i);
+  });
+
+  it("un descuento fuera de 0-100 se rechaza", async () => {
+    const axila = await idDeZonaReal("Axila");
+    const { status } = await crearPorApi({
+      name: `${QA_PREFIX}DESCUENTO_120`,
+      kind: "guardado",
+      zonaIds: [axila],
+      packSessions: 5,
+      packDiscountPercentage: 120,
+      packRoundingBase: 1000,
+    });
+    expect(status).toBe(400);
+  });
+
+  it("editar un combo puede sacarle el pack propio y devolverlo al global", async () => {
+    const axila = await idDeZonaReal("Axila");
+    const { json: creado } = await crearPorApi({
+      name: `${QA_PREFIX}IDA_Y_VUELTA`,
+      kind: "guardado",
+      zonaIds: [axila],
+      packSessions: 5,
+      packDiscountPercentage: 22,
+      packRoundingBase: 1000,
+    });
+    const id = creado.id!;
+
+    const res = await testApp.request(
+      `/combos/${id}`,
+      {
+        method: "PATCH",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({
+          name: `${QA_PREFIX}IDA_Y_VUELTA`,
+          kind: "guardado",
+          zonaIds: [axila],
+          // sin las tres perillas: vuelve al global
+        }),
+      },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(200);
+    const actualizado = (await res.json()) as { pack: Record<string, unknown> };
+    expect(actualizado.pack).toMatchObject({ sesiones: 3, descuentoPct: 15, propio: false });
+    expect(actualizado.pack.precio).toBe(31000);
+  });
+
+  it("el pack de un pack fijo se calcula sobre su precio de catálogo, no sobre la fórmula", async () => {
+    const res = await testApp.request("/combos", { headers: ADMIN_HEADERS }, ADMIN_ENV);
+    const combos = (await res.json()) as Array<{
+      name: string;
+      precioFinal: number;
+      precioCalculado: number;
+      pack: { sesiones: number; precio: number };
+    }>;
+    const cuerpoFull = combos.find((c) => c.name === "Cuerpo Full")!;
+
+    // Precio fijo $65.000, fórmula $86.000: son distintos, así que el test
+    // distingue de verdad cuál de los dos usó.
+    expect(cuerpoFull.precioFinal).toBe(65000);
+    expect(cuerpoFull.precioCalculado).toBe(86000);
+    // 65.000 × 3 × 0,85 = 165.750 → 166.000. Sobre la fórmula daría 219.000.
+    expect(cuerpoFull.pack.precio).toBe(166000);
   });
 });

@@ -111,6 +111,14 @@ export const depilationCombo = pgTable("depilation_combo", {
   fixedPrice: numeric("fixed_price", { precision: 10, scale: 2 }),
   fixedDurationMinutes: integer("fixed_duration_minutes"),
   choiceZoneCount: integer("choice_zone_count").notNull(),
+  // Pack propio del combo (migración 1.36.0). Van de a tres: o las tres
+  // cargadas, o las tres en NULL — lo garantiza `ck_dc_pack_completo`. NULL
+  // significa "usá la política global de `depilation_pricing_config`", que es
+  // también la que corre en toda cotización armada al vuelo, porque esa no
+  // tiene combo del cual sacarla.
+  packSessions: integer("pack_sessions"),
+  packDiscountPercentage: integer("pack_discount_percentage"),
+  packRoundingBase: integer("pack_rounding_base"),
   isPublishedWeb: boolean("is_published_web").notNull(),
   displayOrder: integer("display_order").notNull(),
   isActive: boolean("is_active").notNull(),

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   calcularDuracionTurno, calcularPrecioCombo, calcularPrecioPack,
-  buscarPackFijo, zonasBloqueadas,
+  buscarPackFijo, zonasBloqueadas, politicaDePack,
   type DepilationConfig, type ZonaParaCotizar,
 } from "./depilation-pricing";
 
@@ -115,6 +115,70 @@ describe("calcularPrecioPack — los 8 ejemplos del PDF §7", () => {
   // justamente el caso 18000 → 46000, el mismo que arrastraría el error de
   // coma flotante (18000 × 3 × 0,85 da 45900.000000000007)— ya prueba el
   // valor EXACTO, que es la propiedad que en verdad importa.
+});
+
+describe("politicaDePack — el combo puede tener la suya, si no manda la global", () => {
+  it("sin política propia devuelve la global de la config", () => {
+    expect(politicaDePack(CONFIG, null)).toEqual({
+      sesiones: 3,
+      descuentoPct: 15,
+      redondeo: 1000,
+    });
+  });
+
+  it("`undefined` cuenta igual que `null`: sigue siendo la global", () => {
+    expect(politicaDePack(CONFIG, undefined)).toEqual(politicaDePack(CONFIG, null));
+  });
+
+  it("con política propia devuelve la propia, sin mezclarla con la global", () => {
+    const propia = { sesiones: 5, descuentoPct: 22, redondeo: 500 };
+    expect(politicaDePack(CONFIG, propia)).toEqual(propia);
+  });
+});
+
+describe("calcularPrecioPack con política propia del combo", () => {
+  it("un combo sin política propia cotiza igual que antes", () => {
+    // Mismo caso que el it.each del PDF: 18.000 → 46.000.
+    expect(calcularPrecioPack(18000, CONFIG, null)).toBe(46000);
+    expect(calcularPrecioPack(18000, CONFIG, null)).toBe(calcularPrecioPack(18000, CONFIG));
+  });
+
+  it("un combo de 5 sesiones al 22% usa SUS números, no los globales", () => {
+    // 36.000 × 5 = 180.000; −22% = 140.400; redondeo 1.000 → 140.000.
+    // Con la global (3 sesiones, 15%) daría 92.000: son números bien distintos,
+    // así que el test no puede pasar por casualidad.
+    expect(calcularPrecioPack(36000, CONFIG, { sesiones: 5, descuentoPct: 22, redondeo: 1000 }))
+      .toBe(140000);
+    expect(calcularPrecioPack(36000, CONFIG)).toBe(92000);
+  });
+
+  it("respeta las tres perillas por separado", () => {
+    const base = { sesiones: 4, descuentoPct: 10, redondeo: 1000 };
+    // 20.000 × 4 = 80.000; −10% = 72.000.
+    expect(calcularPrecioPack(20000, CONFIG, base)).toBe(72000);
+    // Solo cambia las sesiones: 20.000 × 6 = 120.000; −10% = 108.000.
+    expect(calcularPrecioPack(20000, CONFIG, { ...base, sesiones: 6 })).toBe(108000);
+    // Solo cambia el descuento: 80.000 −25% = 60.000.
+    expect(calcularPrecioPack(20000, CONFIG, { ...base, descuentoPct: 25 })).toBe(60000);
+    // Solo cambia el redondeo: 21.000 × 4 = 84.000; −10% = 75.600.
+    // Con redondeo 1.000 → 76.000; con 5.000 → 75.000.
+    expect(calcularPrecioPack(21000, CONFIG, base)).toBe(76000);
+    expect(calcularPrecioPack(21000, CONFIG, { ...base, redondeo: 5000 })).toBe(75000);
+  });
+
+  it("sigue redondeando UNA sola vez, al final", () => {
+    // 18.000 × 3 × 0,85 da 45900.000000000007 en coma flotante. Con redondeo
+    // de 100 el valor exacto es 45.900: si se redondeara antes, no daría.
+    expect(calcularPrecioPack(18000, CONFIG, { sesiones: 3, descuentoPct: 15, redondeo: 100 }))
+      .toBe(45900);
+  });
+
+  it("un descuento de 0 deja el pack igual a comprar las sesiones sueltas", () => {
+    // No es un error de cálculo: es la señal de que ese pack dejó de ser pack,
+    // y por eso la pantalla lo avisa.
+    expect(calcularPrecioPack(30000, CONFIG, { sesiones: 4, descuentoPct: 0, redondeo: 1000 }))
+      .toBe(120000);
+  });
 });
 
 describe("calcularDuracionTurno — PDF §8", () => {
