@@ -3,6 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { createDb } from "../../db/client";
 import {
+  CATEGORY_KINDS,
   createCategory,
   listCategories,
   setCategoryActive,
@@ -18,6 +19,7 @@ type CategoryNode = {
   description: string | null;
   displayOrder: number | null;
   isActive: boolean | null;
+  kind: string;
   children: CategoryNode[];
 };
 
@@ -25,19 +27,29 @@ const STAFF = ["admin", "manager", "operator"];
 
 const categoriesRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 
+export const categoriesQuery = z.object({
+  includeInactive: z.string().optional(),
+  kind: z.enum(CATEGORY_KINDS).optional(),
+});
+
 // GET público (lo usan agenda y web). `auth` no bloquea: solo permite que un
 // usuario staff pida también las archivadas con ?includeInactive=true.
+//
+// `kind` acota a un eje (migración 1.37.0). Sin el parámetro devuelve todo,
+// igual que antes — la web filtra del lado suyo por el `kind` que ahora viene
+// en cada fila, así que este endpoint no cambia de comportamiento para nadie
+// que no lo pida.
 categoriesRouter.get(
   "/",
   auth,
-  zValidator("query", z.object({ includeInactive: z.string().optional() })),
+  zValidator("query", categoriesQuery),
   async (c) => {
     const db = createDb(c.env);
     const canSeeInactive = STAFF.includes(c.get("userRole") ?? "");
     const includeInactive =
       canSeeInactive && c.req.valid("query").includeInactive === "true";
 
-    const rows = await listCategories(db, includeInactive);
+    const rows = await listCategories(db, includeInactive, c.req.valid("query").kind);
 
     const nodes = new Map<string, CategoryNode>(
       rows.map((r) => [
@@ -48,6 +60,7 @@ categoriesRouter.get(
           description: r.description,
           displayOrder: r.displayOrder,
           isActive: r.isActive,
+          kind: r.kind,
           children: [],
         },
       ]),
