@@ -22,6 +22,14 @@ const updatedAt = () =>
     .$defaultFn(() => new Date())
     .$onUpdate(() => new Date());
 
+// `kind` dice a cuál de las cuatro preguntas responde esta categoría, porque
+// las cuatro venían mezcladas en la misma tabla (migración 1.37.0):
+//   area     → las pestañas de Administración
+//   tecnica  → agrupa dentro de una pestaña (Botox, Mesoterapia, ...)
+//   objetivo → lo consume el buscador de la web
+//   maquina  → nombre de aparato; duplica `service_machine`, que quedó sin usar
+// El default es 'tecnica' — es el eje más poblado, así que marcar los otros
+// tres es la excepción.
 export const categories = pgTable("categories", {
   id: id(),
   parentCategoryId: uuid("parent_category_id"),
@@ -29,6 +37,7 @@ export const categories = pgTable("categories", {
   description: text("description"),
   displayOrder: integer("display_order"),
   isActive: boolean("is_active"),
+  kind: varchar("kind", { length: 12 }).notNull().default("tecnica"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
