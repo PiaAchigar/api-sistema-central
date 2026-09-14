@@ -72,11 +72,14 @@ export type CompraInput = {
 const dec = (n: number) => String(n);
 
 /**
- * Vende: crea la compra y sus N sesiones vacías, en UNA transacción.
+ * Vende: crea la compra y sus N servicios comprados, todavía sin turno, en
+ * UNA transacción.
  *
- * Las sesiones nacen con la compra y no cuando se agendan. Si se crearan al
- * agendar, "cuántas te quedan" habría que calcularlo restando, y una compra de
- * 6 sesiones sin ninguna agendada se vería igual que una de 0.
+ * Los servicios comprados nacen con la compra y no cuando se agendan. Si
+ * nacieran al agendar, "cuántos te quedan" habría que calcularlo restando, y
+ * una compra de 6 servicios comprados sin ninguno agendado se vería igual
+ * que una de 0. Un servicio comprado recién pasa a ser una *sesión* cuando
+ * se le engancha un turno (spec 2026-09-11 §2).
  */
 export async function createCompra(db: Db, input: CompraInput) {
   const origenes = [
