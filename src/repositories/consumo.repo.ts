@@ -2,19 +2,19 @@ import { and, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   appointments,
-  comboService,
   customerPurchase,
-  customerPurchaseSession,
+  customerPurchaseService,
 } from "../db/schema";
 import { conflict } from "../lib/errors";
-import { type SesionDisponible, elegirSesion } from "../lib/eleccion-de-sesion";
+import { type ServicioDisponible, elegirServicio } from "../lib/eleccion-de-servicio";
 
 /**
  * Lo que la clienta tiene a favor para un servicio, y qué se descontaría.
  *
  * Es la consulta que corre al abrir el turno nuevo, así que la condición de
  * "disponible" está escrita en SQL en vez de traer todo y filtrar en memoria:
- * una clienta con años de historia tiene muchas sesiones y casi ninguna libre.
+ * una clienta con años de historia tiene muchos servicios comprados y casi
+ * ninguno libre.
  *
  * Espeja `estadoDeSesion()` de `lib/compras.ts` — que es la definición— para el
  * caso `disponible`:
@@ -25,26 +25,26 @@ import { type SesionDisponible, elegirSesion } from "../lib/eleccion-de-sesion";
  * propósito y no se comparte porque una es TypeScript sobre filas ya traídas y
  * la otra es un WHERE; unificarlas obligaría a traer la historia entera.
  */
-export async function sesionesDisponiblesPara(
+export async function serviciosDisponiblesPara(
   db: Db,
   customerId: string,
   serviceId: string,
   ahora: Date,
-): Promise<SesionDisponible[]> {
+): Promise<ServicioDisponible[]> {
   const filas = await db
     .select({
-      sessionId: customerPurchaseSession.id,
+      purchaseServiceId: customerPurchaseService.id,
       purchaseId: customerPurchase.id,
       descripcion: customerPurchase.description,
-      sessionNumber: customerPurchaseSession.sessionNumber,
+      repeticion: customerPurchaseService.repeticion,
       venceEl: customerPurchase.expiresAt,
     })
-    .from(customerPurchaseSession)
+    .from(customerPurchaseService)
     .innerJoin(
       customerPurchase,
-      eq(customerPurchase.id, customerPurchaseSession.customerPurchaseId),
+      eq(customerPurchase.id, customerPurchaseService.customerPurchaseId),
     )
-    .leftJoin(appointments, eq(appointments.id, customerPurchaseSession.appointmentId))
+    .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
     .where(
       and(
         eq(customerPurchase.customerId, customerId),
@@ -54,45 +54,26 @@ export async function sesionesDisponiblesPara(
           isNull(customerPurchase.expiresAt),
           sql`${customerPurchase.expiresAt} >= ${ahora}`,
         ),
-        // La sesión, libre: sin consumir y sin un turno que la reserve. Un
+        // El servicio, libre: sin consumir y sin un turno que lo reserve. Un
         // turno CANCELADO no reserva —se avisó, se reagenda— pero un `no_show`
-        // sí la deja tomada: la clienta la perdió (reglas §3.8).
-        isNull(customerPurchaseSession.consumedAt),
+        // sí lo deja tomado: la clienta lo perdió (reglas §3.8).
+        isNull(customerPurchaseService.consumedAt),
         or(
-          isNull(customerPurchaseSession.appointmentId),
+          isNull(customerPurchaseService.appointmentId),
           eq(appointments.status, "cancelled"),
         ),
-        // Que la compra cubra ESTE servicio.
-        //
-        // Los combos de DOS O MÁS servicios quedan afuera a propósito: son una
-        // sola sesión que necesita dos turnos, y `customer_purchase_session`
-        // tiene una sola columna `appointment_id`. Engancharle el primer turno
-        // dejaría al segundo servicio sin dónde ir, en silencio. Entran cuando
-        // llegue la migración que baja el enganche a
-        // `customer_purchase_session_service` (V3b).
-        or(
-          eq(customerPurchase.serviceId, serviceId),
-          and(
-            sql`${customerPurchase.comboId} IS NOT NULL`,
-            sql`EXISTS (
-              SELECT 1 FROM ${comboService} cs
-               WHERE cs.combo_id = ${customerPurchase.comboId}
-                 AND cs.service_id = ${serviceId}
-            )`,
-            sql`(
-              SELECT count(*) FROM ${comboService} cs2
-               WHERE cs2.combo_id = ${customerPurchase.comboId}
-            ) = 1`,
-          ),
-        ),
+        // Que la fila SEA de este servicio. Antes acá había que salir a buscar
+        // si el combo lo contenía y contar cuántos servicios tenía, para dejar
+        // afuera los de 2+ (V3b los habilita). Ahora la fila ya lo sabe.
+        eq(customerPurchaseService.serviceId, serviceId),
       ),
     );
 
   return filas.map((f) => ({
-    sessionId: f.sessionId,
+    purchaseServiceId: f.purchaseServiceId,
     purchaseId: f.purchaseId,
     descripcion: f.descripcion ?? "Compra sin descripción",
-    sessionNumber: f.sessionNumber ?? 0,
+    repeticion: f.repeticion ?? 0,
     venceEl: f.venceEl,
   }));
 }
@@ -104,81 +85,81 @@ export async function queSeDescuenta(
   serviceId: string,
   ahora: Date,
 ) {
-  return elegirSesion(await sesionesDisponiblesPara(db, customerId, serviceId, ahora));
+  return elegirServicio(await serviciosDisponiblesPara(db, customerId, serviceId, ahora));
 }
 
 /**
- * Ata la sesión al turno recién creado. Falla si ya no está libre.
+ * Ata el servicio comprado al turno recién creado. Falla si ya no está libre.
  *
  * El UPDATE trae la condición de "libre" adentro del WHERE y no en un SELECT
- * previo, y eso es lo que lo hace seguro: si dos personas agendan la misma
- * sesión al mismo tiempo, la segunda actualiza cero filas y se entera. Con un
- * SELECT y después un UPDATE, las dos verían la sesión libre y la segunda
- * pisaría a la primera — el pack quedaría con una sesión de más y nadie se
- * enteraría hasta que la clienta reclame.
+ * previo, y eso es lo que lo hace seguro: si dos personas agendan el mismo
+ * servicio al mismo tiempo, la segunda actualiza cero filas y se entera. Con
+ * un SELECT y después un UPDATE, las dos verían el servicio libre y la
+ * segunda pisaría a la primera — el pack quedaría con un servicio de más y
+ * nadie se enteraría hasta que la clienta reclame.
  *
- * También valida que la sesión sea de ESTA clienta: un id de sesión ajeno,
- * mandado por error o a propósito, descontaría el pack de otra persona.
+ * También valida que el servicio sea de ESTA clienta: un id ajeno, mandado
+ * por error o a propósito, descontaría el pack de otra persona.
  */
-export async function tomarSesion(
+export async function tomarServicio(
   db: Db,
-  sessionId: string,
+  purchaseServiceId: string,
   ctx: { appointmentId: string; customerId: string; serviceId: string; ahora: Date },
 ): Promise<void> {
-  const libres = await sesionesDisponiblesPara(db, ctx.customerId, ctx.serviceId, ctx.ahora);
-  if (!libres.some((s) => s.sessionId === sessionId)) {
-    throw conflict("Esa sesión ya no está disponible para descontar");
+  const libres = await serviciosDisponiblesPara(db, ctx.customerId, ctx.serviceId, ctx.ahora);
+  if (!libres.some((s) => s.purchaseServiceId === purchaseServiceId)) {
+    throw conflict("Ese servicio ya no está disponible para descontar");
   }
 
   const tomadas = await db
-    .update(customerPurchaseSession)
+    .update(customerPurchaseService)
     .set({ appointmentId: ctx.appointmentId, updatedAt: new Date() })
     .where(
       and(
-        eq(customerPurchaseSession.id, sessionId),
-        isNull(customerPurchaseSession.consumedAt),
-        // Sin turno, o con uno cancelado que ya no la reserva.
+        eq(customerPurchaseService.id, purchaseServiceId),
+        isNull(customerPurchaseService.consumedAt),
+        // Sin turno, o con uno cancelado que ya no lo reserva.
         or(
-          isNull(customerPurchaseSession.appointmentId),
+          isNull(customerPurchaseService.appointmentId),
           sql`EXISTS (
             SELECT 1 FROM ${appointments} a
-             WHERE a.id = ${customerPurchaseSession.appointmentId}
+             WHERE a.id = ${customerPurchaseService.appointmentId}
                AND a.status = 'cancelled'
           )`,
         ),
       ),
     )
-    .returning({ id: customerPurchaseSession.id });
+    .returning({ id: customerPurchaseService.id });
 
   if (tomadas.length === 0) {
-    throw conflict("Esa sesión acaba de ser tomada por otro turno");
+    throw conflict("Ese servicio acaba de ser tomado por otro turno");
   }
 }
 
 /**
- * Marca consumida la sesión atada a este turno.
+ * Marca consumido el servicio comprado atado a este turno.
  *
  * Se llama cuando el turno pasa a `completed`. Es idempotente: si ya tenía
  * `consumed_at` no lo pisa, así que volver a completar un turno no mueve la
  * fecha original.
  *
- * **El ausente NO pasa por acá.** Una sesión perdida por `no_show` se deriva
- * del estado del turno (`estadoDeSesion` la devuelve como "perdida") y no se
- * escribe: así, si Laura se equivocó y corrige el turno, la sesión vuelve sola
- * a estar disponible sin que nadie tenga que deshacer nada.
+ * **El ausente NO pasa por acá.** Un servicio perdido por `no_show` se deriva
+ * del estado del turno (`estadoDeSesion` lo devuelve como "perdida") y no se
+ * escribe: así, si Laura se equivocó y corrige el turno, el servicio vuelve
+ * solo a estar disponible sin que nadie tenga que deshacer nada.
  */
-export async function consumirSesionDelTurno(
+export async function consumirServicioDelTurno(
   db: Db,
   appointmentId: string,
   ahora: Date,
 ): Promise<void> {
   await db
-    .update(customerPurchaseSession)
+    .update(customerPurchaseService)
     .set({ consumedAt: ahora, updatedAt: new Date() })
     .where(
       and(
-        eq(customerPurchaseSession.appointmentId, appointmentId),
-        isNull(customerPurchaseSession.consumedAt),
+        eq(customerPurchaseService.appointmentId, appointmentId),
+        isNull(customerPurchaseService.consumedAt),
       ),
     );
 }
