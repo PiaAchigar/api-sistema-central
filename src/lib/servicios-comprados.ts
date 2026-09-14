@@ -56,3 +56,62 @@ export function filasDeServicioComprado(
   }
   return filas;
 }
+
+/**
+ * De qué combo salen los servicios que hay que crear al vender `comboId`.
+ *
+ * Un **pack** puede ser de dos formas: uno que REPITE otro combo —tiene
+ * `packOfComboId` y ninguna línea propia— o uno armado con sus propios
+ * servicios. En el primer caso los servicios hay que ir a buscarlos al combo
+ * original; mirar las líneas del pack devolvería una lista vacía.
+ *
+ * **Por qué es una función y no un `? :` suelto** (revisión final de V3b,
+ * 2026-09-14): si esta decisión se equivoca, la venta NO falla. Crea las filas
+ * de `customer_purchase_service` con `service_id` NULL —que es lo legítimo
+ * para depilación y capacitaciones— y la clienta se entera recién cuando
+ * quiere agendar y no hay nada para elegir. Un error mudo que se descubre
+ * tarde y con la plata ya cobrada merece su propio test.
+ *
+ * `packOfComboId` sólo significa algo para los packs: un combo común con la
+ * columna sucia se sigue mirando a sí mismo.
+ */
+export function comboDelQueSalenLosServicios(
+  kind: string | null,
+  packOfComboId: string | null,
+  comboId: string,
+): string {
+  return kind === "pack" && packOfComboId ? packOfComboId : comboId;
+}
+
+/** Lo mínimo para ordenar un servicio comprado en la ficha de la clienta. */
+export type ServicioOrdenable = {
+  id: string;
+  repeticion: number | null;
+  orden: number | null;
+  serviceName: string | null;
+};
+
+/**
+ * Cómo se muestran los servicios comprados de una compra: vuelta por vuelta, y
+ * dentro de cada vuelta por `orden`.
+ *
+ * **El desempate por nombre e `id` no es cosmético** (revisión final de V3b,
+ * 2026-09-14). En un combo de 2 servicios distintos las dos filas comparten
+ * `repeticion` 1 y `orden` 1, así que los dos primeros criterios empatan.
+ * `Array.prototype.sort` es estable, o sea que ante el empate deja el orden en
+ * que vino la consulta — y un `SELECT` sin `ORDER BY` no promete ninguno: en
+ * cuanto se agenda uno de los dos, el `UPDATE` reescribe la fila y Postgres
+ * suele devolverla al final. Resultado: los dos servicios se daban vuelta
+ * entre una visita a la ficha y la siguiente, sin que hubiera cambiado nada.
+ *
+ * Por eso el último criterio es el `id`, que no cambia nunca: así el orden es
+ * total y la ficha se ve igual siempre.
+ */
+export function ordenDeServiciosComprados(a: ServicioOrdenable, b: ServicioOrdenable): number {
+  return (
+    (a.repeticion ?? 0) - (b.repeticion ?? 0) ||
+    (a.orden ?? 0) - (b.orden ?? 0) ||
+    (a.serviceName ?? "").localeCompare(b.serviceName ?? "", "es") ||
+    a.id.localeCompare(b.id)
+  );
+}

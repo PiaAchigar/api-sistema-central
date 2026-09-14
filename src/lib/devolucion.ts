@@ -18,8 +18,10 @@ export type CompraParaDevolver = {
   cancelada: boolean;
   pagado: number;
   finalAmount: number;
-  sessionsTotal: number;
-  /** Sesiones consumidas + perdidas por ausente. Las dos ya se cobraron. */
+  /** Cuántas filas de `customer_purchase_service` tiene la compra. NO es
+   *  `sessions_total`: ver `CompraCancelada.totalDeServicios`. */
+  totalDeServicios: number;
+  /** Servicios consumidos + perdidos por ausente. Los dos ya se cobraron. */
   usadas: number;
   /** El saldo a favor que le queda HOY a la clienta. */
   saldoDisponible: number;
@@ -65,7 +67,7 @@ export function razonesParaNoDevolver(c: CompraParaDevolver): string[] {
 }
 
 /**
- * Cuánta plata se le devuelve: lo pagado menos las sesiones que ya usó,
+ * Cuánta plata se le devuelve: lo pagado menos los servicios que ya usó,
  * topeado por el saldo que efectivamente le queda.
  *
  * El tope importa: si gastó parte del saldo en otro tratamiento, esa plata ya
@@ -75,7 +77,7 @@ export function montoADevolver(c: CompraParaDevolver): number {
   const teorico = saldoAAcreditar({
     pagado: c.pagado,
     finalAmount: c.finalAmount,
-    sessionsTotal: c.sessionsTotal,
+    totalDeServicios: c.totalDeServicios,
     consumidas: c.usadas,
   });
   return Math.max(0, Math.min(teorico, c.saldoDisponible));

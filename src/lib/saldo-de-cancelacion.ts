@@ -10,7 +10,7 @@
  * - **Devolución** — restrictivo. Sacar plata de la caja y dársela en la mano
  *   exige que la compra esté pagada al 100%.
  *
- * En las dos se descuenta lo mismo: las sesiones que ya se hicieron. La
+ * En las dos se descuenta lo mismo: los servicios que ya se hicieron. La
  * diferencia está en la puerta de entrada, no en la cuenta.
  *
  * **Y la seña, ¿cuándo se pierde?** Cuando la clienta no vuelve. No hace falta
@@ -25,28 +25,49 @@
 export type CompraCancelada = {
   /** Lo efectivamente COBRADO. Sólo se puede dejar a favor lo que entró. */
   pagado: number;
-  /** El precio de la compra. Define dos cosas: cuánto vale cada sesión
-   *  entregada, y si el pago fue completo (que habilita la devolución). */
+  /** El precio de la compra. Define dos cosas: cuánto vale cada servicio
+   *  entregado, y si el pago fue completo (que habilita la devolución). */
   finalAmount: number;
-  sessionsTotal: number;
   /**
-   * Sesiones ya USADAS: las consumidas más las PERDIDAS por ausente. Las dos se
-   * cobraron — una porque el tratamiento se hizo, la otra porque el turno
+   * Cuántas FILAS de `customer_purchase_service` tiene la compra: el total de
+   * cosas que la clienta compró y puede agendar.
+   *
+   * **No es `sessions_total`** y por eso no se llama así (revisión final de
+   * V3b, 2026-09-14). `sessions_total` son las REPETICIONES de la compra;
+   * hasta V3b los dos números coincidían y el campo se llamaba `sessionsTotal`
+   * sin que molestara. Desde que la unidad de consumo es el servicio ya no
+   * coinciden: un combo de 2 servicios vendido suelto tiene `sessions_total`
+   * 1 y DOS filas, y un pack de 3 de ese combo tiene 3 y SEIS.
+   *
+   * Prorratear por las repeticiones inflaba lo consumido —siempre en el mismo
+   * sentido, porque las filas son ≥ que las repeticiones— y le acreditaba de
+   * menos a la clienta: el combo de $213.200 con un servicio hecho le dejaba
+   * $0 a favor en vez de $106.600.
+   */
+  totalDeServicios: number;
+  /**
+   * Servicios ya USADOS: los consumidos más los PERDIDOS por ausente. Los dos
+   * se cobraron — uno porque el tratamiento se hizo, el otro porque el turno
    * ocupó una hora que nadie más pudo usar (regla de Laura, 2026-09-09).
    *
-   * Las agendadas NO cuentan: todavía no pasó nada.
+   * Los agendados NO cuentan: todavía no pasó nada.
    */
   consumidas: number;
 };
 
-/** Lo que vale una sesión de esta compra. */
-export function valorDeUnaSesion(finalAmount: number, sessionsTotal: number): number {
-  return sessionsTotal <= 0 ? 0 : finalAmount / sessionsTotal;
+/**
+ * Lo que vale UNA de las cosas que entran en esta compra.
+ *
+ * El denominador es la cantidad de filas de `customer_purchase_service`, no
+ * las repeticiones: ver `totalDeServicios`.
+ */
+export function valorDeUnaSesion(finalAmount: number, totalDeServicios: number): number {
+  return totalDeServicios <= 0 ? 0 : finalAmount / totalDeServicios;
 }
 
 /**
- * El saldo a favor que deja una cancelación: lo pagado menos lo que valen las
- * sesiones que ya se hicieron.
+ * El saldo a favor que deja una cancelación: lo pagado menos lo que valen los
+ * servicios que ya se hicieron.
  *
  * Se aplica SIEMPRE, haya pagado una seña o todo. Una seña también es plata de
  * la clienta y le queda a favor por si quiere cambiar de tratamiento.
@@ -55,19 +76,19 @@ export function valorDeUnaSesion(finalAmount: number, sessionsTotal: number): nu
  * nunca se acredita más de lo que entró por un peso de redondeo.
  *
  * **Nunca negativo.** Con el mínimo del 40% una clienta puede haberse hecho
- * sesiones que valen más de lo que pagó; ahí el saldo es cero. La deuda que
+ * servicios que valen más de lo que pagó; ahí el saldo es cero. La deuda que
  * quede es una conversación entre Laura y la clienta, no un número escondido
  * en el saldo a favor.
  */
 export function saldoAAcreditar(compra: CompraCancelada): number {
   if (compra.pagado <= 0) return 0;
-  // Sin sesiones cargadas no hay nada que prorratear: vuelve todo lo pagado. No
-  // debería pasar (el modelo exige sessions_total > 0), pero quedarse con la
-  // plata sería lo peor de las dos opciones.
-  if (compra.sessionsTotal <= 0) return compra.pagado;
+  // Sin servicios comprados no hay nada que prorratear: vuelve todo lo pagado.
+  // No debería pasar (toda compra crea al menos una fila), pero quedarse con
+  // la plata sería lo peor de las dos opciones.
+  if (compra.totalDeServicios <= 0) return compra.pagado;
 
   const valorConsumido = Math.round(
-    valorDeUnaSesion(compra.finalAmount, compra.sessionsTotal) * compra.consumidas,
+    valorDeUnaSesion(compra.finalAmount, compra.totalDeServicios) * compra.consumidas,
   );
   return Math.max(0, compra.pagado - valorConsumido);
 }
@@ -79,8 +100,8 @@ export function saldoAAcreditar(compra: CompraCancelada): number {
  * en efectivo — queda a favor, que es otra cosa. `>=` y no `===` porque si se
  * cobró de más, con más razón está paga.
  *
- * Lo que se devuelve es `saldoAAcreditar`: el mismo descuento por sesiones
- * consumidas. La puerta es distinta; la cuenta es la misma.
+ * Lo que se devuelve es `saldoAAcreditar`: el mismo descuento por servicios
+ * consumidos. La puerta es distinta; la cuenta es la misma.
  */
 export function puedeDevolverse(compra: Pick<CompraCancelada, "pagado" | "finalAmount">): boolean {
   return compra.pagado > 0 && compra.pagado >= compra.finalAmount;

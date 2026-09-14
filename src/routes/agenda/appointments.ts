@@ -44,7 +44,7 @@ appointmentsRouter.get("/", requireAuth, zValidator("query", listQuery), async (
  * La pantalla de turno nuevo la consulta al elegir clienta y servicio:
  *
  *   `ninguna`      no tiene nada: el turno se cobra aparte
- *   `automatica`   una sola compra con sesiones libres → se descuenta sola
+ *   `automatica`   una sola compra con servicios comprados libres → se descuenta sola
  *   `elige_laura`  varias → la lista, ordenada por lo que vence antes
  *
  * ⚠️ Va registrada ANTES de `/:id`: Hono resuelve por orden, y al revés esta

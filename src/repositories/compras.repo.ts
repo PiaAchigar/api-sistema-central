@@ -27,7 +27,11 @@ import {
 } from "../lib/devolucion";
 import { creditCustomer, debitCustomerCredit, getCustomerById } from "./customers.repo";
 import { lineasParaVender } from "./combos.repo";
-import { filasDeServicioComprado, type LineaDeCombo } from "../lib/servicios-comprados";
+import {
+  filasDeServicioComprado,
+  ordenDeServiciosComprados,
+  type LineaDeCombo,
+} from "../lib/servicios-comprados";
 
 const compraFields = {
   id: customerPurchase.id,
@@ -324,12 +328,12 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
       devuelto,
       ...resumen,
       servicios: mias
-        // Vuelta por vuelta, y dentro de cada vuelta el orden de inserción: es
-        // como la ficha los agrupa, así no hay que reordenar en el navegador.
-        .sort(
-          (a, b) =>
-            (a.repeticion ?? 0) - (b.repeticion ?? 0) || (a.orden ?? 0) - (b.orden ?? 0),
-        )
+        // Vuelta por vuelta y, dentro de cada vuelta, por `orden` con
+        // desempate estable: es como la ficha los agrupa, así no hay que
+        // reordenar en el navegador. El desempate no sobra — la consulta no
+        // lleva ORDER BY y sin él los dos servicios de un combo se daban
+        // vuelta solos; ver `ordenDeServiciosComprados`.
+        .sort(ordenDeServiciosComprados)
         .map((s): ServicioLeido => ({
           id: s.id,
           serviceId: s.serviceId,
@@ -391,7 +395,7 @@ export async function cancelCompra(db: Db, id: string, motivo?: string | null) {
  */
 async function acreditarSobranteDeCompra(
   tx: Db,
-  compra: { id: string; customerId: string | null; finalAmount: string | null; sessionsTotal: number | null },
+  compra: { id: string; customerId: string | null; finalAmount: string | null },
 ): Promise<number> {
   if (!compra.customerId) return 0;
 
@@ -402,15 +406,24 @@ async function acreditarSobranteDeCompra(
       and(eq(payments.customerPurchaseId, compra.id), eq(payments.status, "confirmed")),
     );
 
-  // Usadas = consumidas + PERDIDAS. Una clienta que no vino perdió la sesión y
-  // su plata (regla de Laura, 2026-09-09): devolverla como saldo a favor sería
-  // premiar el ausente, que es justo lo que la regla evita.
-  const [usadas] = await tx
+  // Dos números de la MISMA tabla, en una sola consulta:
+  //
+  // - `usadas` = consumidas + PERDIDAS. Una clienta que no vino perdió el
+  //   servicio y su plata (regla de Laura, 2026-09-09): devolverla como saldo
+  //   a favor sería premiar el ausente, que es justo lo que la regla evita.
+  // - `todos` = el denominador del prorrateo. Tiene que salir de acá y NO de
+  //   `sessions_total`: desde V3b `sessions_total` son las REPETICIONES de la
+  //   compra y las filas son una por servicio y por repetición. Un combo de 2
+  //   servicios vendido suelto tiene `sessions_total` 1 y dos filas; contar
+  //   por repeticiones le acreditaba a la clienta $0 donde le tocaban $106.600
+  //   (revisión final de V3b, 2026-09-14).
+  const [cuentas] = await tx
     .select({
-      total: sql<number>`count(*) filter (
+      usadas: sql<number>`count(*) filter (
         where ${customerPurchaseService.consumedAt} is not null
            or ${appointments.status} = 'no_show'
       )`,
+      todos: sql<number>`count(*)`,
     })
     .from(customerPurchaseService)
     .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
@@ -419,8 +432,8 @@ async function acreditarSobranteDeCompra(
   const monto = saldoAAcreditar({
     pagado: Number(cobrado?.total ?? 0),
     finalAmount: Number(compra.finalAmount ?? 0),
-    sessionsTotal: compra.sessionsTotal ?? 0,
-    consumidas: Number(usadas?.total ?? 0),
+    totalDeServicios: Number(cuentas?.todos ?? 0),
+    consumidas: Number(cuentas?.usadas ?? 0),
   });
   if (monto <= 0) return 0;
 
@@ -553,7 +566,6 @@ export async function getEstadoDeDevolucion(db: Db, id: string): Promise<CompraP
       id: customerPurchase.id,
       customerId: customerPurchase.customerId,
       finalAmount: customerPurchase.finalAmount,
-      sessionsTotal: customerPurchase.sessionsTotal,
       cancelledAt: customerPurchase.cancelledAt,
     })
     .from(customerPurchase)
@@ -561,17 +573,20 @@ export async function getEstadoDeDevolucion(db: Db, id: string): Promise<CompraP
     .limit(1);
   if (!compra) return null;
 
-  const [cobrado, usadas, devuelta, cliente] = await Promise.all([
+  const [cobrado, cuentas, devuelta, cliente] = await Promise.all([
     db
       .select({ total: sql<string>`coalesce(sum(${payments.amount}), 0)` })
       .from(payments)
       .where(and(eq(payments.customerPurchaseId, id), eq(payments.status, "confirmed"))),
+    // Las usadas y el TOTAL de filas, juntas. El total es el denominador del
+    // prorrateo y no es `sessions_total`: ver `acreditarSobranteDeCompra`.
     db
       .select({
-        total: sql<number>`count(*) filter (
+        usadas: sql<number>`count(*) filter (
           where ${customerPurchaseService.consumedAt} is not null
              or ${appointments.status} = 'no_show'
         )`,
+        todos: sql<number>`count(*)`,
       })
       .from(customerPurchaseService)
       .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
@@ -592,8 +607,8 @@ export async function getEstadoDeDevolucion(db: Db, id: string): Promise<CompraP
     cancelada: compra.cancelledAt != null,
     pagado: Number(cobrado[0]?.total ?? 0),
     finalAmount: Number(compra.finalAmount ?? 0),
-    sessionsTotal: compra.sessionsTotal ?? 0,
-    usadas: Number(usadas[0]?.total ?? 0),
+    totalDeServicios: Number(cuentas[0]?.todos ?? 0),
+    usadas: Number(cuentas[0]?.usadas ?? 0),
     saldoDisponible: Number(cliente?.creditBalance ?? 0),
     yaDevuelta: Number(devuelta[0]?.n ?? 0) > 0,
   };

@@ -48,9 +48,9 @@ export type ItemVendible =
        * Sesiones que se lleva la clienta si esta fila es un PACK (1.50.0).
        *
        * NULL en un combo común. Un pack se vende como UNA unidad —"llevame el
-       * Facial × 4"— pero da CUATRO sesiones: sin esto la compra crearía una
-       * sola fila en `customer_purchase_session` y le faltarían tres visitas
-       * que pagó.
+       * Facial × 4"— pero da CUATRO vueltas: sin esto la compra crearía las
+       * filas de `customer_purchase_service` de una sola vuelta y le faltarían
+       * tres visitas que pagó.
        *
        * El PRECIO no se toca acá: `conDescuento` ya viene con el descuento del
        * pack aplicado por `conPrecioDePack()`. Multiplicar de nuevo cobraría

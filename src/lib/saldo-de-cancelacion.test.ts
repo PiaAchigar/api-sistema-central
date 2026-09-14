@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { puedeDevolverse, saldoAAcreditar, valorDeUnaSesion } from "./saldo-de-cancelacion";
 
-const PACK = { finalAmount: 166000, sessionsTotal: 3 };
+const PACK = { finalAmount: 166000, totalDeServicios: 3 };
 
 describe("valorDeUnaSesion", () => {
   it("reparte el precio entre todas las sesiones", () => {
@@ -58,7 +58,7 @@ describe("saldoAAcreditar — pagado el 100%", () => {
   });
 
   it("un servicio suelto ya hecho no deja nada", () => {
-    expect(saldoAAcreditar({ pagado: 51000, finalAmount: 51000, sessionsTotal: 1, consumidas: 1 })).toBe(0);
+    expect(saldoAAcreditar({ pagado: 51000, finalAmount: 51000, totalDeServicios: 1, consumidas: 1 })).toBe(0);
   });
 
   it("las agendadas NO cuentan como consumidas", () => {
@@ -68,13 +68,46 @@ describe("saldoAAcreditar — pagado el 100%", () => {
   });
 });
 
+describe("saldoAAcreditar — el denominador son los SERVICIOS, no las repeticiones", () => {
+  // El caso real de Laura (2026-09-14, revisión final de V3b). "Combo1 -
+  // Prueba": $213.200, `sessions_total = 1`, DOS servicios adentro → dos filas
+  // de `customer_purchase_service`. La clienta pagó todo, se hizo el Baby
+  // Botox y dejó la depilación facial a agendar.
+  //
+  // Con el denominador viejo (`sessionsTotal = 1`) la única sesión hecha se
+  // comía la compra entera y el saldo a favor daba $0. El error es siempre del
+  // mismo signo —las filas son ≥ que las repeticiones—, así que siempre se le
+  // acreditaba de MENOS a la clienta.
+  const COMBO_DE_DOS = { pagado: 213200, finalAmount: 213200, totalDeServicios: 2 };
+
+  it("combo de 2 servicios con uno hecho: se descuenta la mitad", () => {
+    expect(saldoAAcreditar({ ...COMBO_DE_DOS, consumidas: 1 })).toBe(106600);
+  });
+
+  it("combo de 2 servicios sin nada hecho: vuelve todo", () => {
+    expect(saldoAAcreditar({ ...COMBO_DE_DOS, consumidas: 0 })).toBe(213200);
+  });
+
+  it("combo de 2 servicios con los dos hechos: no queda nada", () => {
+    expect(saldoAAcreditar({ ...COMBO_DE_DOS, consumidas: 2 })).toBe(0);
+  });
+
+  it("pack de 3 de un combo de 2: seis filas, no tres", () => {
+    // `sessions_total = 3` pero seis cosas que agendar. Con dos hechas quedan
+    // cuatro sextos de la plata, no un tercio.
+    expect(
+      saldoAAcreditar({ pagado: 600000, finalAmount: 600000, totalDeServicios: 6, consumidas: 2 }),
+    ).toBe(400000);
+  });
+});
+
 describe("saldoAAcreditar — bordes", () => {
   it("si no pagó nada, no hay nada a favor", () => {
     expect(saldoAAcreditar({ pagado: 0, ...PACK, consumidas: 0 })).toBe(0);
   });
 
   it("una compra sin sesiones cargadas devuelve lo pagado", () => {
-    expect(saldoAAcreditar({ pagado: 51000, finalAmount: 51000, sessionsTotal: 0, consumidas: 0 })).toBe(51000);
+    expect(saldoAAcreditar({ pagado: 51000, finalAmount: 51000, totalDeServicios: 0, consumidas: 0 })).toBe(51000);
   });
 });
 

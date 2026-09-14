@@ -5,7 +5,7 @@ const base: CompraParaDevolver = {
   cancelada: true,
   pagado: 166000,
   finalAmount: 166000,
-  sessionsTotal: 3,
+  totalDeServicios: 3,
   usadas: 1,
   saldoDisponible: 110667,
   yaDevuelta: false,
@@ -89,5 +89,24 @@ describe("montoADevolver", () => {
 
   it("consumido todo, cero", () => {
     expect(montoADevolver({ ...base, usadas: 3 })).toBe(0);
+  });
+});
+
+describe("montoADevolver — el denominador son los SERVICIOS", () => {
+  // Misma premisa equivocada que en `saldoAAcreditar`: hasta V3b las filas y
+  // las repeticiones eran el mismo número, y estos tests lo daban por hecho.
+  // Un combo suelto de 2 servicios tiene `sessions_total = 1` y DOS filas.
+  it("combo de 2 servicios con uno hecho: se devuelve la mitad", () => {
+    expect(
+      montoADevolver({
+        cancelada: true,
+        pagado: 213200,
+        finalAmount: 213200,
+        totalDeServicios: 2,
+        usadas: 1,
+        saldoDisponible: 213200,
+        yaDevuelta: false,
+      }),
+    ).toBe(106600);
   });
 });

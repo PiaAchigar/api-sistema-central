@@ -166,9 +166,9 @@ describe("cotizar — los montos siempre van de mayor a menor", () => {
 describe("cotizar — un pack de catálogo", () => {
   /**
    * Un pack se vende como UNA unidad —"llevame el Facial × 4"— pero la clienta
-   * se lleva CUATRO sesiones. Si `sessionsTotal` quedara en 1, la compra
-   * crearía una sola fila en `customer_purchase_session` y a la clienta le
-   * faltarían tres visitas que pagó.
+   * se lleva CUATRO vueltas. Si `sessionsTotal` quedara en 1, la compra
+   * crearía las filas de `customer_purchase_service` de una sola vuelta y a la
+   * clienta le faltarían tres visitas que pagó.
    */
   const pack: ItemVendible = {
     origen: "combo",

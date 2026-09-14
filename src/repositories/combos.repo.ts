@@ -12,7 +12,10 @@ import { computeComboFinalPrice, computeComboSubtotal, precioDeServicio } from "
 import { type ComboComparable, combosDuplicados } from "../lib/combo-duplicado";
 import { precioPack } from "../lib/pack-pricing";
 import { type PoliticaDeArea, politicaDeUnPack } from "../lib/politica-de-pack";
-import type { LineaDeCombo } from "../lib/servicios-comprados";
+import {
+  comboDelQueSalenLosServicios,
+  type LineaDeCombo,
+} from "../lib/servicios-comprados";
 
 export type ComboLineInput = {
   serviceId: string;
@@ -686,7 +689,7 @@ export async function lineasParaVender(db: Db, comboId: string): Promise<LineaDe
     .limit(1);
   if (!c) return [];
 
-  const origen = c.kind === "pack" && c.packOfComboId ? c.packOfComboId : comboId;
+  const origen = comboDelQueSalenLosServicios(c.kind, c.packOfComboId, comboId);
   const lineas = await linesFor(db, origen);
   return lineas
     .filter((l): l is typeof l & { serviceId: string } => l.serviceId != null)
