@@ -12,6 +12,7 @@ import { computeComboFinalPrice, computeComboSubtotal, precioDeServicio } from "
 import { type ComboComparable, combosDuplicados } from "../lib/combo-duplicado";
 import { precioPack } from "../lib/pack-pricing";
 import { type PoliticaDeArea, politicaDeUnPack } from "../lib/politica-de-pack";
+import type { LineaDeCombo } from "../lib/servicios-comprados";
 
 export type ComboLineInput = {
   serviceId: string;
@@ -667,4 +668,27 @@ export async function guardarTarifario(
 
   const todos = await listarTarifarios(db);
   return todos.find((t) => t.areaCategoryId === areaCategoryId) ?? null;
+}
+
+/**
+ * Los servicios que hay que agendar al vender este combo.
+ *
+ * Un PACK no tiene renglones propios cuando repite un combo: sus servicios son
+ * los de ese combo. Si tiene renglones propios (un pack de un servicio suelto),
+ * son los suyos. La validación de que es uno u otro, no los dos, ya la hace
+ * `validarPack`.
+ */
+export async function lineasParaVender(db: Db, comboId: string): Promise<LineaDeCombo[]> {
+  const [c] = await db
+    .select({ kind: combos.kind, packOfComboId: combos.packOfComboId })
+    .from(combos)
+    .where(eq(combos.id, comboId))
+    .limit(1);
+  if (!c) return [];
+
+  const origen = c.kind === "pack" && c.packOfComboId ? c.packOfComboId : comboId;
+  const lineas = await linesFor(db, origen);
+  return lineas
+    .filter((l): l is typeof l & { serviceId: string } => l.serviceId != null)
+    .map((l) => ({ serviceId: l.serviceId, sessionsIncluded: l.sessionsIncluded ?? 1 }));
 }

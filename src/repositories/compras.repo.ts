@@ -5,7 +5,7 @@ import {
   cashRegister,
   customerCreditMovements,
   customerPurchase,
-  customerPurchaseSession,
+  customerPurchaseService,
   invoices,
   lineItems,
   payments,
@@ -25,6 +25,8 @@ import {
   type CompraParaDevolver,
 } from "../lib/devolucion";
 import { creditCustomer, debitCustomerCredit, getCustomerById } from "./customers.repo";
+import { lineasParaVender } from "./combos.repo";
+import { filasDeServicioComprado, type LineaDeCombo } from "../lib/servicios-comprados";
 
 const compraFields = {
   id: customerPurchase.id,
@@ -112,10 +114,21 @@ export async function createCompra(db: Db, input: CompraInput) {
       .returning(compraFields);
 
     const compra = filas[0]!;
-    await tx.insert(customerPurchaseSession).values(
-      Array.from({ length: input.sessionsTotal }, (_, i) => ({
+
+    // Qué servicios hay que agendar. Sólo un combo se desglosa: un servicio
+    // suelto es uno solo, y depilación y capacitaciones no se desglosan.
+    const lineas: LineaDeCombo[] = input.comboId
+      ? await lineasParaVender(tx, input.comboId)
+      : input.serviceId
+        ? [{ serviceId: input.serviceId, sessionsIncluded: 1 }]
+        : [];
+
+    await tx.insert(customerPurchaseService).values(
+      filasDeServicioComprado(input.sessionsTotal, lineas).map((f) => ({
         customerPurchaseId: compra.id,
-        sessionNumber: i + 1,
+        serviceId: f.serviceId,
+        repeticion: f.repeticion,
+        orden: f.orden,
       })),
     );
 
