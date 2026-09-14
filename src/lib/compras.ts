@@ -1,16 +1,17 @@
 /**
- * El estado de una compra y de sus sesiones.
+ * El estado de una compra y de sus servicios comprados.
  *
- * `customer_purchase_session` NO tiene columna de estado, y por eso no puede
- * desincronizarse: se deriva. Un turno cancelado devuelve la sesión a
- * *disponible* sin que nadie escriba nada — la condición deja de cumplirse.
+ * `customer_purchase_service` NO tiene columna de estado, y por eso no puede
+ * desincronizarse: se deriva. Un turno cancelado devuelve el servicio
+ * comprado a *disponible* sin que nadie escriba nada — la condición deja de
+ * cumplirse.
  *
  * Lógica pura, sin base de datos.
  */
 
 export type EstadoSesion = "consumida" | "perdida" | "agendada" | "vencida" | "disponible";
 
-export type SesionCruda = {
+export type ServicioCompradoCrudo = {
   consumedAt: Date | null;
   appointmentId: string | null;
   /** El estado del turno. Un turno cancelado o ausente no reserva la sesión. */
@@ -50,7 +51,7 @@ const AUSENTE = "no_show";
  * 5. **Disponible** en cualquier otro caso.
  */
 export function estadoDeSesion(
-  sesion: SesionCruda,
+  sesion: ServicioCompradoCrudo,
   compra: VigenciaCompra,
   ahora: Date,
 ): EstadoSesion {
@@ -84,15 +85,15 @@ export type ResumenCompra = {
 };
 
 /**
- * Los números de una compra: cuántas sesiones en cada estado, cuánto se pagó y
- * cuánto falta.
+ * Los números de una compra: cuántos servicios comprados en cada estado,
+ * cuánto se pagó y cuánto falta.
  *
  * `pagos` son los montos de los `payments` CONFIRMADOS de esta compra — el
  * saldo tiene una sola definición y es esta.
  */
 export function resumenDeCompra(
   compra: { finalAmount: number } & VigenciaCompra,
-  sesiones: readonly SesionCruda[],
+  sesiones: readonly ServicioCompradoCrudo[],
   pagos: readonly number[],
   ahora: Date,
 ): ResumenCompra {

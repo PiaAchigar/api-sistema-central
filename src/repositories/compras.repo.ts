@@ -10,6 +10,7 @@ import {
   lineItems,
   payments,
   promotions,
+  service,
 } from "../db/schema";
 import { estadoDeSesion, resumenDeCompra, type EstadoSesion } from "../lib/compras";
 import { razonesParaNoBorrarCompra, type ImpactoDeBorrado } from "../lib/compra-borrado";
@@ -93,7 +94,7 @@ export async function createCompra(db: Db, input: CompraInput) {
       "Una compra tiene exactamente un origen: combo, servicio, combo de depilación o capacitación",
     );
   }
-  if (input.sessionsTotal < 1) throw new Error("La compra necesita al menos una sesión");
+  if (input.sessionsTotal < 1) throw new Error("La compra necesita al menos una repetición");
 
   return db.transaction(async (tx) => {
     const filas = await tx
@@ -197,9 +198,12 @@ async function aplicarSaldoAFavor(tx: Db, compraId: string, input: CompraInput):
   return plan.conSaldo;
 }
 
-export type SesionLeida = {
+export type ServicioLeido = {
   id: string;
-  sessionNumber: number | null;
+  serviceId: string | null;
+  serviceName: string | null;
+  repeticion: number | null;
+  orden: number | null;
   appointmentId: string | null;
   appointmentStart: Date | null;
   consumedAt: Date | null;
@@ -207,7 +211,7 @@ export type SesionLeida = {
 };
 
 /**
- * Las compras de una clienta, con sus sesiones y sus números.
+ * Las compras de una clienta, con sus servicios comprados y sus vueltas.
  *
  * Trae las tres consultas de una y arma todo en memoria: hacerlo por compra
  * sería N+1 sobre la ficha de la clienta, que es la pantalla que más se abre.
@@ -226,17 +230,21 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
   const [sesiones, pagos, devoluciones] = await Promise.all([
     db
       .select({
-        id: customerPurchaseSession.id,
-        customerPurchaseId: customerPurchaseSession.customerPurchaseId,
-        sessionNumber: customerPurchaseSession.sessionNumber,
-        appointmentId: customerPurchaseSession.appointmentId,
-        consumedAt: customerPurchaseSession.consumedAt,
+        id: customerPurchaseService.id,
+        customerPurchaseId: customerPurchaseService.customerPurchaseId,
+        serviceId: customerPurchaseService.serviceId,
+        serviceName: service.name,
+        repeticion: customerPurchaseService.repeticion,
+        orden: customerPurchaseService.orden,
+        appointmentId: customerPurchaseService.appointmentId,
+        consumedAt: customerPurchaseService.consumedAt,
         appointmentStatus: appointments.status,
         appointmentStart: appointments.appointmentStart,
       })
-      .from(customerPurchaseSession)
-      .leftJoin(appointments, eq(appointments.id, customerPurchaseSession.appointmentId))
-      .where(inArray(customerPurchaseSession.customerPurchaseId, ids)),
+      .from(customerPurchaseService)
+      .leftJoin(service, eq(service.id, customerPurchaseService.serviceId))
+      .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
+      .where(inArray(customerPurchaseService.customerPurchaseId, ids)),
     db
       .select({
         customerPurchaseId: payments.customerPurchaseId,
@@ -315,11 +323,19 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
       devuelta: misDevoluciones.length > 0,
       devuelto,
       ...resumen,
-      sessions: mias
-        .sort((a, b) => (a.sessionNumber ?? 0) - (b.sessionNumber ?? 0))
-        .map((s): SesionLeida => ({
+      servicios: mias
+        // Vuelta por vuelta, y dentro de cada vuelta el orden de inserción: es
+        // como la ficha los agrupa, así no hay que reordenar en el navegador.
+        .sort(
+          (a, b) =>
+            (a.repeticion ?? 0) - (b.repeticion ?? 0) || (a.orden ?? 0) - (b.orden ?? 0),
+        )
+        .map((s): ServicioLeido => ({
           id: s.id,
-          sessionNumber: s.sessionNumber,
+          serviceId: s.serviceId,
+          serviceName: s.serviceName,
+          repeticion: s.repeticion,
+          orden: s.orden,
           appointmentId: s.appointmentId,
           appointmentStart: s.appointmentStart,
           consumedAt: s.consumedAt,
@@ -392,13 +408,13 @@ async function acreditarSobranteDeCompra(
   const [usadas] = await tx
     .select({
       total: sql<number>`count(*) filter (
-        where ${customerPurchaseSession.consumedAt} is not null
+        where ${customerPurchaseService.consumedAt} is not null
            or ${appointments.status} = 'no_show'
       )`,
     })
-    .from(customerPurchaseSession)
-    .leftJoin(appointments, eq(appointments.id, customerPurchaseSession.appointmentId))
-    .where(eq(customerPurchaseSession.customerPurchaseId, compra.id));
+    .from(customerPurchaseService)
+    .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
+    .where(eq(customerPurchaseService.customerPurchaseId, compra.id));
 
   const monto = saldoAAcreditar({
     pagado: Number(cobrado?.total ?? 0),
@@ -468,11 +484,11 @@ export async function getCompraDeleteImpact(db: Db, id: string): Promise<Impacto
       .where(eq(lineItems.customerPurchaseId, id)),
     db
       .select({
-        agendadas: sql<number>`count(*) filter (where ${customerPurchaseSession.appointmentId} is not null)`,
-        consumidas: sql<number>`count(*) filter (where ${customerPurchaseSession.consumedAt} is not null)`,
+        agendadas: sql<number>`count(*) filter (where ${customerPurchaseService.appointmentId} is not null)`,
+        consumidas: sql<number>`count(*) filter (where ${customerPurchaseService.consumedAt} is not null)`,
       })
-      .from(customerPurchaseSession)
-      .where(eq(customerPurchaseSession.customerPurchaseId, id)),
+      .from(customerPurchaseService)
+      .where(eq(customerPurchaseService.customerPurchaseId, id)),
     // Movimientos de saldo a favor. Sin esto el DELETE reventaba contra el FK
     // de la 1.46.0 con un error crudo de Postgres en vez de un motivo legible.
     db
@@ -492,7 +508,7 @@ export async function getCompraDeleteImpact(db: Db, id: string): Promise<Impacto
 }
 
 /**
- * Borra una compra para siempre, con sus sesiones.
+ * Borra una compra para siempre, con sus servicios comprados.
  *
  * Vuelve a calcular el impacto acá aunque la pantalla ya lo haya consultado:
  * entre que se abre el cartel y se confirma le puede haber entrado un cobro, y
@@ -506,11 +522,12 @@ export async function deleteCompraPermanently(db: Db, id: string): Promise<strin
   if (motivos.length > 0) return motivos;
 
   await db.transaction(async (tx) => {
-    // Las sesiones tienen ON DELETE CASCADE, pero se borran explícitamente:
-    // depender de la cascada obliga a leer el DDL para entender qué pasa acá.
+    // Los servicios comprados tienen ON DELETE CASCADE, pero se borran
+    // explícitamente: depender de la cascada obliga a leer el DDL para
+    // entender qué pasa acá.
     await tx
-      .delete(customerPurchaseSession)
-      .where(eq(customerPurchaseSession.customerPurchaseId, id));
+      .delete(customerPurchaseService)
+      .where(eq(customerPurchaseService.customerPurchaseId, id));
     await tx.delete(customerPurchase).where(eq(customerPurchase.id, id));
   });
   return [];
@@ -552,13 +569,13 @@ export async function getEstadoDeDevolucion(db: Db, id: string): Promise<CompraP
     db
       .select({
         total: sql<number>`count(*) filter (
-          where ${customerPurchaseSession.consumedAt} is not null
+          where ${customerPurchaseService.consumedAt} is not null
              or ${appointments.status} = 'no_show'
         )`,
       })
-      .from(customerPurchaseSession)
-      .leftJoin(appointments, eq(appointments.id, customerPurchaseSession.appointmentId))
-      .where(eq(customerPurchaseSession.customerPurchaseId, id)),
+      .from(customerPurchaseService)
+      .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
+      .where(eq(customerPurchaseService.customerPurchaseId, id)),
     db
       .select({ n: count() })
       .from(customerCreditMovements)
