@@ -21,7 +21,7 @@ import { getActiveAgreement } from "../repositories/providers.repo";
 import { getServiceById } from "../repositories/services.repo";
 import { loadAvailabilityContext } from "./availability.service";
 import { consumirInsumos } from "./consumo.service";
-import { consumirSesionDelTurno, tomarSesion } from "../repositories/consumo.repo";
+import { consumirServicioDelTurno, tomarServicio } from "../repositories/consumo.repo";
 import { registerDeposit, type DepositInput } from "./deposits.service";
 import type { ArcaConfig } from "../arca/factory";
 
@@ -38,14 +38,15 @@ export type CreateAppointmentInput = {
   /** Seña cobrada al reservar: se factura a ARCA y queda a favor del cliente. */
   deposit?: DepositInput;
   /**
-   * La sesión del pack que este turno descuenta (V3).
+   * El servicio comprado (sin fecha todavía) que este turno descuenta (V3b).
    *
    * Ausente = el turno no descuenta nada y se cobra aparte, que es el caso más
    * común. La pantalla lo completa sola cuando la clienta tiene UNA sola compra
-   * con sesiones libres para este servicio; con varias, lo elige Laura
-   * (reglas §3.8).
+   * con servicios libres para este servicio; con varias, lo elige Laura
+   * (reglas §3.8). Al confirmarse el turno, ese servicio comprado pasa a ser
+   * una sesión — recién ahí tiene fecha y hora.
    */
-  customerPurchaseSessionId?: string;
+  customerPurchaseServiceId?: string;
 };
 
 export async function createAppointment(
@@ -151,14 +152,14 @@ export async function createAppointment(
       notes: input.notes ?? null,
     });
 
-    // Descontar la sesión del pack, si el turno viene atado a una compra.
+    // Descontar el servicio comprado, si el turno viene atado a una compra.
     //
     // Va DENTRO de la transacción y con su propia guarda: entre que la pantalla
     // preguntó qué había disponible y el momento de guardar, otra persona pudo
-    // haber agendado esa misma sesión. Sin el chequeo, la segunda pisaría a la
-    // primera y el pack quedaría con una sesión de más.
-    if (input.customerPurchaseSessionId) {
-      await tomarSesion(tx, input.customerPurchaseSessionId, {
+    // haber agendado ese mismo servicio comprado. Sin el chequeo, la segunda
+    // pisaría a la primera y el pack quedaría con una sesión de más.
+    if (input.customerPurchaseServiceId) {
+      await tomarServicio(tx, input.customerPurchaseServiceId, {
         appointmentId: appointment.id,
         customerId: input.customerId,
         serviceId: input.serviceId,
@@ -268,7 +269,7 @@ export async function updateAppointmentStatus(
     return db.transaction(async (tx) => {
       const updated = await updateAppointment(tx, id, values);
       const consumo = await consumirInsumos(tx, id, appt.serviceId);
-      await consumirSesionDelTurno(tx, id, new Date());
+      await consumirServicioDelTurno(tx, id, new Date());
       return { ...updated, consumo };
     });
   }

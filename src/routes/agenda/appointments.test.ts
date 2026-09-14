@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { appointmentsRouter } from "./appointments";
+import { appointmentsRouter, createBody } from "./appointments";
+
+describe("el cuerpo del turno nuevo", () => {
+  /**
+   * V3b (Task 5): lo que el turno descuenta al agendar es un servicio
+   * comprado sin fecha todavía — no una sesión, que es justamente lo que
+   * este turno le da al confirmarse. El campo del body sigue ese vocabulario.
+   */
+  it("acepta customerPurchaseServiceId", () => {
+    const ok = createBody.safeParse({
+      customerId: "11111111-1111-1111-1111-111111111111",
+      serviceId: "22222222-2222-2222-2222-222222222222",
+      providerId: "33333333-3333-3333-3333-333333333333",
+      start: "2026-09-20T13:00:00.000Z",
+      customerPurchaseServiceId: "44444444-4444-4444-4444-444444444444",
+    });
+    expect(ok.success).toBe(true);
+    // z.object() sin .strict() descarta claves desconocidas en vez de
+    // rechazarlas: un success:true no alcanza para probar que el campo
+    // existe en el schema. Hay que ver que sobrevive el parseo.
+    if (ok.success) {
+      expect(ok.data.customerPurchaseServiceId).toBe("44444444-4444-4444-4444-444444444444");
+    }
+  });
+});
 
 describe("el orden de las rutas", () => {
   /**

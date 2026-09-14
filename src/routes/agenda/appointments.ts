@@ -107,7 +107,7 @@ appointmentsRouter.get("/:id", requireAuth, async (c) => {
   });
 });
 
-const createBody = z.object({
+export const createBody = z.object({
   customerId: z.string().uuid(),
   serviceId: z.string().uuid(),
   providerId: z.string().uuid(),
@@ -117,9 +117,10 @@ const createBody = z.object({
   notes: z.string().max(1000).optional(),
   status: z.enum(["scheduled", "reserved"]).optional(),
   expiryMinutes: z.number().int().min(5).max(480).optional(),
-  /** La sesión del pack que este turno descuenta (V3). Sin esto, no descuenta
-   *  nada y el turno se cobra aparte, que es el caso más común. */
-  customerPurchaseSessionId: z.string().uuid().optional(),
+  /** El servicio comprado (sin fecha todavía) que este turno descuenta (V3b).
+   *  Sin esto, no descuenta nada y el turno se cobra aparte, que es el caso
+   *  más común. */
+  customerPurchaseServiceId: z.string().uuid().optional(),
   deposit: z
     .object({
       amount: z.number().positive(),
