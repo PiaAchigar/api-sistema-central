@@ -84,7 +84,7 @@ services:
       # Cada migración de ESQUEMA nueva se agrega acá arriba; el seed va último
       # porque Postgres corre /docker-entrypoint-initdb.d en orden alfabético.
       - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/40-seed.sql:ro
-      - ./src/db/migrations/1.51.0/01-servicio-comprado.sql:/docker-entrypoint-initdb.d/40-servicio-comprado.sql:ro
+      - ./src/db/migrations/1.51.0/01-servicio-comprado.sql:/docker-entrypoint-initdb.d/39k-servicio-comprado.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]
