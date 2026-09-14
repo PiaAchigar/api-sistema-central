@@ -225,29 +225,24 @@ export const customerPurchase = pgTable("customer_purchase", {
 });
 
 /**
- * Una sesión de una compra. SIN columna de estado: se deriva de `consumedAt`,
- * `appointmentId` y la vigencia de la compra (ver `lib/compras.ts`), así que no
- * puede desincronizarse. Un turno cancelado devuelve la sesión a disponible
- * sin que nadie escriba nada.
+ * Un servicio comprado. Cuando tiene `appointmentId`, ESA fila es una sesión
+ * — ver el vocabulario del spec 2026-09-11 §2: la sesión es un servicio con
+ * fecha y hora, no la vuelta del pack.
+ *
+ * Reemplaza a `customer_purchase_session` (1.51.0), que guardaba una fila por
+ * repetición y por eso no podía con un combo de dos servicios.
  */
-export const customerPurchaseSession = pgTable("customer_purchase_session", {
+export const customerPurchaseService = pgTable("customer_purchase_service", {
   id: id(),
   customerPurchaseId: uuid("customer_purchase_id"),
-  sessionNumber: integer("session_number"),
+  serviceId: uuid("service_id"),
+  repeticion: integer("repeticion"),
+  orden: integer("orden"),
   appointmentId: uuid("appointment_id"),
   consumedAt: timestamp("consumed_at"),
   notes: text("notes"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
-
-/** Qué se eligió en una sesión de un combo "a elección". Los fijos no la usan. */
-export const customerPurchaseSessionService = pgTable("customer_purchase_session_service", {
-  id: id(),
-  sessionId: uuid("session_id"),
-  serviceId: uuid("service_id"),
-  minutes: integer("minutes"),
-  createdAt: createdAt(),
 });
 
 /**
