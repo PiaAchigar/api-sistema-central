@@ -56,12 +56,22 @@ export type CompraCancelada = {
 };
 
 /**
- * Lo que vale UNA de las cosas que entran en esta compra.
+ * Lo que vale UNO de los servicios comprados de esta compra.
  *
  * El denominador es la cantidad de filas de `customer_purchase_service`, no
  * las repeticiones: ver `totalDeServicios`.
+ *
+ * **No se llama `valorDeUnaSesion`** (revisión final de V3b, 2026-09-14). Se
+ * llamaba así, y era la misma trampa que causó el bug del prorrateo en chico:
+ * lo que reparte el precio es el servicio comprado, tenga turno o no. Una
+ * *sesión* es un servicio que YA tiene fecha y hora, y acá se divide entre
+ * todos —los agendados y los que están a agendar—, así que el nombre viejo
+ * describía mal justo el número del que cuelga la plata.
  */
-export function valorDeUnaSesion(finalAmount: number, totalDeServicios: number): number {
+export function valorDeUnServicioComprado(
+  finalAmount: number,
+  totalDeServicios: number,
+): number {
   return totalDeServicios <= 0 ? 0 : finalAmount / totalDeServicios;
 }
 
@@ -88,7 +98,7 @@ export function saldoAAcreditar(compra: CompraCancelada): number {
   if (compra.totalDeServicios <= 0) return compra.pagado;
 
   const valorConsumido = Math.round(
-    valorDeUnaSesion(compra.finalAmount, compra.totalDeServicios) * compra.consumidas,
+    valorDeUnServicioComprado(compra.finalAmount, compra.totalDeServicios) * compra.consumidas,
   );
   return Math.max(0, compra.pagado - valorConsumido);
 }

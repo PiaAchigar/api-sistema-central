@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { puedeDevolverse, saldoAAcreditar, valorDeUnaSesion } from "./saldo-de-cancelacion";
+import {
+  puedeDevolverse,
+  saldoAAcreditar,
+  valorDeUnServicioComprado,
+} from "./saldo-de-cancelacion";
 
 const PACK = { finalAmount: 166000, totalDeServicios: 3 };
 
-describe("valorDeUnaSesion", () => {
-  it("reparte el precio entre todas las sesiones", () => {
-    expect(valorDeUnaSesion(166000, 3)).toBeCloseTo(55333.33, 2);
+describe("valorDeUnServicioComprado", () => {
+  it("reparte el precio entre todos los servicios comprados", () => {
+    expect(valorDeUnServicioComprado(166000, 3)).toBeCloseTo(55333.33, 2);
   });
 
-  it("sin sesiones no divide por cero", () => {
-    expect(valorDeUnaSesion(166000, 0)).toBe(0);
+  it("sin servicios comprados no divide por cero", () => {
+    expect(valorDeUnServicioComprado(166000, 0)).toBe(0);
   });
 });
 
