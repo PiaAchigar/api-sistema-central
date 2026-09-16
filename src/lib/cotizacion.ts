@@ -21,6 +21,7 @@ import {
   type PackPolitica,
   type PrecioDeCompra,
 } from "./pack-pricing";
+import type { DestinoDePromo } from "./promo-aplica";
 
 /**
  * Algo que se puede vender, ya normalizado por el repositorio.
@@ -72,6 +73,7 @@ export type PromoVendible = {
   name: string | null;
   discountPercentage: number | null;
   discountAmount: number | null;
+  destinos: DestinoDePromo[];
 };
 
 export type Cotizacion = PrecioDeCompra & {

@@ -1,9 +1,11 @@
-import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { promotions, service, training } from "../db/schema";
+import { customerPurchase, promotionTarget, promotions, service, training } from "../db/schema";
 import { precioDeServicio } from "../lib/combo-pricing";
 import { todayLocal } from "../lib/time";
 import type { ItemVendible, PromoVendible } from "../lib/cotizacion";
+import type { DestinoDePromo } from "../lib/promo-aplica";
+import { promoAgotada, promoEstaVigente } from "../lib/promo-vigente";
 import { getComboById, listCombos } from "./combos.repo";
 import { leerConfig, listarCombos, obtenerCombo } from "./depilacion.repo";
 
@@ -227,9 +229,10 @@ export async function obtenerItemVendible(
 /**
  * Las promos que hoy se pueden aplicar a una venta.
  *
- * Mismo criterio de vigencia que `listActivePromotions` —fecha LOCAL, no UTC,
- * o una promo que vence hoy desaparece tres horas antes— pero sin armar los
- * servicios de cada una: para cotizar sólo hacen falta los dos descuentos.
+ * Filtra por vigencia (fecha LOCAL, no UTC: una promo que vence hoy no puede
+ * desaparecer tres horas antes) y por cupo (contado en vivo sobre las ventas
+ * no canceladas), y trae los destinos de cada una para que `promoAplica`
+ * pueda decidir si sirve para lo que se está vendiendo.
  */
 export async function listPromosVendibles(db: Db): Promise<PromoVendible[]> {
   const hoy = todayLocal();
@@ -239,22 +242,56 @@ export async function listPromosVendibles(db: Db): Promise<PromoVendible[]> {
       name: promotions.name,
       discountPercentage: promotions.discountPercentage,
       discountAmount: promotions.discountAmount,
+      validFrom: promotions.validFrom,
+      validUntil: promotions.validUntil,
+      usageLimit: promotions.usageLimit,
     })
     .from(promotions)
-    .where(
-      and(
-        eq(promotions.status, "active"),
-        or(isNull(promotions.validUntil), sql`${promotions.validUntil} >= ${hoy}::date`),
-      ),
-    )
+    .where(eq(promotions.status, "active"))
     .orderBy(asc(promotions.name));
 
-  return filas.map((p) => ({
-    id: p.id,
-    name: p.name,
-    discountPercentage: num(p.discountPercentage),
-    discountAmount: num(p.discountAmount),
-  }));
+  const vigentes = filas.filter((p) => promoEstaVigente(p, hoy));
+  if (vigentes.length === 0) return [];
+  const ids = vigentes.map((p) => p.id);
+
+  const [destinos, usos] = await Promise.all([
+    db
+      .select({
+        promotionId: promotionTarget.promotionId,
+        serviceId: promotionTarget.serviceId,
+        comboId: promotionTarget.comboId,
+        depilationComboId: promotionTarget.depilationComboId,
+      })
+      .from(promotionTarget)
+      .where(inArray(promotionTarget.promotionId, ids)),
+    // Cupo usado: ventas no canceladas de cada promo.
+    db
+      .select({ promotionId: customerPurchase.promotionId, usos: count() })
+      .from(customerPurchase)
+      .where(and(inArray(customerPurchase.promotionId, ids), isNull(customerPurchase.cancelledAt)))
+      .groupBy(customerPurchase.promotionId),
+  ]);
+
+  const destinosPorPromo = new Map<string, DestinoDePromo[]>();
+  for (const d of destinos) {
+    if (!d.promotionId) continue;
+    const lista = destinosPorPromo.get(d.promotionId) ?? [];
+    if (d.serviceId) lista.push({ tipo: "servicio", id: d.serviceId });
+    else if (d.comboId) lista.push({ tipo: "combo", id: d.comboId });
+    else if (d.depilationComboId) lista.push({ tipo: "depilacion", id: d.depilationComboId });
+    destinosPorPromo.set(d.promotionId, lista);
+  }
+  const usosPorPromo = new Map(usos.map((u) => [u.promotionId ?? "", Number(u.usos)]));
+
+  return vigentes
+    .filter((p) => !promoAgotada(p.usageLimit, usosPorPromo.get(p.id) ?? 0))
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      discountPercentage: num(p.discountPercentage),
+      discountAmount: num(p.discountAmount),
+      destinos: destinosPorPromo.get(p.id) ?? [],
+    }));
 }
 
 /** Una promo por id, para cotizar. `null` si no existe o no está vigente. */

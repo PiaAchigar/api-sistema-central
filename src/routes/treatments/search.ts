@@ -50,7 +50,6 @@ type SearchRequest = z.infer<typeof searchRequestSchema>;
  *       "description": "...",
  *       "promotion_type": "percentage",
  *       "discount_percentage": 20,
- *       "final_amount": 18000,
  *       "status": "active",
  *       "is_featured": true,
  *       "services": [

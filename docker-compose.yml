@@ -59,6 +59,28 @@ services:
       - ./src/db/migrations/1.43.0/01-recetas.sql:/docker-entrypoint-initdb.d/39h-recetas.sql:ro
       - ./src/db/migrations/1.44.0/01-consumo-de-insumos.sql:/docker-entrypoint-initdb.d/39i-consumo-de-insumos.sql:ro
       - ./src/db/migrations/1.45.0/01-venta-de-packs.sql:/docker-entrypoint-initdb.d/39j-venta-de-packs.sql:ro
+      # 39jz1-39jz4: 1.46.0 a 1.49.0 tampoco estaban montadas (mismo bug que la
+      # 1.50.0, ver más abajo). Sin esto, a un `db:reset` de cero le faltan
+      # `customer_credit_movements.customer_purchase_id/expires_at`,
+      # `customer_purchase.training_id` (CHECK de origen único incluido) e
+      # `invoices.credit_note_of` — Drizzle asume que existen y cualquier
+      # venta con capacitación, devolución de saldo o nota de crédito revienta
+      # en runtime. Las cuatro son de esquema puro, sin UUIDs de producción.
+      #
+      # ⚠️ NO usar sufijos tipo "39ja-": el entrypoint de Postgres expande
+      # `/docker-entrypoint-initdb.d/*` con bash bajo LC_COLLATE=en_US.utf8,
+      # que compara ignorando el guion. Contra "39j-venta-de-packs.sql",
+      # "39ja-devolucion..." colisiona letra contra letra DESPUÉS de "39j" —
+      # 'a' de "ja" contra 'v' de "venta" — y "39ja" termina ordenando ANTES
+      # que "39j" (verificado el 2026-09-16: el entrypoint corrió 39ja antes
+      # que 39j y abortó con "relation customer_purchase does not exist",
+      # porque esa tabla la crea justamente el 39j que todavía no había
+      # corrido). Con un dígito antes del próximo guion ("39jz1-", "39jz2-")
+      # el orden da lo esperado — probado a mano contra la lista completa.
+      - ./src/db/migrations/1.46.0/01-devolucion-de-saldo.sql:/docker-entrypoint-initdb.d/39jz1-devolucion-de-saldo.sql:ro
+      - ./src/db/migrations/1.47.0/01-vencimiento-de-saldo.sql:/docker-entrypoint-initdb.d/39jz2-vencimiento-de-saldo.sql:ro
+      - ./src/db/migrations/1.48.0/01-vender-capacitaciones.sql:/docker-entrypoint-initdb.d/39jz3-vender-capacitaciones.sql:ro
+      - ./src/db/migrations/1.49.0/01-notas-de-credito.sql:/docker-entrypoint-initdb.d/39jz4-notas-de-credito.sql:ro
       #
       # Acá arriba van SÓLO las migraciones de ESQUEMA. Las de DATOS no se
       # montan y no es un olvido: traen UUIDs de producción hardcodeados y
@@ -76,6 +98,20 @@ services:
       # El catálogo real NO sale de correr esas migraciones: se copia de
       # producción a la base local con `scripts/traer-catalogo.sh`, que trae el
       # resultado ya cocinado. Por eso alcanza con que el ESQUEMA esté al día.
+      #
+      # 1.50.0/01-combos-por-area-y-packs.sql TAMPOCO se monta acá, y por el
+      # mismo motivo con una vuelta más: no trae UUIDs de producción, pero su
+      # bloque `DO $$` exige que YA existan las 3 categorías kind='area'
+      # (Estética, Medicina y Dermatología, Masajes y Bienestar) o revienta
+      # con `RAISE EXCEPTION`. En un volumen recién creado `categories` está
+      # vacía — el seed de juguete no las trae — así que montarla acá aborta
+      # el entrypoint entero (probado el 2026-09-16: contenedor `Exited (3)`,
+      # `npm run db:up` nunca llega a healthy). Esas 3 áreas sólo existen
+      # DESPUÉS de que `traer-catalogo.sh` copia `categories` de producción, y
+      # ese script corre DESPUÉS de que Postgres ya está healthy — nunca antes,
+      # que es lo único que permite `docker-entrypoint-initdb.d`. Por eso
+      # `traer-catalogo.sh` aplica esta migración él mismo, al final, una vez
+      # que las áreas ya están.
       #
       # 1.4.0/rag-infrastructure.sql tampoco se monta: sus columnas y tablas ya
       # las crean 1.17.0, 1.18.0 y 1.19.0, que sí están acá.

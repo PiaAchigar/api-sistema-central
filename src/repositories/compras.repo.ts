@@ -9,7 +9,6 @@ import {
   invoices,
   lineItems,
   payments,
-  promotions,
   service,
 } from "../db/schema";
 import { estadoDeSesion, resumenDeCompra, tieneTurno, type EstadoSesion } from "../lib/compras";
@@ -45,6 +44,7 @@ const compraFields = {
   baseAmount: customerPurchase.baseAmount,
   discountedAmount: customerPurchase.discountedAmount,
   promotionId: customerPurchase.promotionId,
+  promotionName: customerPurchase.promotionName,
   finalAmount: customerPurchase.finalAmount,
   purchasedAt: customerPurchase.purchasedAt,
   expiresAt: customerPurchase.expiresAt,
@@ -65,6 +65,8 @@ export type CompraInput = {
   discountedAmount: number;
   finalAmount: number;
   promotionId?: string | null;
+  /** El nombre de la promo, congelado al vender (1.53.0). */
+  promotionName?: string | null;
   expiresAt?: Date | null;
   notes?: string | null;
   /**
@@ -114,6 +116,7 @@ export async function createCompra(db: Db, input: CompraInput) {
         baseAmount: dec(input.baseAmount),
         discountedAmount: dec(input.discountedAmount),
         promotionId: input.promotionId ?? null,
+        promotionName: input.promotionName ?? null,
         finalAmount: dec(input.finalAmount),
         purchasedAt: new Date(),
         expiresAt: input.expiresAt ?? null,
@@ -225,9 +228,8 @@ export type ServicioLeido = {
  */
 export async function listComprasDeCliente(db: Db, customerId: string, ahora = new Date()) {
   const compras = await db
-    .select({ ...compraFields, promotionName: promotions.name })
+    .select({ ...compraFields, promotionName: customerPurchase.promotionName })
     .from(customerPurchase)
-    .leftJoin(promotions, eq(promotions.id, customerPurchase.promotionId))
     .where(eq(customerPurchase.customerId, customerId))
     .orderBy(desc(customerPurchase.purchasedAt));
 

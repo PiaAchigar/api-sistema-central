@@ -47,7 +47,6 @@ export type PromotionResult = {
   promotion_type: string;
   discount_percentage: number | null;
   discount_amount: number | null;
-  final_amount: number | null;
   valid_from: Date | null;
   valid_until: Date | null;
   status: string;
@@ -167,10 +166,11 @@ export async function searchTreatments(
   }));
 
   // 2. Buscar promociones que contengan los servicios encontrados.
-  // 🚨 `promotion_service` solo conoce ids de SERVICIOS: un id de actividad o
-  // capacitación no existe ahí y ensuciaría la consulta (o directamente
-  // fallaría si algún día se agrega una FK). Se filtra por kind === "service"
-  // antes de armar la lista.
+  // 🚨 `promotion_target` tiene filas de varios tipos de destino (servicio,
+  // combo, combo de depilación); acá sólo interesan las de SERVICIO. Un id de
+  // actividad o capacitación tampoco existe ahí y ensuciaría la consulta. Se
+  // filtra por kind === "service" antes de armar la lista, y en el WHERE por
+  // `service_id is not null`.
   let promotions: PromotionResult[] = [];
 
   const serviceIds = treatments.filter((t) => t.kind === "service").map((t) => t.id);
@@ -189,7 +189,6 @@ export async function searchTreatments(
           p.promotion_type,
           p.discount_percentage,
           p.discount_amount,
-          p.final_amount,
           p.valid_from,
           p.valid_until,
           p.status,
@@ -198,13 +197,14 @@ export async function searchTreatments(
             json_build_object('service_id', ps.service_id::text, 'service_name', s.name)
           ) as services
         FROM promotions p
-        JOIN promotion_service ps ON p.id = ps.promotion_id
+        JOIN promotion_target ps ON p.id = ps.promotion_id
         JOIN service s ON ps.service_id = s.id
         WHERE ps.service_id::text IN (${uuidList})
+          AND ps.service_id IS NOT NULL
           AND p.status = 'active'
           AND (p.valid_until IS NULL OR p.valid_until >= CURRENT_DATE)
         GROUP BY p.id, p.name, p.description, p.promotion_type, p.discount_percentage,
-                 p.discount_amount, p.final_amount, p.valid_from, p.valid_until,
+                 p.discount_amount, p.valid_from, p.valid_until,
                  p.status, p.is_featured
         ORDER BY p.is_featured DESC, p.valid_until ASC NULLS LAST
       `)
@@ -218,7 +218,6 @@ export async function searchTreatments(
       promotion_type: promo.promotion_type,
       discount_percentage: promo.discount_percentage ? Number(promo.discount_percentage) : null,
       discount_amount: promo.discount_amount ? Number(promo.discount_amount) : null,
-      final_amount: promo.final_amount ? Number(promo.final_amount) : null,
       valid_from: promo.valid_from,
       valid_until: promo.valid_until,
       status: promo.status,

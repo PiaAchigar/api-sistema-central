@@ -27,6 +27,7 @@ import {
   obtenerPromoVendible,
 } from "../../repositories/catalogo-venta.repo";
 import { cotizar } from "../../lib/cotizacion";
+import { promoAplica } from "../../lib/promo-aplica";
 import type { AppBindings, Variables } from "../../env";
 
 const comprasRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
@@ -108,6 +109,12 @@ comprasRouter.post(
     if (promotionId) {
       promo = await obtenerPromoVendible(db, promotionId);
       if (!promo) throw badRequest("Esa promoción no está vigente");
+      // La pantalla ya filtra, pero una pantalla abierta hace media hora
+      // puede ofrecer una promo que ya venció o se agotó. Es plata: se
+      // vuelve a chequear acá.
+      if (!promoAplica(promo.destinos, { origen, id })) {
+        throw badRequest(`La promo "${promo.name ?? ""}" no aplica a lo que estás vendiendo`);
+      }
     }
 
     try {
@@ -177,9 +184,34 @@ comprasRouter.post(
   async (c) => {
     const db = createDb(c.env);
     const b = c.req.valid("json");
+
+    // Mismo origen/id que validó el CHECK de arriba (exactamente uno de los
+    // cuatro), para poder chequear la promo contra sus destinos.
+    const origen = b.comboId
+      ? "combo"
+      : b.serviceId
+        ? "servicio"
+        : b.depilationComboId
+          ? "depilacion"
+          : "capacitacion";
+    const id = b.comboId ?? b.serviceId ?? b.depilationComboId ?? b.trainingId ?? "";
+
+    let promo = null;
+    if (b.promotionId) {
+      promo = await obtenerPromoVendible(db, b.promotionId);
+      if (!promo) throw badRequest("Esa promoción no está vigente");
+      // La pantalla ya filtra, pero una pantalla abierta hace media hora
+      // puede ofrecer una promo que ya venció o se agotó. Es plata: se
+      // vuelve a chequear acá.
+      if (!promoAplica(promo.destinos, { origen, id })) {
+        throw badRequest(`La promo "${promo.name ?? ""}" no aplica a lo que estás vendiendo`);
+      }
+    }
+
     try {
       const compra = await createCompra(db, {
         ...b,
+        promotionName: promo?.name ?? null,
         expiresAt: b.expiresAt ? new Date(b.expiresAt) : null,
       });
       return c.json(compra, 201);

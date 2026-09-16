@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import * as schema from "../db/schema";
-import { combos, promotions } from "../db/schema";
+import { combos, comboService, customerPurchase, customerPurchaseService, promotions } from "../db/schema";
 import type { Db } from "../db/client";
 import {
   createPromotion,
@@ -11,6 +11,7 @@ import {
   getPromotionById,
   updatePromotion,
 } from "./promotions.repo";
+import { createCompra } from "./compras.repo";
 
 const NOMBRE_PROMO_DE_PRUEBA = "Promo de prueba";
 
@@ -161,5 +162,82 @@ describe("getPromotionById", () => {
     const creada = await createPromotion(db, header, [{ tipo: "servicio", id: servicioId }], []);
     const leida = await getPromotionById(db, creada!.id);
     expect(leida!.destinos[0]!.nombre).toBeTruthy();
+  });
+});
+
+describe("vender con promo — invariante de servicios agendables", () => {
+  // Clienta de prueba del seed (`seed.dev.sql`), no la toca `traer-catalogo.sh`.
+  const CUSTOMER_ID_DE_PRUEBA = "dddddddd-0000-0000-0000-000000000001";
+  const COMBO_DE_VENTA = "ZZ_QA_PROMOTIONS_TEST_venta";
+
+  it("vender con promo deja los mismos servicios agendables que sin promo", async () => {
+    // La promo mueve el PRECIO, no lo que la clienta se lleva. Si esto se
+    // rompe, la clienta paga y después no puede sacar turno.
+    //
+    // `comboId` (de arriba) sirve como destino de promo en el resto de la
+    // suite, pero como combo de VENTA no alcanza: en local (`traer-catalogo.sh`
+    // sólo trae categorías/servicios, no combos) nace sin ninguna fila en
+    // `combo_service`, y `createCompra` no generaría ningún
+    // `customer_purchase_service` — la invariante quedaría probada en falso
+    // por no tener nada que comparar. Por eso este test arma SU PROPIO combo,
+    // con un servicio real adentro.
+    const [area] = await db.execute<{ id: string }>(
+      "select id from categories where kind = 'area' limit 1" as never,
+    );
+    const [comboDeVenta] = await db
+      .insert(combos)
+      .values({
+        name: COMBO_DE_VENTA,
+        priceType: "fixed",
+        fixedPrice: "1000",
+        validityMonths: 1,
+        isActive: true,
+        areaCategoryId: area!.id,
+      })
+      .returning({ id: combos.id });
+    const comboVentaId = comboDeVenta!.id;
+    await db
+      .insert(comboService)
+      .values({ comboId: comboVentaId, serviceId: servicioId, sessionsIncluded: 1, servicePrice: "1000" });
+
+    const promo = await createPromotion(db, header, [{ tipo: "combo", id: comboVentaId }], []);
+
+    const crearCompraDePrueba = (promotionId: string | null) =>
+      createCompra(db, {
+        customerId: CUSTOMER_ID_DE_PRUEBA,
+        comboId: comboVentaId,
+        description: "Compra de prueba — invariante de promo",
+        sessionsTotal: 1,
+        baseAmount: 1000,
+        discountedAmount: 1000,
+        finalAmount: promotionId ? 800 : 1000,
+        promotionId,
+        promotionName: promotionId ? (promo!.name ?? null) : null,
+      });
+
+    let conPromo: Awaited<ReturnType<typeof crearCompraDePrueba>> | undefined;
+    let sinPromo: Awaited<ReturnType<typeof crearCompraDePrueba>> | undefined;
+    try {
+      conPromo = await crearCompraDePrueba(promo!.id);
+      sinPromo = await crearCompraDePrueba(null);
+
+      const filas = (id: string) =>
+        db.execute<{ n: string }>(
+          `select count(*) n from customer_purchase_service
+            where customer_purchase_id = '${id}' and service_id is not null` as never,
+        );
+      expect((await filas(conPromo.id))[0]!.n).toBe((await filas(sinPromo.id))[0]!.n);
+    } finally {
+      const compraIds = [conPromo?.id, sinPromo?.id].filter((id): id is string => Boolean(id));
+      if (compraIds.length > 0) {
+        await db
+          .delete(customerPurchaseService)
+          .where(inArray(customerPurchaseService.customerPurchaseId, compraIds));
+        await db.delete(customerPurchase).where(inArray(customerPurchase.id, compraIds));
+      }
+      await deletePromotionPermanently(db, promo!.id);
+      await db.delete(comboService).where(eq(comboService.comboId, comboVentaId));
+      await db.delete(combos).where(eq(combos.id, comboVentaId));
+    }
   });
 });
