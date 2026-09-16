@@ -10,7 +10,7 @@
  * - **Devolución** — restrictivo. Sacar plata de la caja y dársela en la mano
  *   exige que la compra esté pagada al 100%.
  *
- * En las dos se descuenta lo mismo: los servicios que ya se hicieron. La
+ * En las dos se descuenta lo mismo: los servicios que ya se usaron. La
  * diferencia está en la puerta de entrada, no en la cuenta.
  *
  * **Y la seña, ¿cuándo se pierde?** Cuando la clienta no vuelve. No hace falta
@@ -22,68 +22,88 @@
  * Lógica pura, sin base de datos.
  */
 
+/** Un servicio comprado, para la cuenta de la cancelación. */
+export type ServicioParaSaldo = {
+  /**
+   * Lo que valía este servicio cuando se vendió, congelado en
+   * `customer_purchase_service.price`.
+   *
+   * `null` cuando la compra no se desglosa en servicios con precio propio —
+   * un pack de depilación, una capacitación—. Ahí todas las filas valen lo
+   * mismo y el reparto por partes iguales es el correcto.
+   */
+  price: number | null;
+  /**
+   * Ya se cobró: la clienta se lo hizo, o lo perdió por no venir. Los dos
+   * cuentan igual — el turno ocupó una hora que nadie más pudo usar (regla de
+   * Laura, 2026-09-09). Los agendados NO: todavía no pasó nada.
+   */
+  usado: boolean;
+};
+
 export type CompraCancelada = {
   /** Lo efectivamente COBRADO. Sólo se puede dejar a favor lo que entró. */
   pagado: number;
-  /** El precio de la compra. Define dos cosas: cuánto vale cada servicio
-   *  entregado, y si el pago fue completo (que habilita la devolución). */
+  /** El precio de la compra. */
   finalAmount: number;
-  /**
-   * Cuántas FILAS de `customer_purchase_service` tiene la compra: el total de
-   * cosas que la clienta compró y puede agendar.
-   *
-   * **No es `sessions_total`** y por eso no se llama así (revisión final de
-   * V3b, 2026-09-14). `sessions_total` son las REPETICIONES de la compra;
-   * hasta V3b los dos números coincidían y el campo se llamaba `sessionsTotal`
-   * sin que molestara. Desde que la unidad de consumo es el servicio ya no
-   * coinciden: un combo de 2 servicios vendido suelto tiene `sessions_total`
-   * 1 y DOS filas, y un pack de 3 de ese combo tiene 3 y SEIS.
-   *
-   * Prorratear por las repeticiones inflaba lo consumido —siempre en el mismo
-   * sentido, porque las filas son ≥ que las repeticiones— y le acreditaba de
-   * menos a la clienta: el combo de $213.200 con un servicio hecho le dejaba
-   * $0 a favor en vez de $106.600.
-   */
-  totalDeServicios: number;
-  /**
-   * Servicios ya USADOS: los consumidos más los PERDIDOS por ausente. Los dos
-   * se cobraron — uno porque el tratamiento se hizo, el otro porque el turno
-   * ocupó una hora que nadie más pudo usar (regla de Laura, 2026-09-09).
-   *
-   * Los agendados NO cuentan: todavía no pasó nada.
-   */
-  consumidas: number;
+  /** Los servicios comprados, con su precio y si ya se usaron. */
+  servicios: readonly ServicioParaSaldo[];
 };
 
 /**
- * Lo que vale UNO de los servicios comprados de esta compra.
+ * Qué proporción de la compra se llevó la clienta.
  *
- * El denominador es la cantidad de filas de `customer_purchase_service`, no
- * las repeticiones: ver `totalDeServicios`.
+ * **Pesa por PRECIO, no por cantidad, y esa es toda la corrección** (Pia,
+ * 2026-09-16). Repartir en partes iguales sólo es correcto cuando todas las
+ * partes valen lo mismo. En el Combo1-prueba de producción no: Baby Botox
+ * $249.000 contra una depilación facial de $17.500. Cancelarlo con el Botox
+ * hecho devolvía la mitad —$106.600— por un servicio de $17.500: Laura
+ * regalaba $92.000 por cancelación.
  *
- * **No se llama `valorDeUnaSesion`** (revisión final de V3b, 2026-09-14). Se
- * llamaba así, y era la misma trampa que causó el bug del prorrateo en chico:
- * lo que reparte el precio es el servicio comprado, tenga turno o no. Una
- * *sesión* es un servicio que YA tiene fecha y hora, y acá se divide entre
- * todos —los agendados y los que están a agendar—, así que el nombre viejo
- * describía mal justo el número del que cuelga la plata.
+ * **No hace falta distinguir pack de combo.** Cuando todos los precios son
+ * iguales —un pack del mismo servicio— la proporción de precio ES la
+ * proporción de cantidad, así que el pack sigue dando exactamente lo que daba
+ * antes. Una sola regla, sin ramas.
+ *
+ * Se cuenta en vez de pesar cuando no hay precios utilizables: o no se
+ * cargaron (depilación, capacitaciones), o suman cero — hay 9 servicios
+ * activos en producción sin ningún precio, y dividir por cero sería peor que
+ * repartir en partes iguales.
  */
-export function valorDeUnServicioComprado(
+export function proporcionUsada(servicios: readonly ServicioParaSaldo[]): number {
+  if (servicios.length === 0) return 0;
+
+  const utilizables = servicios.every((s) => typeof s.price === "number" && isFinite(s.price));
+  if (utilizables) {
+    const total = servicios.reduce((suma, s) => suma + (s.price ?? 0), 0);
+    if (total > 0) {
+      const usado = servicios.reduce((suma, s) => suma + (s.usado ? (s.price ?? 0) : 0), 0);
+      return usado / total;
+    }
+  }
+
+  return servicios.filter((s) => s.usado).length / servicios.length;
+}
+
+/**
+ * Cuánta plata de la compra se llevó la clienta en servicios.
+ *
+ * Se redondea UNA sola vez, acá, y el crédito es el resto: así nunca se
+ * acredita más de lo que entró por un peso de redondeo.
+ */
+export function valorDeLoUsado(
   finalAmount: number,
-  totalDeServicios: number,
+  servicios: readonly ServicioParaSaldo[],
 ): number {
-  return totalDeServicios <= 0 ? 0 : finalAmount / totalDeServicios;
+  return Math.round(finalAmount * proporcionUsada(servicios));
 }
 
 /**
  * El saldo a favor que deja una cancelación: lo pagado menos lo que valen los
- * servicios que ya se hicieron.
+ * servicios que ya se usaron.
  *
  * Se aplica SIEMPRE, haya pagado una seña o todo. Una seña también es plata de
  * la clienta y le queda a favor por si quiere cambiar de tratamiento.
- *
- * Se redondea UNA sola vez, sobre lo consumido, y el crédito es el resto: así
- * nunca se acredita más de lo que entró por un peso de redondeo.
  *
  * **Nunca negativo.** Con el mínimo del 40% una clienta puede haberse hecho
  * servicios que valen más de lo que pagó; ahí el saldo es cero. La deuda que
@@ -95,12 +115,9 @@ export function saldoAAcreditar(compra: CompraCancelada): number {
   // Sin servicios comprados no hay nada que prorratear: vuelve todo lo pagado.
   // No debería pasar (toda compra crea al menos una fila), pero quedarse con
   // la plata sería lo peor de las dos opciones.
-  if (compra.totalDeServicios <= 0) return compra.pagado;
+  if (compra.servicios.length === 0) return compra.pagado;
 
-  const valorConsumido = Math.round(
-    valorDeUnServicioComprado(compra.finalAmount, compra.totalDeServicios) * compra.consumidas,
-  );
-  return Math.max(0, compra.pagado - valorConsumido);
+  return Math.max(0, compra.pagado - valorDeLoUsado(compra.finalAmount, compra.servicios));
 }
 
 /**
@@ -109,9 +126,6 @@ export function saldoAAcreditar(compra: CompraCancelada): number {
  * La condición es una sola: que esté pagada al 100%. Una seña no se devuelve
  * en efectivo — queda a favor, que es otra cosa. `>=` y no `===` porque si se
  * cobró de más, con más razón está paga.
- *
- * Lo que se devuelve es `saldoAAcreditar`: el mismo descuento por servicios
- * consumidos. La puerta es distinta; la cuenta es la misma.
  */
 export function puedeDevolverse(compra: Pick<CompraCancelada, "pagado" | "finalAmount">): boolean {
   return compra.pagado > 0 && compra.pagado >= compra.finalAmount;

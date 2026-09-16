@@ -693,5 +693,12 @@ export async function lineasParaVender(db: Db, comboId: string): Promise<LineaDe
   const lineas = await linesFor(db, origen);
   return lineas
     .filter((l): l is typeof l & { serviceId: string } => l.serviceId != null)
-    .map((l) => ({ serviceId: l.serviceId, sessionsIncluded: l.sessionsIncluded ?? 1 }));
+    .map((l) => ({
+      serviceId: l.serviceId,
+      sessionsIncluded: l.sessionsIncluded ?? 1,
+      // El precio congelado del renglón. Es el mismo con el que se calculó el
+      // subtotal del combo, así que las partes suman exactamente el precio
+      // que la clienta pagó (1.52.0).
+      price: l.servicePrice == null ? null : Number(l.servicePrice),
+    }));
 }

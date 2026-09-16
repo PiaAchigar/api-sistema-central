@@ -85,6 +85,8 @@ services:
       # porque Postgres corre /docker-entrypoint-initdb.d en orden alfabético.
       - ./src/db/seed.dev.sql:/docker-entrypoint-initdb.d/40-seed.sql:ro
       - ./src/db/migrations/1.51.0/01-servicio-comprado.sql:/docker-entrypoint-initdb.d/39k-servicio-comprado.sql:ro
+      # 39m: después de la 1.51.0 que crea la tabla, y antes del seed (40-).
+      - ./src/db/migrations/1.52.0/01-precio-del-servicio-comprado.sql:/docker-entrypoint-initdb.d/39m-precio-del-servicio-comprado.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]

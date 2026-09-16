@@ -14,7 +14,7 @@ import {
 } from "../db/schema";
 import { estadoDeSesion, resumenDeCompra, tieneTurno, type EstadoSesion } from "../lib/compras";
 import { razonesParaNoBorrarCompra, type ImpactoDeBorrado } from "../lib/compra-borrado";
-import { saldoAAcreditar } from "../lib/saldo-de-cancelacion";
+import { saldoAAcreditar, type ServicioParaSaldo } from "../lib/saldo-de-cancelacion";
 import { planDePagoConSaldo } from "../lib/pago-con-saldo";
 import { vencimientoPara } from "../lib/vencimiento-de-saldo";
 import { comprobantesDeDevolucion, repartirDevolucion } from "../lib/devolucion-declarada";
@@ -128,7 +128,9 @@ export async function createCompra(db: Db, input: CompraInput) {
     const lineas: LineaDeCombo[] = input.comboId
       ? await lineasParaVender(tx, input.comboId)
       : input.serviceId
-        ? [{ serviceId: input.serviceId, sessionsIncluded: 1 }]
+        ? // Sin precio a propósito: todas las filas son el mismo servicio, así
+          // que el reparto en partes iguales ya da lo correcto.
+          [{ serviceId: input.serviceId, sessionsIncluded: 1, price: null }]
         : [];
 
     await tx.insert(customerPurchaseService).values(
@@ -137,6 +139,7 @@ export async function createCompra(db: Db, input: CompraInput) {
         serviceId: f.serviceId,
         repeticion: f.repeticion,
         orden: f.orden,
+        price: f.price == null ? null : String(f.price),
       })),
     );
 
@@ -394,6 +397,39 @@ export async function cancelCompra(db: Db, id: string, motivo?: string | null) {
 }
 
 /**
+ * Los servicios comprados de una compra, con lo que valen y si ya se usaron.
+ *
+ * Es lo que necesita la cuenta de la cancelación, y lo necesitan las DOS
+ * puertas por las que sale plata —el saldo a favor y la devolución en
+ * efectivo—, así que sale de un solo lugar.
+ *
+ * **Usado** es consumido O perdido por ausente. El ausente cuenta como usado:
+ * el turno ocupó una hora que nadie más pudo usar (regla de Laura,
+ * 2026-09-09). Agendado no cuenta: todavía no pasó nada.
+ *
+ * **`price` puede venir en NULL** —depilación, capacitaciones, y cualquier
+ * compra anterior a la 1.52.0 que no se haya podido rellenar— y ahí
+ * `proporcionUsada` reparte en partes iguales, que para esas compras es lo
+ * correcto.
+ */
+async function serviciosParaSaldo(tx: Db, compraId: string): Promise<ServicioParaSaldo[]> {
+  const filas = await tx
+    .select({
+      price: customerPurchaseService.price,
+      consumedAt: customerPurchaseService.consumedAt,
+      estadoDelTurno: appointments.status,
+    })
+    .from(customerPurchaseService)
+    .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
+    .where(eq(customerPurchaseService.customerPurchaseId, compraId));
+
+  return filas.map((f) => ({
+    price: f.price == null ? null : Number(f.price),
+    usado: f.consumedAt != null || f.estadoDelTurno === "no_show",
+  }));
+}
+
+/**
  * Le acredita a la clienta lo que pagó por sesiones que no llegó a usar.
  *
  * Devuelve cuánto se acreditó (0 si no había nada), para que la pantalla pueda
@@ -423,23 +459,10 @@ async function acreditarSobranteDeCompra(
   //   servicios vendido suelto tiene `sessions_total` 1 y dos filas; contar
   //   por repeticiones le acreditaba a la clienta $0 donde le tocaban $106.600
   //   (revisión final de V3b, 2026-09-14).
-  const [cuentas] = await tx
-    .select({
-      usadas: sql<number>`count(*) filter (
-        where ${customerPurchaseService.consumedAt} is not null
-           or ${appointments.status} = 'no_show'
-      )`,
-      todos: sql<number>`count(*)`,
-    })
-    .from(customerPurchaseService)
-    .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
-    .where(eq(customerPurchaseService.customerPurchaseId, compra.id));
-
   const monto = saldoAAcreditar({
     pagado: Number(cobrado?.total ?? 0),
     finalAmount: Number(compra.finalAmount ?? 0),
-    totalDeServicios: Number(cuentas?.todos ?? 0),
-    consumidas: Number(cuentas?.usadas ?? 0),
+    servicios: await serviciosParaSaldo(tx, compra.id),
   });
   if (monto <= 0) return 0;
 
@@ -579,24 +602,12 @@ export async function getEstadoDeDevolucion(db: Db, id: string): Promise<CompraP
     .limit(1);
   if (!compra) return null;
 
-  const [cobrado, cuentas, devuelta, cliente] = await Promise.all([
+  const [cobrado, servicios, devuelta, cliente] = await Promise.all([
     db
       .select({ total: sql<string>`coalesce(sum(${payments.amount}), 0)` })
       .from(payments)
       .where(and(eq(payments.customerPurchaseId, id), eq(payments.status, "confirmed"))),
-    // Las usadas y el TOTAL de filas, juntas. El total es el denominador del
-    // prorrateo y no es `sessions_total`: ver `acreditarSobranteDeCompra`.
-    db
-      .select({
-        usadas: sql<number>`count(*) filter (
-          where ${customerPurchaseService.consumedAt} is not null
-             or ${appointments.status} = 'no_show'
-        )`,
-        todos: sql<number>`count(*)`,
-      })
-      .from(customerPurchaseService)
-      .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
-      .where(eq(customerPurchaseService.customerPurchaseId, id)),
+    serviciosParaSaldo(db, id),
     db
       .select({ n: count() })
       .from(customerCreditMovements)
@@ -613,8 +624,7 @@ export async function getEstadoDeDevolucion(db: Db, id: string): Promise<CompraP
     cancelada: compra.cancelledAt != null,
     pagado: Number(cobrado[0]?.total ?? 0),
     finalAmount: Number(compra.finalAmount ?? 0),
-    totalDeServicios: Number(cuentas[0]?.todos ?? 0),
-    usadas: Number(cuentas[0]?.usadas ?? 0),
+    servicios,
     saldoDisponible: Number(cliente?.creditBalance ?? 0),
     yaDevuelta: Number(devuelta[0]?.n ?? 0) > 0,
   };

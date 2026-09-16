@@ -12,17 +12,15 @@
  * Lógica pura, sin base de datos. Mismo patrón que `compra-borrado.ts`.
  */
 
-import { puedeDevolverse, saldoAAcreditar } from "./saldo-de-cancelacion";
+import { puedeDevolverse, saldoAAcreditar, type ServicioParaSaldo } from "./saldo-de-cancelacion";
 
 export type CompraParaDevolver = {
   cancelada: boolean;
   pagado: number;
   finalAmount: number;
-  /** Cuántas filas de `customer_purchase_service` tiene la compra. NO es
-   *  `sessions_total`: ver `CompraCancelada.totalDeServicios`. */
-  totalDeServicios: number;
-  /** Servicios consumidos + perdidos por ausente. Los dos ya se cobraron. */
-  usadas: number;
+  /** Los servicios comprados, con su precio y si ya se usaron. Se devuelve el
+   *  valor de los que NO se usaron: ver `proporcionUsada`. */
+  servicios: readonly ServicioParaSaldo[];
   /** El saldo a favor que le queda HOY a la clienta. */
   saldoDisponible: number;
   yaDevuelta: boolean;
@@ -77,8 +75,7 @@ export function montoADevolver(c: CompraParaDevolver): number {
   const teorico = saldoAAcreditar({
     pagado: c.pagado,
     finalAmount: c.finalAmount,
-    totalDeServicios: c.totalDeServicios,
-    consumidas: c.usadas,
+    servicios: c.servicios,
   });
   return Math.max(0, Math.min(teorico, c.saldoDisponible));
 }

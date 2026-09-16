@@ -12,19 +12,30 @@ const DEPI = "svc-depilacion-facial";
 describe("filasDeServicioComprado", () => {
   it("un combo de 2 servicios vendido suelto da 2 filas, las dos de la vuelta 1", () => {
     const filas = filasDeServicioComprado(1, [
-      { serviceId: BABY, sessionsIncluded: 1 },
-      { serviceId: DEPI, sessionsIncluded: 1 },
+      { serviceId: BABY, sessionsIncluded: 1, price: 249000 },
+      { serviceId: DEPI, sessionsIncluded: 1, price: 17500 },
     ]);
     expect(filas).toEqual([
-      { serviceId: BABY, repeticion: 1, orden: 1 },
-      { serviceId: DEPI, repeticion: 1, orden: 1 },
+      { serviceId: BABY, repeticion: 1, orden: 1, price: 249000 },
+      { serviceId: DEPI, repeticion: 1, orden: 1, price: 17500 },
     ]);
+  });
+
+  it("cada fila se lleva el precio de SU servicio, no un promedio", () => {
+    // Es lo que hace que al cancelar la clienta reciba lo que vale el servicio
+    // que no usó. Sin esto, un combo de $249.000 + $17.500 se repartía por la
+    // mitad y Laura regalaba $92.000 (1.52.0).
+    const filas = filasDeServicioComprado(2, [
+      { serviceId: BABY, sessionsIncluded: 1, price: 249000 },
+      { serviceId: DEPI, sessionsIncluded: 1, price: 17500 },
+    ]);
+    expect(filas.map((f) => f.price)).toEqual([249000, 17500, 249000, 17500]);
   });
 
   it("un pack de 3 de ese combo da 6 filas: 3 vueltas por 2 servicios", () => {
     const filas = filasDeServicioComprado(3, [
-      { serviceId: BABY, sessionsIncluded: 1 },
-      { serviceId: DEPI, sessionsIncluded: 1 },
+      { serviceId: BABY, sessionsIncluded: 1, price: 249000 },
+      { serviceId: DEPI, sessionsIncluded: 1, price: 17500 },
     ]);
     expect(filas).toHaveLength(6);
     expect(filas.filter((f) => f.serviceId === BABY)).toHaveLength(3);
@@ -32,28 +43,28 @@ describe("filasDeServicioComprado", () => {
   });
 
   it("un servicio suelto con 3 sesiones da 3 filas del mismo servicio", () => {
-    const filas = filasDeServicioComprado(3, [{ serviceId: BABY, sessionsIncluded: 1 }]);
+    const filas = filasDeServicioComprado(3, [{ serviceId: BABY, sessionsIncluded: 1, price: 249000 }]);
     expect(filas).toEqual([
-      { serviceId: BABY, repeticion: 1, orden: 1 },
-      { serviceId: BABY, repeticion: 2, orden: 1 },
-      { serviceId: BABY, repeticion: 3, orden: 1 },
+      { serviceId: BABY, repeticion: 1, orden: 1, price: 249000 },
+      { serviceId: BABY, repeticion: 2, orden: 1, price: 249000 },
+      { serviceId: BABY, repeticion: 3, orden: 1, price: 249000 },
     ]);
   });
 
   it("sin líneas —depilación, capacitación— da una fila por vuelta con serviceId null", () => {
     expect(filasDeServicioComprado(2, [])).toEqual([
-      { serviceId: null, repeticion: 1, orden: 1 },
-      { serviceId: null, repeticion: 2, orden: 1 },
+      { serviceId: null, repeticion: 1, orden: 1, price: null },
+      { serviceId: null, repeticion: 2, orden: 1, price: null },
     ]);
   });
 
   it("un renglón con sessions_included 3 da 3 filas de ese servicio, con orden 1, 2 y 3", () => {
     // La clienta pagó 3 Baby Botox: tiene que poder agendar 3, no 1.
-    const filas = filasDeServicioComprado(1, [{ serviceId: BABY, sessionsIncluded: 3 }]);
+    const filas = filasDeServicioComprado(1, [{ serviceId: BABY, sessionsIncluded: 3, price: 249000 }]);
     expect(filas).toEqual([
-      { serviceId: BABY, repeticion: 1, orden: 1 },
-      { serviceId: BABY, repeticion: 1, orden: 2 },
-      { serviceId: BABY, repeticion: 1, orden: 3 },
+      { serviceId: BABY, repeticion: 1, orden: 1, price: 249000 },
+      { serviceId: BABY, repeticion: 1, orden: 2, price: 249000 },
+      { serviceId: BABY, repeticion: 1, orden: 3, price: 249000 },
     ]);
   });
 

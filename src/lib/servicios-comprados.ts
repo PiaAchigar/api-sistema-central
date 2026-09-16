@@ -14,6 +14,13 @@ export type LineaDeCombo = {
   serviceId: string;
   /** Cuántas veces entra ESE servicio en una vuelta. Casi siempre 1. */
   sessionsIncluded: number;
+  /**
+   * Lo que vale ese servicio, congelado en el combo. Viaja hasta la fila
+   * comprada porque al cancelar es lo que decide cuánta plata le queda a
+   * favor a la clienta: sin él, un combo de un servicio de $249.000 y otro de
+   * $17.500 se repartiría por la mitad (1.52.0).
+   */
+  price: number | null;
 };
 
 export type FilaDeServicioComprado = {
@@ -21,6 +28,13 @@ export type FilaDeServicioComprado = {
   serviceId: string | null;
   repeticion: number;
   orden: number;
+  /**
+   * Lo que valía al venderse. NULL cuando la compra no se desglosa en
+   * servicios con precio propio — y también para un servicio suelto, donde
+   * todas las filas son el MISMO servicio y el reparto en partes iguales ya
+   * da lo correcto.
+   */
+  price: number | null;
 };
 
 /**
@@ -42,7 +56,7 @@ export function filasDeServicioComprado(
   for (let repeticion = 1; repeticion <= repeticiones; repeticion++) {
     if (lineas.length === 0) {
       // Depilación y capacitaciones: una fila por vuelta y nada que desglosar.
-      filas.push({ serviceId: null, repeticion, orden: 1 });
+      filas.push({ serviceId: null, repeticion, orden: 1, price: null });
       continue;
     }
     for (const linea of lineas) {
@@ -50,7 +64,7 @@ export function filasDeServicioComprado(
       // Ignorarlo crearía UNA fila para algo que la clienta pagó tres veces, y
       // se enteraría recién al querer agendar la segunda.
       for (let orden = 1; orden <= Math.max(1, linea.sessionsIncluded); orden++) {
-        filas.push({ serviceId: linea.serviceId, repeticion, orden });
+        filas.push({ serviceId: linea.serviceId, repeticion, orden, price: linea.price });
       }
     }
   }

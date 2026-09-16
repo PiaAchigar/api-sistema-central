@@ -240,6 +240,13 @@ export const customerPurchaseService = pgTable("customer_purchase_service", {
   orden: integer("orden"),
   appointmentId: uuid("appointment_id"),
   consumedAt: timestamp("consumed_at"),
+  // Lo que valía este servicio al venderse (1.52.0). Congelado, como
+  // `final_amount` de la compra: si mañana se edita el combo, la cuenta de
+  // una compra vieja no puede cambiar sola. Es lo que hace que al cancelar el
+  // saldo a favor pese cada servicio por su precio y no reparta en partes
+  // iguales algo que vale distinto. NULL = la compra no se desglosa en
+  // servicios con precio propio (depilación, capacitaciones).
+  price: decimal("price", { precision: 10, scale: 2 }),
   notes: text("notes"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
