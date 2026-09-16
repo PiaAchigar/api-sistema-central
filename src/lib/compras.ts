@@ -70,6 +70,29 @@ export function estadoDeSesion(
   return "disponible";
 }
 
+/**
+ * Los estados en los que el servicio comprado TIENE un turno de verdad.
+ *
+ * Un turno cancelado deja de existir para la ficha: el servicio vuelve a "a
+ * agendar" y la fecha vieja no es su turno, es el turno que se dio de baja.
+ * Mostrarla igual hacía leer la fila como si siguiera esperando a la clienta
+ * ese día (Pia, 2026-09-16).
+ *
+ * Que el `appointment_id` siga escrito en la base es correcto y no se toca:
+ * es el rastro de lo que pasó, y `serviciosDisponiblesPara` ya sabe que un
+ * turno cancelado no reserva. Lo que no corresponde es publicarlo como si
+ * fuera el turno vigente.
+ *
+ * **Ausente sí cuenta**: la clienta no vino, pero el turno existió y esa fecha
+ * explica por qué el servicio figura perdido.
+ */
+const CON_TURNO = new Set<EstadoSesion>(["agendada", "consumida", "perdida"]);
+
+/** Si la fila tiene un turno vigente que valga la pena mostrar. */
+export function tieneTurno(estado: EstadoSesion): boolean {
+  return CON_TURNO.has(estado);
+}
+
 export type ResumenCompra = {
   consumidas: number;
   /** Sesiones que la clienta perdió por no venir. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estadoDeSesion, resumenDeCompra } from "./compras";
+import { estadoDeSesion, resumenDeCompra, tieneTurno } from "./compras";
 
 const AHORA = new Date("2026-09-08T12:00:00Z");
 const VIGENTE = { expiresAt: new Date("2026-12-31T00:00:00Z"), cancelledAt: null };
@@ -146,5 +146,23 @@ describe("resumenDeCompra", () => {
   it("sin sesiones no rompe", () => {
     const r = resumenDeCompra(compra, [], [], AHORA);
     expect(r).toMatchObject({ consumidas: 0, disponibles: 0, saldo: 91800 });
+  });
+});
+
+describe("tieneTurno", () => {
+  it("agendada, consumida y perdida tienen turno", () => {
+    // Perdida incluida: la clienta no vino, pero el turno existió y su fecha
+    // es lo que explica por qué el servicio figura perdido.
+    expect(tieneTurno("agendada")).toBe(true);
+    expect(tieneTurno("consumida")).toBe(true);
+    expect(tieneTurno("perdida")).toBe(true);
+  });
+
+  it("disponible no: el turno se canceló y la fecha vieja no es su turno", () => {
+    expect(tieneTurno("disponible")).toBe(false);
+  });
+
+  it("vencida tampoco", () => {
+    expect(tieneTurno("vencida")).toBe(false);
   });
 });

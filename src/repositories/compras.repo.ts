@@ -12,7 +12,7 @@ import {
   promotions,
   service,
 } from "../db/schema";
-import { estadoDeSesion, resumenDeCompra, type EstadoSesion } from "../lib/compras";
+import { estadoDeSesion, resumenDeCompra, tieneTurno, type EstadoSesion } from "../lib/compras";
 import { razonesParaNoBorrarCompra, type ImpactoDeBorrado } from "../lib/compra-borrado";
 import { saldoAAcreditar } from "../lib/saldo-de-cancelacion";
 import { planDePagoConSaldo } from "../lib/pago-con-saldo";
@@ -334,17 +334,23 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
         // lleva ORDER BY y sin él los dos servicios de un combo se daban
         // vuelta solos; ver `ordenDeServiciosComprados`.
         .sort(ordenDeServiciosComprados)
-        .map((s): ServicioLeido => ({
-          id: s.id,
-          serviceId: s.serviceId,
-          serviceName: s.serviceName,
-          repeticion: s.repeticion,
-          orden: s.orden,
-          appointmentId: s.appointmentId,
-          appointmentStart: s.appointmentStart,
-          consumedAt: s.consumedAt,
-          estado: estadoDeSesion(s, vigencia, ahora),
-        })),
+        .map((s): ServicioLeido => {
+          const estado = estadoDeSesion(s, vigencia, ahora);
+          // Un turno cancelado no se publica: la fila volvió a "a agendar" y
+          // esa fecha ya no es su turno. Ver `tieneTurno`.
+          const conTurno = tieneTurno(estado);
+          return {
+            id: s.id,
+            serviceId: s.serviceId,
+            serviceName: s.serviceName,
+            repeticion: s.repeticion,
+            orden: s.orden,
+            appointmentId: conTurno ? s.appointmentId : null,
+            appointmentStart: conTurno ? s.appointmentStart : null,
+            consumedAt: s.consumedAt,
+            estado,
+          };
+        }),
     };
   });
 }
