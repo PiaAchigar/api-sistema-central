@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { subtractAll, type Interval } from "../lib/intervals";
@@ -19,6 +20,7 @@ import { creditCustomer, getCustomerById } from "../repositories/customers.repo"
 import { cancelDeal, getDealByAppointmentId } from "../repositories/deals.repo";
 import { getActiveAgreement } from "../repositories/providers.repo";
 import { getServiceById } from "../repositories/services.repo";
+import { gananciaDelTurno } from "./pago-de-promo";
 import { loadAvailabilityContext } from "./availability.service";
 import { consumirInsumos } from "./consumo.service";
 import { consumirServicioDelTurno, tomarServicio } from "../repositories/consumo.repo";
@@ -362,32 +364,33 @@ export async function computeProviderEarning(
   appt: NonNullable<Awaited<ReturnType<typeof getAppointmentById>>>,
 ) {
   if (!appt.serviceProviderId || !appt.serviceId) return {};
+
+  // ¿Este turno sale de una compra hecha con promo, y esa promo le fija un
+  // pago a esta proveedora por este servicio? (1.53.0)
+  //
+  // Se entra por `appointment_id` y no por los campos del turno: así no
+  // depende de qué columnas devuelva cada lectura de appointments.
+  const [pago] = await db.execute<{ provider_payment: string }>(sql`
+    select ps.provider_payment
+      from customer_purchase_service cps
+      join customer_purchase cp on cp.id = cps.customer_purchase_id
+      join promotion_service ps on ps.promotion_id = cp.promotion_id
+     where cps.appointment_id = ${appt.id}
+       and ps.service_id = ${appt.serviceId}
+       and ps.service_provider_id = ${appt.serviceProviderId}
+     limit 1
+  `);
+
   const agreement = await getActiveAgreement(db, appt.serviceProviderId, appt.serviceId);
-  if (!agreement?.paymentType || agreement.rate == null) return {};
+  const svc =
+    agreement?.paymentType === "percentage" ? await getServiceById(db, appt.serviceId) : null;
 
-  const rate = Number(agreement.rate);
-  const duration = appt.durationMinutes ?? 0;
-  let earning: number;
-  switch (agreement.paymentType) {
-    case "per_hour":
-      earning = (rate * duration) / 60;
-      break;
-    case "percentage": {
-      // El porcentaje se calcula SIEMPRE sobre el precio en efectivo del servicio
-      const svc = await getServiceById(db, appt.serviceId);
-      earning = (rate / 100) * Number(svc?.unitPriceCash ?? 0);
-      break;
-    }
-    case "fixed_per_service":
-      earning = rate;
-      break;
-    default:
-      return {};
-  }
-
-  return {
-    providerPaymentType: agreement.paymentType,
-    providerRate: agreement.rate,
-    providerEarning: earning.toFixed(2),
-  };
+  return gananciaDelTurno(
+    pago ? Number(pago.provider_payment) : null,
+    agreement?.paymentType && agreement.rate != null
+      ? { paymentType: agreement.paymentType, rate: Number(agreement.rate) }
+      : null,
+    appt.durationMinutes ?? 0,
+    Number(svc?.unitPriceCash ?? 0),
+  );
 }
