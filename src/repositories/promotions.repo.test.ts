@@ -9,6 +9,7 @@ import {
   createPromotion,
   deletePromotionPermanently,
   getPromotionById,
+  listActivePromotions,
   updatePromotion,
 } from "./promotions.repo";
 import { createCompra } from "./compras.repo";
@@ -162,6 +163,59 @@ describe("getPromotionById", () => {
     const creada = await createPromotion(db, header, [{ tipo: "servicio", id: servicioId }], []);
     const leida = await getPromotionById(db, creada!.id);
     expect(leida!.destinos[0]!.nombre).toBeTruthy();
+  });
+});
+
+describe("listActivePromotions — lo que ve la web pública", () => {
+  it("una promo con is_visible_web en false no sale por el endpoint público", async () => {
+    const creada = await createPromotion(
+      db,
+      { ...header, isVisibleWeb: false },
+      [{ tipo: "servicio", id: servicioId }],
+      [],
+    );
+    const activas = await listActivePromotions(db);
+    expect(activas.find((p) => p.id === creada!.id)).toBeUndefined();
+  });
+
+  it("una promo con is_visible_web en true sale, con sus destinos", async () => {
+    const creada = await createPromotion(
+      db,
+      { ...header, isVisibleWeb: true },
+      [{ tipo: "servicio", id: servicioId }],
+      [],
+    );
+    const activas = await listActivePromotions(db);
+    const encontrada = activas.find((p) => p.id === creada!.id);
+    expect(encontrada).toBeTruthy();
+    expect(encontrada!.targets).toHaveLength(1);
+    expect(encontrada!.targets[0]).toMatchObject({ tipo: "servicio", id: servicioId });
+  });
+
+  it("featured:true no devuelve una promo destacada pero sin publicar", async () => {
+    // is_featured sigue significando "aparece además en el carrusel de la
+    // home": la home muestra un subconjunto de lo publicado, nunca algo sin
+    // publicar. Si esto se rompe, una promo que Laura marcó destacada por
+    // error (sin tildar publicar) se cuela en la home igual.
+    const creada = await createPromotion(
+      db,
+      { ...header, isVisibleWeb: false, isFeatured: true },
+      [{ tipo: "servicio", id: servicioId }],
+      [],
+    );
+    const destacadas = await listActivePromotions(db, { featured: true });
+    expect(destacadas.find((p) => p.id === creada!.id)).toBeUndefined();
+  });
+
+  it("featured:true sí devuelve una promo destacada Y publicada", async () => {
+    const creada = await createPromotion(
+      db,
+      { ...header, isVisibleWeb: true, isFeatured: true },
+      [{ tipo: "servicio", id: servicioId }],
+      [],
+    );
+    const destacadas = await listActivePromotions(db, { featured: true });
+    expect(destacadas.find((p) => p.id === creada!.id)).toBeTruthy();
   });
 });
 

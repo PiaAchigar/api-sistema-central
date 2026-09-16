@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, eq, ne } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   combos,
@@ -10,6 +10,7 @@ import {
   serviceProviders,
 } from "../db/schema";
 import type { TipoDeDestino } from "../lib/promo-aplica";
+import { promoEstaVigente } from "../lib/promo-vigente";
 import { todayLocal } from "../lib/time";
 
 export async function listActivePromotions(
@@ -20,13 +21,13 @@ export async function listActivePromotions(
   // es mañana, y una promo que vence hoy desaparecía tres horas antes de tiempo.
   const today = todayLocal();
 
-  const conditions = [
-    eq(promotions.status, "active"),
-    or(isNull(promotions.validUntil), sql`${promotions.validUntil} >= ${today}::date`),
-  ];
+  // La web pública sólo ve lo que Laura publicó (`isVisibleWeb`). `featured`
+  // exige ADEMÁS `isFeatured`: la home muestra un subconjunto de lo
+  // publicado, nunca algo que no esté publicado.
+  const conditions = [eq(promotions.status, "active"), eq(promotions.isVisibleWeb, true)];
   if (filters.featured) conditions.push(eq(promotions.isFeatured, true));
 
-  const activePromos = await db
+  const rows = await db
     .select({
       id: promotions.id,
       name: promotions.name,
@@ -42,48 +43,25 @@ export async function listActivePromotions(
     .where(and(...conditions))
     .orderBy(asc(promotions.name));
 
+  // Vigencia por fecha en lógica pura (`promoEstaVigente`), no en SQL: mismo
+  // criterio que usa la venta (`listPromosVendibles`) y evita la regla que ya
+  // nos costó un 500 en producción sobre este mismo archivo — un objeto
+  // `Date` metido en un fragmento `sql` crudo. Acá ni siquiera hay ese
+  // riesgo (serían strings), pero un solo criterio de vigencia en un único
+  // lugar es más fácil de seguir que repetirlo en SQL y en JS.
+  const activePromos = rows.filter((p) => promoEstaVigente(p, today));
   if (activePromos.length === 0) return [];
 
-  const promoIds = activePromos.map((p) => p.id);
-
-  const links = await db
-    .select({
-      promotionId: promotionService.promotionId,
-      serviceId: service.id,
-      serviceName: service.name,
-      unitPriceList: service.unitPriceList,
-      unitPriceCash: service.unitPriceCash,
-      estimatedDurationMinutes: service.estimatedDurationMinutes,
-    })
-    .from(promotionService)
-    .innerJoin(service, eq(service.id, promotionService.serviceId))
-    .where(
-      and(
-        inArray(promotionService.promotionId, promoIds),
-        eq(service.isActive, true),
-      ),
-    );
-
-  const servicesByPromo = new Map<string, typeof links>();
-  for (const link of links) {
-    if (!link.promotionId) continue;
-    const list = servicesByPromo.get(link.promotionId) ?? [];
-    list.push(link);
-    servicesByPromo.set(link.promotionId, list);
+  const out = [];
+  for (const p of activePromos) {
+    out.push({
+      ...p,
+      discountPercentage: p.discountPercentage != null ? Number(p.discountPercentage) : null,
+      discountAmount: p.discountAmount != null ? Number(p.discountAmount) : null,
+      targets: await destinosDe(db, p.id),
+    });
   }
-
-  return activePromos.map((p) => ({
-    ...p,
-    discountPercentage: p.discountPercentage != null ? Number(p.discountPercentage) : null,
-    discountAmount: p.discountAmount != null ? Number(p.discountAmount) : null,
-    services: (servicesByPromo.get(p.id) ?? []).map((s) => ({
-      id: s.serviceId,
-      name: s.serviceName,
-      unitPriceList: s.unitPriceList != null ? Number(s.unitPriceList) : null,
-      unitPriceCash: s.unitPriceCash != null ? Number(s.unitPriceCash) : null,
-      estimatedDurationMinutes: s.estimatedDurationMinutes,
-    })),
-  }));
+  return out;
 }
 
 export async function updatePromotionFeatured(
