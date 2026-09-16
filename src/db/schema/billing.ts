@@ -215,6 +215,9 @@ export const customerPurchase = pgTable("customer_purchase", {
   baseAmount: decimal("base_amount", { precision: 10, scale: 2 }),
   discountedAmount: decimal("discounted_amount", { precision: 10, scale: 2 }),
   promotionId: uuid("promotion_id"),
+  /** El nombre de la promo, congelado al vender (1.53.0). La compra cuenta su
+   *  propia historia aunque después la promo se edite o se borre. */
+  promotionName: varchar("promotion_name", { length: 255 }),
   finalAmount: decimal("final_amount", { precision: 10, scale: 2 }),
   purchasedAt: timestamp("purchased_at"),
   expiresAt: timestamp("expires_at"),

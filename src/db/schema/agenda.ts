@@ -364,26 +364,30 @@ export const promotions = pgTable("promotions", {
   promotionType: varchar("promotion_type", { length: 50 }),
   discountPercentage: decimal("discount_percentage", { precision: 5, scale: 2 }),
   discountAmount: decimal("discount_amount", { precision: 10, scale: 2 }),
-  servicesSubtotal: decimal("services_subtotal", { precision: 10, scale: 2 }),
-  finalAmount: decimal("final_amount", { precision: 10, scale: 2 }),
   validFrom: date("valid_from"),
   validUntil: date("valid_until"),
   status: varchar("status", { length: 50 }), // active | inactive | expired
   isFeatured: boolean("is_featured"),
+  /** Si la promo se publica en la página de Servicios (1.53.0). Destildada por
+   *  defecto: publicar es una decisión, no un accidente. */
+  isVisibleWeb: boolean("is_visible_web").notNull().default(false),
   usageLimit: integer("usage_limit"),
-  timesUsed: integer("times_used"),
   notes: text("notes"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
 
+/**
+ * Lo que Laura acordó pagarle a cada proveedora mientras el servicio está en
+ * promo (1.53.0). Antes de 1.53.0 esta tabla era "los servicios de la promo";
+ * ese rol pasó a `promotion_target`.
+ */
 export const promotionService = pgTable("promotion_service", {
   id: id(),
   promotionId: uuid("promotion_id"),
-  serviceId: uuid("service_id"),
-  serviceProviderId: uuid("service_provider_id"),
-  servicePrice: decimal("service_price", { precision: 10, scale: 2 }),
-  providerPayment: decimal("provider_payment", { precision: 10, scale: 2 }),
+  serviceId: uuid("service_id").notNull(),
+  serviceProviderId: uuid("service_provider_id").notNull(),
+  providerPayment: decimal("provider_payment", { precision: 10, scale: 2 }).notNull(),
   notes: text("notes"),
   createdAt: createdAt(),
 });
