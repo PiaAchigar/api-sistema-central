@@ -1,4 +1,4 @@
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { and, eq, gte, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   appointments,
@@ -25,6 +25,36 @@ import { type ServicioDisponible, elegirServicio } from "../lib/eleccion-de-serv
  * propósito y no se comparte porque una es TypeScript sobre filas ya traídas y
  * la otra es un WHERE; unificarlas obligaría a traer la historia entera.
  */
+/**
+ * La condición de "este servicio comprado está libre", como WHERE.
+ *
+ * Sale de la consulta y se exporta por un motivo puntual: así un test la puede
+ * armar y revisarle los parámetros sin tocar la base. Ver
+ * `lib/parametros-de-consulta.ts` — un `Date` acá adentro, metido por un
+ * fragmento `sql` crudo, hace fallar la consulta recién contra Postgres.
+ */
+export function condicionDeServicioLibre(customerId: string, serviceId: string, ahora: Date) {
+  return and(
+    eq(customerPurchase.customerId, customerId),
+    // La compra tiene que estar viva.
+    isNull(customerPurchase.cancelledAt),
+    // `gte` y no un fragmento `sql` crudo: el operador pasa la fecha por el
+    // mapper de la columna, que la convierte a string. Metida a mano en un
+    // `sql`, el Date llega vivo al driver y la consulta muere al bindear —
+    // era el 500 de /appointments/consumible (V3a hasta 2026-09-16).
+    or(isNull(customerPurchase.expiresAt), gte(customerPurchase.expiresAt, ahora)),
+    // El servicio, libre: sin consumir y sin un turno que lo reserve. Un
+    // turno CANCELADO no reserva —se avisó, se reagenda— pero un `no_show`
+    // sí lo deja tomado: la clienta lo perdió (reglas §3.8).
+    isNull(customerPurchaseService.consumedAt),
+    or(isNull(customerPurchaseService.appointmentId), eq(appointments.status, "cancelled")),
+    // Que la fila SEA de este servicio. Antes acá había que salir a buscar si
+    // el combo lo contenía y contar cuántos servicios tenía, para dejar afuera
+    // los de 2+ (V3b los habilita). Ahora la fila ya lo sabe.
+    eq(customerPurchaseService.serviceId, serviceId),
+  );
+}
+
 export async function serviciosDisponiblesPara(
   db: Db,
   customerId: string,
@@ -45,29 +75,7 @@ export async function serviciosDisponiblesPara(
       eq(customerPurchase.id, customerPurchaseService.customerPurchaseId),
     )
     .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
-    .where(
-      and(
-        eq(customerPurchase.customerId, customerId),
-        // La compra tiene que estar viva.
-        isNull(customerPurchase.cancelledAt),
-        or(
-          isNull(customerPurchase.expiresAt),
-          sql`${customerPurchase.expiresAt} >= ${ahora}`,
-        ),
-        // El servicio, libre: sin consumir y sin un turno que lo reserve. Un
-        // turno CANCELADO no reserva —se avisó, se reagenda— pero un `no_show`
-        // sí lo deja tomado: la clienta lo perdió (reglas §3.8).
-        isNull(customerPurchaseService.consumedAt),
-        or(
-          isNull(customerPurchaseService.appointmentId),
-          eq(appointments.status, "cancelled"),
-        ),
-        // Que la fila SEA de este servicio. Antes acá había que salir a buscar
-        // si el combo lo contenía y contar cuántos servicios tenía, para dejar
-        // afuera los de 2+ (V3b los habilita). Ahora la fila ya lo sabe.
-        eq(customerPurchaseService.serviceId, serviceId),
-      ),
-    );
+    .where(condicionDeServicioLibre(customerId, serviceId, ahora));
 
   return filas.map((f) => ({
     purchaseServiceId: f.purchaseServiceId,
