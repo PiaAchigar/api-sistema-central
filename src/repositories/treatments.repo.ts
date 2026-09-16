@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
+import { todayLocal } from "../lib/time";
 
 export type TreatmentKind = "service" | "activity" | "training";
 
@@ -178,6 +179,11 @@ export async function searchTreatments(
   if (serviceIds.length > 0) {
     // Construir la lista de UUIDs de forma segura
     const uuidList = serviceIds.map((id) => `'${id}'`).join(",");
+    // Fecha LOCAL del negocio, no UTC: CURRENT_DATE en el Worker (que corre
+    // contra Supabase) es UTC, y entre las 21 y las 24 de Argentina una promo
+    // que vence hoy ya desaparecería tres horas antes de tiempo — el mismo bug
+    // contra el que se escribió `promoEstaVigente`.
+    const hoy = todayLocal();
 
     // Agrupar promociones y listar sus servicios relacionados con la búsqueda
     promotions = await db.execute<any>(
@@ -202,7 +208,8 @@ export async function searchTreatments(
         WHERE ps.service_id::text IN (${uuidList})
           AND ps.service_id IS NOT NULL
           AND p.status = 'active'
-          AND (p.valid_until IS NULL OR p.valid_until >= CURRENT_DATE)
+          AND (p.valid_from IS NULL OR p.valid_from <= '${hoy}'::date)
+          AND (p.valid_until IS NULL OR p.valid_until >= '${hoy}'::date)
         GROUP BY p.id, p.name, p.description, p.promotion_type, p.discount_percentage,
                  p.discount_amount, p.valid_from, p.valid_until,
                  p.status, p.is_featured

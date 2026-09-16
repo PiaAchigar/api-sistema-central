@@ -226,7 +226,15 @@ describe("vender con promo — invariante de servicios agendables", () => {
           `select count(*) n from customer_purchase_service
             where customer_purchase_id = '${id}' and service_id is not null` as never,
         );
-      expect((await filas(conPromo.id))[0]!.n).toBe((await filas(sinPromo.id))[0]!.n);
+      const nConPromo = Number((await filas(conPromo.id))[0]!.n);
+      const nSinPromo = Number((await filas(sinPromo.id))[0]!.n);
+      // Sin esto, una regresión donde el combo se vende sin líneas (todas las
+      // filas de customer_purchase_service con service_id NULL) deja los dos
+      // lados en 0 y el test queda verde sin haber probado nada — que es
+      // justo la regresión que existe para atrapar: la clienta paga y
+      // después no puede agendar.
+      expect(nConPromo).toBeGreaterThan(0);
+      expect(nConPromo).toBe(nSinPromo);
     } finally {
       const compraIds = [conPromo?.id, sinPromo?.id].filter((id): id is string => Boolean(id));
       if (compraIds.length > 0) {

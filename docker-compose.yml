@@ -99,20 +99,6 @@ services:
       # producción a la base local con `scripts/traer-catalogo.sh`, que trae el
       # resultado ya cocinado. Por eso alcanza con que el ESQUEMA esté al día.
       #
-      # 1.50.0/01-combos-por-area-y-packs.sql TAMPOCO se monta acá, y por el
-      # mismo motivo con una vuelta más: no trae UUIDs de producción, pero su
-      # bloque `DO $$` exige que YA existan las 3 categorías kind='area'
-      # (Estética, Medicina y Dermatología, Masajes y Bienestar) o revienta
-      # con `RAISE EXCEPTION`. En un volumen recién creado `categories` está
-      # vacía — el seed de juguete no las trae — así que montarla acá aborta
-      # el entrypoint entero (probado el 2026-09-16: contenedor `Exited (3)`,
-      # `npm run db:up` nunca llega a healthy). Esas 3 áreas sólo existen
-      # DESPUÉS de que `traer-catalogo.sh` copia `categories` de producción, y
-      # ese script corre DESPUÉS de que Postgres ya está healthy — nunca antes,
-      # que es lo único que permite `docker-entrypoint-initdb.d`. Por eso
-      # `traer-catalogo.sh` aplica esta migración él mismo, al final, una vez
-      # que las áreas ya están.
-      #
       # 1.4.0/rag-infrastructure.sql tampoco se monta: sus columnas y tablas ya
       # las crean 1.17.0, 1.18.0 y 1.19.0, que sí están acá.
       # 1.38.0/00-backup.sql es una red para producción, en local no hace falta.
@@ -124,6 +110,17 @@ services:
       # 39m: después de la 1.51.0 que crea la tabla, y antes del seed (40-).
       - ./src/db/migrations/1.52.0/01-precio-del-servicio-comprado.sql:/docker-entrypoint-initdb.d/39m-precio-del-servicio-comprado.sql:ro
       - ./src/db/migrations/1.53.0/01-promos-con-combos-y-packs.sql:/docker-entrypoint-initdb.d/39n-promos-con-combos-y-packs.sql:ro
+      # 41: 1.50.0 va DESPUÉS del seed (40-) a propósito. Su bloque `DO $$`
+      # exige con RAISE EXCEPTION que ya existan las 3 categorías kind='area'
+      # (Estética, Medicina y Dermatología, Masajes y Bienestar), y en un
+      # volumen recién creado sólo las trae el seed (`seed.dev.sql` las siembra
+      # desde la fix de 2026-09-16) — antes de eso `categories` está vacía y
+      # montar 1.50.0 más arriba aborta el entrypoint entero (probado:
+      # contenedor `Exited (3)`, `npm run db:up` nunca llega a healthy).
+      # "41-" es seguro contra el bug de colación documentado arriba (39jz1-4):
+      # difiere de "40-seed.sql" y de "39n-..." en el primer dígito, antes de
+      # llegar a ningún guion, así que no hay ambigüedad que probar a mano.
+      - ./src/db/migrations/1.50.0/01-combos-por-area-y-packs.sql:/docker-entrypoint-initdb.d/41-combos-por-area-y-packs.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]

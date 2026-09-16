@@ -20,6 +20,17 @@ VALUES ('11111111-1111-1111-1111-111111111111', 'Tratamientos Faciales', 1, true
 INSERT INTO categories (id, parent_category_id, name, display_order, is_active, created_at)
 VALUES ('22222222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111', 'Cosmetológicos', 1, true, now());
 
+-- Las 3 áreas de catálogo (kind='area', migración 1.37.0/01). Nombres EXACTOS:
+-- la migración 1.50.0 (combos por área + packs) los exige tal cual con
+-- RAISE EXCEPTION si falta alguno — ver docker-compose.yml. `traer-catalogo.sh`
+-- REEMPLAZA estas 3 filas de juguete por las reales de producción cuando se
+-- corre, así que no hay dos verdades: en local sin catálogo real quedan
+-- éstas, con catálogo real quedan las de producción (mismo `kind='area'`).
+INSERT INTO categories (id, name, display_order, is_active, kind, created_at)
+VALUES ('ffffffff-0000-0000-0000-000000000001', 'Estética', 90, true, 'area', now()),
+       ('ffffffff-0000-0000-0000-000000000002', 'Medicina y Dermatología', 91, true, 'area', now()),
+       ('ffffffff-0000-0000-0000-000000000003', 'Masajes y Bienestar', 92, true, 'area', now());
+
 -- Servicios
 INSERT INTO service (id, name, unit_price_list, unit_price_cash, tax_category, requires_operator, requires_machine, estimated_duration_minutes, is_active, created_at)
 VALUES ('aaaaaaaa-0000-0000-0000-000000000001', 'Limpieza de Cutis', 45000, 40000, 'exempt', true, false, 60, true, now()),
