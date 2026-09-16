@@ -38,28 +38,31 @@ promotionsRouter.patch("/:id", auth, requireAuth, zValidator("json", patchPromoB
   return c.json(updated);
 });
 
-// ── Admin (Administración → Promos): CRUD con líneas + snapshot ──────────────
+// ── Admin (Administración → Promos): CRUD con destinos + pagos acordados ─────
 const n = (v: unknown) => (v == null ? null : Number(v));
 function serialize(p: Record<string, unknown>) {
-  const lines = Array.isArray(p.lines) ? (p.lines as Record<string, unknown>[]) : [];
+  const pagos = Array.isArray(p.pagos) ? (p.pagos as Record<string, unknown>[]) : [];
+  const destinos = Array.isArray(p.destinos) ? (p.destinos as Record<string, unknown>[]) : [];
   return {
     ...p,
     discountPercentage: n(p.discountPercentage),
     discountAmount: n(p.discountAmount),
-    servicesSubtotal: n(p.servicesSubtotal),
-    finalAmount: n(p.finalAmount),
-    lines: lines.map((l) => ({
-      ...l,
-      servicePrice: n(l.servicePrice),
-      providerPayment: n(l.providerPayment),
+    pagos: pagos.map((pago) => ({
+      ...pago,
+      providerPayment: n(pago.providerPayment),
     })),
+    destinos,
   };
 }
 
-const lineSchema = z.object({
+const destinoSchema = z.object({
+  tipo: z.enum(["servicio", "combo", "depilacion"]),
+  id: z.string().uuid(),
+});
+const pagoSchema = z.object({
   serviceId: z.string().uuid(),
-  serviceProviderId: z.string().uuid().nullish(),
-  providerPayment: z.number().nonnegative().nullish(),
+  serviceProviderId: z.string().uuid(),
+  providerPayment: z.number().nonnegative(),
 });
 const headerSchema = z.object({
   name: z.string().min(1).max(255),
@@ -70,10 +73,17 @@ const headerSchema = z.object({
   validFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
   validUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
   isFeatured: z.boolean().nullish(),
+  isVisibleWeb: z.boolean().nullish(),
   usageLimit: z.number().int().nonnegative().nullish(),
   notes: z.string().max(2000).nullish(),
 });
-const promoBody = headerSchema.extend({ lines: z.array(lineSchema).default([]) });
+const promoBody = headerSchema.extend({
+  // Una promo sin destinos no significa "aplica a todo": significa que Laura
+  // se olvidó de marcar algo. Se rechaza acá y no en la pantalla, porque la
+  // pantalla se puede saltear.
+  destinos: z.array(destinoSchema).min(1),
+  pagos: z.array(pagoSchema).default([]),
+});
 
 promotionsRouter.get(
   "/admin",
@@ -91,8 +101,8 @@ promotionsRouter.get(
 
 promotionsRouter.post("/admin", auth, requireAuth, requirePermission("catalogo", "manage"), zValidator("json", promoBody), async (c) => {
   const db = createDb(c.env);
-  const { lines, ...header } = c.req.valid("json");
-  const created = await createPromotion(db, header, lines);
+  const { destinos, pagos, ...header } = c.req.valid("json");
+  const created = await createPromotion(db, header, destinos, pagos);
   return c.json(serialize(created!), 201);
 });
 
@@ -104,8 +114,8 @@ promotionsRouter.patch(
   zValidator("json", promoBody),
   async (c) => {
     const db = createDb(c.env);
-    const { lines, ...header } = c.req.valid("json");
-    const updated = await updatePromotion(db, c.req.param("id"), header, lines);
+    const { destinos, pagos, ...header } = c.req.valid("json");
+    const updated = await updatePromotion(db, c.req.param("id"), header, destinos, pagos);
     if (!updated) throw notFound("Promotion");
     return c.json(serialize(updated));
   },
