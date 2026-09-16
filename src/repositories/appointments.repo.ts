@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, not, or, sql } fro
 import type { Db } from "../db/client";
 import {
   activities,
+  customerPurchaseService,
   appointments,
   contacts,
   customers,
@@ -159,8 +160,15 @@ export async function listAppointmentsByRange(
       activityName: activities.name,
       activityType: activities.activityType,
       trainingSessionId: appointments.trainingSessionId,
+      // El servicio comprado del que sale este turno, si sale de uno. La
+      // agenda lo usa para NO ofrecer "Cobrar": esa plata ya se cobró (o se
+      // cobra) del lado de la compra, y cobrarla de nuevo acá sería cobrarle
+      // dos veces a la clienta. Uno solo por turno lo garantiza el índice
+      // `ux_cpsv_turno`, así que el join no multiplica filas.
+      customerPurchaseServiceId: customerPurchaseService.id,
     })
     .from(appointments)
+    .leftJoin(customerPurchaseService, eq(customerPurchaseService.appointmentId, appointments.id))
     .leftJoin(customers, eq(customers.id, appointments.customerId))
     .leftJoin(contacts, eq(contacts.id, customers.contactId))
     .leftJoin(service, eq(service.id, appointments.serviceId))
@@ -206,8 +214,15 @@ export async function getAppointmentDetail(db: Db, id: string) {
       activityName: activities.name,
       activityType: activities.activityType,
       trainingSessionId: appointments.trainingSessionId,
+      // El servicio comprado del que sale este turno, si sale de uno. La
+      // agenda lo usa para NO ofrecer "Cobrar": esa plata ya se cobró (o se
+      // cobra) del lado de la compra, y cobrarla de nuevo acá sería cobrarle
+      // dos veces a la clienta. Uno solo por turno lo garantiza el índice
+      // `ux_cpsv_turno`, así que el join no multiplica filas.
+      customerPurchaseServiceId: customerPurchaseService.id,
     })
     .from(appointments)
+    .leftJoin(customerPurchaseService, eq(customerPurchaseService.appointmentId, appointments.id))
     .leftJoin(customers, eq(customers.id, appointments.customerId))
     .leftJoin(contacts, eq(contacts.id, customers.contactId))
     .leftJoin(service, eq(service.id, appointments.serviceId))
