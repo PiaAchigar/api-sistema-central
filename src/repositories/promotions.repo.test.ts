@@ -3,7 +3,15 @@ import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { eq, inArray } from "drizzle-orm";
 import * as schema from "../db/schema";
-import { combos, comboService, customerPurchase, customerPurchaseService, promotions } from "../db/schema";
+import {
+  combos,
+  comboService,
+  customerPurchase,
+  customerPurchaseService,
+  promotions,
+  promotionService,
+  promotionTarget,
+} from "../db/schema";
 import type { Db } from "../db/client";
 import {
   createPromotion,
@@ -12,7 +20,8 @@ import {
   listActivePromotions,
   updatePromotion,
 } from "./promotions.repo";
-import { createCompra } from "./compras.repo";
+import { cancelCompra, createCompra } from "./compras.repo";
+import { motivoPromoNoVendible, obtenerPromoVendible } from "./catalogo-venta.repo";
 
 const NOMBRE_PROMO_DE_PRUEBA = "Promo de prueba";
 
@@ -219,9 +228,152 @@ describe("listActivePromotions — lo que ve la web pública", () => {
   });
 });
 
+// Clienta de prueba del seed (`seed.dev.sql`), no la toca `traer-catalogo.sh`.
+const CUSTOMER_ID_DE_PRUEBA = "dddddddd-0000-0000-0000-000000000001";
+
+/** Una venta de un servicio suelto, con o sin promo. Devuelve el id para
+ *  poder borrarla en el `finally`: `limpiar()` borra promos, no ventas, y con
+ *  la FK en ON DELETE SET NULL una venta olvidada sobrevive muda. */
+async function venderServicio(promotionId: string | null, promotionName: string | null) {
+  const compra = await createCompra(db, {
+    customerId: CUSTOMER_ID_DE_PRUEBA,
+    serviceId: servicioId,
+    description: "Venta de prueba — cupo de promo",
+    sessionsTotal: 1,
+    baseAmount: 1000,
+    discountedAmount: 1000,
+    finalAmount: promotionId ? 800 : 1000,
+    promotionId,
+    promotionName,
+  });
+  return compra.id;
+}
+
+async function borrarVentas(ids: string[]) {
+  if (ids.length === 0) return;
+  await db
+    .delete(customerPurchaseService)
+    .where(inArray(customerPurchaseService.customerPurchaseId, ids));
+  await db.delete(customerPurchase).where(inArray(customerPurchase.id, ids));
+}
+
+describe("el límite de usos (spec §10)", () => {
+  it("se agota a la N-ésima venta y se libera al cancelar una", async () => {
+    // El cupo se cuenta EN VIVO sobre las ventas no canceladas, no con un
+    // contador: por eso cancelar devuelve el uso. Es el COUNT que decide
+    // cuántas veces se regala un descuento — si se desincroniza, Laura regala
+    // de más y no se entera.
+    const promo = await createPromotion(
+      db,
+      { ...header, usageLimit: 2 },
+      [{ tipo: "servicio", id: servicioId }],
+      [],
+    );
+    const ventas: string[] = [];
+    try {
+      expect(await obtenerPromoVendible(db, promo!.id)).toBeTruthy();
+
+      ventas.push(await venderServicio(promo!.id, promo!.name));
+      // Con 1 de 2 usada todavía se ofrece: el cupo se agota AL llegar al
+      // límite, no antes.
+      expect(await obtenerPromoVendible(db, promo!.id)).toBeTruthy();
+
+      ventas.push(await venderServicio(promo!.id, promo!.name));
+      expect(await obtenerPromoVendible(db, promo!.id)).toBeNull();
+      // Y el motivo dice "agotada", no "no está vigente": las fechas están
+      // perfectas y mandar a Laura a mirarlas la deja sin entender nada.
+      expect(await motivoPromoNoVendible(db, promo!.id)).toMatch(/agot/i);
+
+      await cancelCompra(db, ventas[1]!, "Cancelada por el test de cupo");
+      expect(await obtenerPromoVendible(db, promo!.id)).toBeTruthy();
+    } finally {
+      await borrarVentas(ventas);
+      await deletePromotionPermanently(db, promo!.id);
+    }
+  });
+
+  it("sin límite cargado la promo no se agota nunca", async () => {
+    const promo = await createPromotion(
+      db,
+      { ...header, usageLimit: null },
+      [{ tipo: "servicio", id: servicioId }],
+      [],
+    );
+    const ventas: string[] = [];
+    try {
+      ventas.push(await venderServicio(promo!.id, promo!.name));
+      ventas.push(await venderServicio(promo!.id, promo!.name));
+      expect(await obtenerPromoVendible(db, promo!.id)).toBeTruthy();
+    } finally {
+      await borrarVentas(ventas);
+      await deletePromotionPermanently(db, promo!.id);
+    }
+  });
+});
+
+describe("deletePromotionPermanently", () => {
+  it("el nombre de la promo sobrevive al borrado de la promo (spec §10)", async () => {
+    // La venta cuenta su propia historia: la FK es ON DELETE SET NULL y el
+    // nombre quedó congelado al vender. Si esto se rompe, borrar una promo
+    // deja ventas viejas sin poder explicar qué descuento se les hizo.
+    const promo = await createPromotion(
+      db,
+      header,
+      [{ tipo: "servicio", id: servicioId }],
+      [],
+    );
+    const ventaId = await venderServicio(promo!.id, promo!.name);
+    try {
+      await deletePromotionPermanently(db, promo!.id);
+
+      const [fila] = await db
+        .select({
+          promotionId: customerPurchase.promotionId,
+          promotionName: customerPurchase.promotionName,
+        })
+        .from(customerPurchase)
+        .where(eq(customerPurchase.id, ventaId));
+
+      expect(fila!.promotionId).toBeNull();
+      expect(fila!.promotionName).toBe(NOMBRE_PROMO_DE_PRUEBA);
+    } finally {
+      await borrarVentas([ventaId]);
+    }
+  });
+
+  it("deja en cero las DOS listas de la promo", async () => {
+    // Destinos y pagos viven en tablas distintas con FKs NO ACTION: si una de
+    // las dos quedara, el DELETE de la promo reventaría por constraint.
+    const promo = await createPromotion(
+      db,
+      header,
+      [
+        { tipo: "servicio", id: servicioId },
+        { tipo: "combo", id: comboId },
+      ],
+      [{ serviceId: servicioId, serviceProviderId: proveedoraId, providerPayment: 5000 }],
+    );
+    expect(promo!.destinos).toHaveLength(2);
+    expect(promo!.pagos).toHaveLength(1);
+
+    expect(await deletePromotionPermanently(db, promo!.id)).toBe(true);
+
+    const destinos = await db
+      .select({ id: promotionTarget.id })
+      .from(promotionTarget)
+      .where(eq(promotionTarget.promotionId, promo!.id));
+    const pagos = await db
+      .select({ id: promotionService.id })
+      .from(promotionService)
+      .where(eq(promotionService.promotionId, promo!.id));
+
+    expect(destinos).toEqual([]);
+    expect(pagos).toEqual([]);
+    expect(await getPromotionById(db, promo!.id)).toBeNull();
+  });
+});
+
 describe("vender con promo — invariante de servicios agendables", () => {
-  // Clienta de prueba del seed (`seed.dev.sql`), no la toca `traer-catalogo.sh`.
-  const CUSTOMER_ID_DE_PRUEBA = "dddddddd-0000-0000-0000-000000000001";
   const COMBO_DE_VENTA = "ZZ_QA_PROMOTIONS_TEST_venta";
 
   it("vender con promo deja los mismos servicios agendables que sin promo", async () => {
