@@ -299,3 +299,50 @@ export async function obtenerPromoVendible(db: Db, id: string): Promise<PromoVen
   const todas = await listPromosVendibles(db);
   return todas.find((p) => p.id === id) ?? null;
 }
+
+/**
+ * Por qué una promo no se puede vender, en criollo.
+ *
+ * `obtenerPromoVendible` devuelve `null` por tres motivos distintos —no
+ * existe, se le pasó la fecha, se quedó sin cupo— y los tres decían "no está
+ * vigente". El cupo es lo que trajo la 1.53.0 y es el motivo que más va a
+ * aparecer: Laura pone límite 10, la venta 11 le habla de vigencia, mira las
+ * fechas, están perfectas, y no entiende nada.
+ *
+ * Corre SÓLO en el camino de error, así que las dos consultas extra no le
+ * cuestan nada a la venta que sale bien.
+ */
+export async function motivoPromoNoVendible(db: Db, id: string): Promise<string> {
+  const [p] = await db
+    .select({
+      name: promotions.name,
+      status: promotions.status,
+      validFrom: promotions.validFrom,
+      validUntil: promotions.validUntil,
+      usageLimit: promotions.usageLimit,
+    })
+    .from(promotions)
+    .where(eq(promotions.id, id))
+    .limit(1);
+
+  if (!p) return "Esa promoción ya no existe";
+  const nombre = p.name ? `La promo "${p.name}"` : "Esa promoción";
+  if (p.status !== "active") return `${nombre} está archivada`;
+
+  const hoy = todayLocal();
+  if (p.validFrom && p.validFrom > hoy) return `${nombre} recién arranca el ${p.validFrom}`;
+  if (p.validUntil && p.validUntil < hoy) return `${nombre} venció el ${p.validUntil}`;
+
+  const [usados] = await db
+    .select({ usos: count() })
+    .from(customerPurchase)
+    .where(and(eq(customerPurchase.promotionId, id), isNull(customerPurchase.cancelledAt)));
+  const usos = Number(usados?.usos ?? 0);
+  if (promoAgotada(p.usageLimit, usos)) {
+    return `${nombre} se agotó: ya se usó ${usos} de ${p.usageLimit} vez/veces. Cancelar una venta libera un uso.`;
+  }
+
+  // Ninguno de los motivos conocidos: algo cambió entre la lectura y esta
+  // consulta. Mejor un mensaje vago que uno inventado.
+  return `${nombre} no se puede aplicar en este momento`;
+}

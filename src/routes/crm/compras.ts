@@ -23,6 +23,7 @@ import { razonesParaNoBorrarCompra } from "../../lib/compra-borrado";
 import {
   listCatalogoVendible,
   listPromosVendibles,
+  motivoPromoNoVendible,
   obtenerItemVendible,
   obtenerPromoVendible,
 } from "../../repositories/catalogo-venta.repo";
@@ -108,7 +109,9 @@ comprasRouter.post(
     let promo = null;
     if (promotionId) {
       promo = await obtenerPromoVendible(db, promotionId);
-      if (!promo) throw badRequest("Esa promoción no está vigente");
+      // El motivo se busca aparte: vencida y agotada no son lo mismo y el
+      // cartel tiene que decir cuál de las dos es (ver motivoPromoNoVendible).
+      if (!promo) throw badRequest(await motivoPromoNoVendible(db, promotionId));
       // La pantalla ya filtra, pero una pantalla abierta hace media hora
       // puede ofrecer una promo que ya venció o se agotó. Es plata: se
       // vuelve a chequear acá.
@@ -199,7 +202,7 @@ comprasRouter.post(
     let promo = null;
     if (b.promotionId) {
       promo = await obtenerPromoVendible(db, b.promotionId);
-      if (!promo) throw badRequest("Esa promoción no está vigente");
+      if (!promo) throw badRequest(await motivoPromoNoVendible(db, b.promotionId));
       // La pantalla ya filtra, pero una pantalla abierta hace media hora
       // puede ofrecer una promo que ya venció o se agotó. Es plata: se
       // vuelve a chequear acá.
