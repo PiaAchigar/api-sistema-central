@@ -6,6 +6,7 @@ import {
   lineItems,
   machines,
   promotionService,
+  promotionTarget,
   service,
   serviceCategory,
   serviceMachine,
@@ -245,7 +246,7 @@ export async function setServiceActive(db: Db, id: string, isActive: boolean) {
  *  nunca se toca una factura ya emitida). El resto son datos de configuración
  *  que sí se pueden borrar en cascada. */
 export async function getServiceDeleteImpact(db: Db, id: string) {
-  const [appts, items, agreements, cats, mach, promos] = await Promise.all([
+  const [appts, items, agreements, cats, mach, promos, ofertas] = await Promise.all([
     db.select({ id: appointments.id }).from(appointments).where(eq(appointments.serviceId, id)),
     db.select({ id: lineItems.id }).from(lineItems).where(eq(lineItems.serviceId, id)),
     db
@@ -255,6 +256,10 @@ export async function getServiceDeleteImpact(db: Db, id: string) {
     db.select({ id: serviceCategory.serviceId }).from(serviceCategory).where(eq(serviceCategory.serviceId, id)),
     db.select({ id: serviceMachine.id }).from(serviceMachine).where(eq(serviceMachine.serviceId, id)),
     db.select({ id: promotionService.id }).from(promotionService).where(eq(promotionService.serviceId, id)),
+    // `promotion_target` es "qué está en oferta" (1.53.0). Sus FKs son NO
+    // ACTION: si no se cuentan acá, el preview dice "0 promociones" y el
+    // borrado revienta con un error de constraint.
+    db.select({ id: promotionTarget.id }).from(promotionTarget).where(eq(promotionTarget.serviceId, id)),
   ]);
 
   const parts: string[] = [];
@@ -272,6 +277,7 @@ export async function getServiceDeleteImpact(db: Db, id: string) {
       categories: cats.length,
       machines: mach.length,
       promotions: promos.length,
+      promoTargets: ofertas.length,
     },
   };
 }
@@ -285,6 +291,9 @@ export async function hardDeleteService(db: Db, id: string): Promise<boolean> {
     await tx.delete(serviceMachine).where(eq(serviceMachine.serviceId, id));
     await tx.delete(serviceProviderService).where(eq(serviceProviderService.serviceId, id));
     await tx.delete(promotionService).where(eq(promotionService.serviceId, id));
+    // Lo mismo que los pagos acordados, pero del otro lado de la promo: el
+    // servicio deja de estar en oferta. La FK no lo hace sola (NO ACTION).
+    await tx.delete(promotionTarget).where(eq(promotionTarget.serviceId, id));
     return tx.delete(service).where(eq(service.id, id)).returning({ id: service.id });
   });
   return deleted.length > 0;

@@ -6,6 +6,7 @@ import {
   combos,
   comboService,
   customerPurchase,
+  promotionTarget,
   service,
 } from "../db/schema";
 import { computeComboFinalPrice, computeComboSubtotal, precioDeServicio } from "../lib/combo-pricing";
@@ -597,6 +598,11 @@ export async function deleteComboPermanently(db: Db, id: string): Promise<string
   }
 
   await db.delete(comboService).where(eq(comboService.comboId, id));
+  // Y lo que este combo tuviera en oferta. `promotion_target.combo_id` es NO
+  // ACTION: sin esto, un combo que Laura puso en una promo no se borra nunca
+  // —la base responde con un error de constraint que no nombra a la promo—.
+  // Un pack de catálogo es una fila de `combos`, así que cubre a los dos.
+  await db.delete(promotionTarget).where(eq(promotionTarget.comboId, id));
   const result = await db.delete(combos).where(eq(combos.id, id)).returning({ id: combos.id });
   return result.length > 0 ? null : "El combo no existe";
 }

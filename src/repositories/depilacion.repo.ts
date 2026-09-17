@@ -5,6 +5,7 @@ import {
   depilationCombo,
   depilationComboZone,
   depilationPricingConfig,
+  promotionTarget,
   zoneExclusion,
 } from "../db/schema";
 import {
@@ -813,24 +814,34 @@ export async function hardDeleteZona(db: Db, id: string): Promise<boolean> {
 }
 
 /**
- * Un combo de depilación no lo referencia nadie todavía (no hay turnos ni
- * facturas colgando de `depilation_combo`), así que borrarlo nunca queda
- * bloqueado. Se informa igual cuántas zonas se desvinculan para que la
- * confirmación diga algo concreto.
+ * Un combo de depilación no tiene turnos ni facturas colgando, así que borrarlo
+ * nunca queda bloqueado. Pero desde la 1.53.0 **sí lo referencia alguien**:
+ * puede estar en oferta en una promo (`promotion_target.depilation_combo_id`,
+ * FK NO ACTION). Se cuentan las dos cosas —zonas y ofertas— para que la
+ * confirmación diga la verdad en vez de prometer que no hay nada colgando.
  */
 export async function getComboDeleteImpact(db: Db, id: string): Promise<DeleteImpact> {
-  const zonas = await db
-    .select({ id: depilationComboZone.id })
-    .from(depilationComboZone)
-    .where(eq(depilationComboZone.comboId, id));
+  const [zonas, ofertas] = await Promise.all([
+    db
+      .select({ id: depilationComboZone.id })
+      .from(depilationComboZone)
+      .where(eq(depilationComboZone.comboId, id)),
+    db
+      .select({ id: promotionTarget.id })
+      .from(promotionTarget)
+      .where(eq(promotionTarget.depilationComboId, id)),
+  ]);
 
-  return { blocked: false, cascade: { zonas: zonas.length } };
+  return { blocked: false, cascade: { zonas: zonas.length, promoTargets: ofertas.length } };
 }
 
-/** Borra el combo y sus zonas asociadas en una transacción. */
+/** Borra el combo, sus zonas y las ofertas de promo que lo apuntaban, en una
+ *  transacción. Las ofertas van a mano: la FK es NO ACTION y sin borrarlas la
+ *  base rechaza el DELETE entero. */
 export async function hardDeleteCombo(db: Db, id: string): Promise<boolean> {
   const deleted = await db.transaction(async (tx) => {
     await tx.delete(depilationComboZone).where(eq(depilationComboZone.comboId, id));
+    await tx.delete(promotionTarget).where(eq(promotionTarget.depilationComboId, id));
     return tx
       .delete(depilationCombo)
       .where(eq(depilationCombo.id, id))
