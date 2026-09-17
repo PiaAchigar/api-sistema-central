@@ -2,6 +2,7 @@ import { and, asc, eq, ne } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   combos,
+  customerPurchase,
   depilationCombo,
   promotions,
   promotionService,
@@ -117,13 +118,6 @@ const promoFields = {
   usageLimit: promotions.usageLimit,
   notes: promotions.notes,
 };
-
-/** La columna de `promotion_target` donde vive cada tipo de destino. */
-const COLUMNA_DE_TIPO = {
-  servicio: promotionTarget.serviceId,
-  combo: promotionTarget.comboId,
-  depilacion: promotionTarget.depilationComboId,
-} as const;
 
 /**
  * Los destinos de una promo, con el nombre de cada uno.
@@ -303,6 +297,44 @@ export async function setPromotionStatus(db: Db, id: string, status: "active" | 
     .returning({ id: promotions.id });
   if (rows.length === 0) return null;
   return getPromotionById(db, id);
+}
+
+/**
+ * Qué se lleva puesto borrar una promo para siempre.
+ *
+ * Nunca bloquea, y es deliberado: desde la 1.53.0 la FK de `customer_purchase`
+ * es ON DELETE SET NULL y cada venta congeló su `promotion_name`, así que una
+ * venta vieja sigue contando su historia sin la promo.
+ *
+ * Lo que sí hay que decir son las dos cosas que cambian en silencio:
+ *
+ * - **Las ventas quedan desenganchadas.** Conservan el nombre, pierden el
+ *   vínculo.
+ * - **Los pagos acordados se borran.** Y eso mueve plata hacia adelante: todo
+ *   turno de esas ventas que todavía no se completó va a liquidarse por el
+ *   acuerdo general en vez del pago negociado para la promo
+ *   (`computeProviderEarning`). Sin este aviso, el botón promete que no hay
+ *   nada colgando.
+ */
+export async function getPromotionDeleteImpact(db: Db, id: string) {
+  const [ventas, pagos] = await Promise.all([
+    db
+      .select({ id: customerPurchase.id })
+      .from(customerPurchase)
+      // Todas, canceladas incluidas: una cancelada también pierde el vínculo,
+      // y contar sólo las vivas haría que el número no cierre con lo que Laura
+      // ve en la ficha de la clienta.
+      .where(eq(customerPurchase.promotionId, id)),
+    db
+      .select({ id: promotionService.id })
+      .from(promotionService)
+      .where(eq(promotionService.promotionId, id)),
+  ]);
+
+  return {
+    blocked: false,
+    cascade: { ventasDesenganchadas: ventas.length, pagosAcordados: pagos.length },
+  };
 }
 
 export async function deletePromotionPermanently(db: Db, id: string) {

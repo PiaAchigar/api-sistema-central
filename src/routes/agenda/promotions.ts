@@ -7,6 +7,8 @@ import { auth, requireAuth, requirePermission } from "../../middleware/auth";
 import {
   createPromotion,
   deletePromotionPermanently,
+  getPromotionById,
+  getPromotionDeleteImpact,
   listActivePromotions,
   listPromotions,
   setPromotionStatus,
@@ -17,7 +19,12 @@ import type { AppBindings, Variables } from "../../env";
 
 const promotionsRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 
-// ── Público (booking + Destacados web) — NO cambiar shape ────────────────────
+// ── Público — el único consumidor es la web (piubella_web) ──────────────────
+// Devuelve `targets` (qué está en oferta), no `services`: el shape cambió en
+// la 1.53.0 y la web se adaptó en la misma tanda. Destacados del dashboard ya
+// no pasa por acá —necesita ver también las promos sin publicar, así que usa
+// `/admin`— y front-agenda no lo consume. Si mañana cambia el shape otra vez,
+// lo que hay que mirar es `piubella_web`.
 const listQuery = z.object({
   featured: z.string().optional().transform((v) => v === "true"),
 });
@@ -134,6 +141,25 @@ promotionsRouter.post("/admin/:id/restore", auth, requireAuth, requirePermission
   if (!restored) throw notFound("Promotion");
   return c.json(serialize(restored));
 });
+
+// Qué se lleva puesto el borrado definitivo. Nunca bloquea (las ventas
+// conservan su `promotion_name`), pero tiene que decir lo que cambia en
+// silencio: las ventas que quedan sin promo y los pagos acordados que se
+// borran — con esos pagos se va el monto negociado de todo turno de esas
+// ventas que todavía no se completó.
+promotionsRouter.get(
+  "/admin/:id/delete-impact",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "manage"),
+  async (c) => {
+    const db = createDb(c.env);
+    const id = c.req.param("id");
+    const promo = await getPromotionById(db, id);
+    if (!promo) throw notFound("Promotion");
+    return c.json(await getPromotionDeleteImpact(db, id));
+  },
+);
 
 promotionsRouter.delete("/admin/:id/delete", auth, requireAuth, requirePermission("catalogo", "manage"), async (c) => {
   const db = createDb(c.env);
