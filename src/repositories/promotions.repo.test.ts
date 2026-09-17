@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { eq, inArray } from "drizzle-orm";
 import * as schema from "../db/schema";
 import {
+  appointments,
   combos,
   comboService,
   customerPurchase,
@@ -17,10 +18,12 @@ import {
   createPromotion,
   deletePromotionPermanently,
   getPromotionById,
+  getPromotionDeleteImpact,
   listActivePromotions,
   updatePromotion,
 } from "./promotions.repo";
 import { cancelCompra, createCompra } from "./compras.repo";
+import { getComboDeleteImpact } from "./combos.repo";
 import { motivoPromoNoVendible, obtenerPromoVendible } from "./catalogo-venta.repo";
 
 const NOMBRE_PROMO_DE_PRUEBA = "Promo de prueba";
@@ -370,6 +373,168 @@ describe("deletePromotionPermanently", () => {
     expect(destinos).toEqual([]);
     expect(pagos).toEqual([]);
     expect(await getPromotionById(db, promo!.id)).toBeNull();
+  });
+});
+
+describe("getPromotionDeleteImpact — qué se lleva puesto borrar la promo", () => {
+  it("cuenta las ventas que quedan desenganchadas y los pagos que se borran", async () => {
+    const promo = await createPromotion(
+      db,
+      header,
+      [{ tipo: "servicio", id: servicioId }],
+      [{ serviceId: servicioId, serviceProviderId: proveedoraId, providerPayment: 5000 }],
+    );
+    const ventas: string[] = [];
+    try {
+      ventas.push(await venderServicio(promo!.id, promo!.name));
+
+      const impacto = await getPromotionDeleteImpact(db, promo!.id);
+      // Nunca bloquea: el `promotion_name` congelado sobrevive y es deliberado.
+      expect(impacto.blocked).toBe(false);
+      expect(impacto.cascade.ventasDesenganchadas).toBe(1);
+      expect(impacto.cascade.pagosAcordados).toBe(1);
+    } finally {
+      await borrarVentas(ventas);
+      await deletePromotionPermanently(db, promo!.id);
+    }
+  });
+
+  it("cuenta los turnos todavía sin completar que hoy cobrarían el pago de la promo", async () => {
+    // Es el número que más duele: esos turnos, al marcarse Realizado, van a
+    // liquidarse por el acuerdo general. Un turno YA completado no cuenta —
+    // congeló su `provider_earning` y borrar la promo no lo mueve.
+    const promo = await createPromotion(
+      db,
+      header,
+      [{ tipo: "servicio", id: servicioId }],
+      [{ serviceId: servicioId, serviceProviderId: proveedoraId, providerPayment: 5000 }],
+    );
+    const ventas: string[] = [];
+    let turnoId: string | undefined;
+    try {
+      const ventaId = await venderServicio(promo!.id, promo!.name);
+      ventas.push(ventaId);
+
+      const [turno] = await db
+        .insert(appointments)
+        .values({
+          serviceId: servicioId,
+          serviceProviderId: proveedoraId,
+          status: "scheduled",
+          durationMinutes: 60,
+        })
+        .returning({ id: appointments.id });
+      turnoId = turno!.id;
+
+      await db
+        .update(customerPurchaseService)
+        .set({ appointmentId: turnoId })
+        .where(eq(customerPurchaseService.customerPurchaseId, ventaId));
+
+      const conTurno = await getPromotionDeleteImpact(db, promo!.id);
+      expect(conTurno.cascade.turnosAfectados).toBe(1);
+
+      // Ya cobrado: sale de la cuenta.
+      await db
+        .update(appointments)
+        .set({ status: "completed" })
+        .where(eq(appointments.id, turnoId));
+      const yaCobrado = await getPromotionDeleteImpact(db, promo!.id);
+      expect(yaCobrado.cascade.turnosAfectados).toBe(0);
+    } finally {
+      await borrarVentas(ventas);
+      if (turnoId) await db.delete(appointments).where(eq(appointments.id, turnoId));
+      await deletePromotionPermanently(db, promo!.id);
+    }
+  });
+
+  it("sin pago acordado para esa proveedora, el turno no cuenta", async () => {
+    // El match es (promo, servicio, proveedora), igual que
+    // computeProviderEarning: si el pago no existe, ese turno ya se cobraba
+    // por el acuerdo general y borrar la promo no le cambia nada.
+    const promo = await createPromotion(
+      db,
+      header,
+      [{ tipo: "servicio", id: servicioId }],
+      [],
+    );
+    const ventas: string[] = [];
+    let turnoId: string | undefined;
+    try {
+      const ventaId = await venderServicio(promo!.id, promo!.name);
+      ventas.push(ventaId);
+      const [turno] = await db
+        .insert(appointments)
+        .values({
+          serviceId: servicioId,
+          serviceProviderId: proveedoraId,
+          status: "scheduled",
+          durationMinutes: 60,
+        })
+        .returning({ id: appointments.id });
+      turnoId = turno!.id;
+      await db
+        .update(customerPurchaseService)
+        .set({ appointmentId: turnoId })
+        .where(eq(customerPurchaseService.customerPurchaseId, ventaId));
+
+      const impacto = await getPromotionDeleteImpact(db, promo!.id);
+      expect(impacto.cascade.pagosAcordados).toBe(0);
+      expect(impacto.cascade.turnosAfectados).toBe(0);
+    } finally {
+      await borrarVentas(ventas);
+      if (turnoId) await db.delete(appointments).where(eq(appointments.id, turnoId));
+      await deletePromotionPermanently(db, promo!.id);
+    }
+  });
+});
+
+describe("getComboDeleteImpact — el combo que está en oferta", () => {
+  /** Un combo propio, sin compras: así el impacto no queda bloqueado por datos
+   *  del catálogo real y el contador de ofertas arranca en cero. */
+  async function comboDePrueba() {
+    const [area] = await db.execute<{ id: string }>(
+      "select id from categories where kind = 'area' limit 1" as never,
+    );
+    const [creado] = await db
+      .insert(combos)
+      .values({
+        name: QA,
+        priceType: "fixed",
+        fixedPrice: "1000",
+        validityMonths: 1,
+        isActive: true,
+        areaCategoryId: area!.id,
+      })
+      .returning({ id: combos.id });
+    return creado!.id;
+  }
+
+  it("cuenta las promos que lo tienen en oferta", async () => {
+    // El borrado ya limpia `promotion_target`, así que el DELETE funciona. Sin
+    // este número el cartel dice que no hay nada colgando y la promo pierde su
+    // destino en silencio — si era el único, queda viva pero inerte.
+    const id = await comboDePrueba();
+    const promo = await createPromotion(db, header, [{ tipo: "combo", id }], []);
+    try {
+      const impacto = await getComboDeleteImpact(db, id);
+      expect(impacto.blocked).toBe(false);
+      expect(impacto.cascade.promoTargets).toBe(1);
+    } finally {
+      await deletePromotionPermanently(db, promo!.id);
+      await db.delete(combos).where(eq(combos.id, id));
+    }
+  });
+
+  it("sin promos que lo apunten, el contador queda en cero", async () => {
+    const id = await comboDePrueba();
+    try {
+      const impacto = await getComboDeleteImpact(db, id);
+      expect(impacto.cascade.promoTargets).toBe(0);
+      expect(impacto.blockReason).toBeUndefined();
+    } finally {
+      await db.delete(combos).where(eq(combos.id, id));
+    }
   });
 });
 

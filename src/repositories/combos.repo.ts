@@ -572,16 +572,19 @@ export async function setComboStatus(db: Db, id: string, isActive: boolean) {
 }
 
 /**
- * Borrado real, con las dos guardas que pedía la fase 2.
+ * Las dos guardas del borrado real, que pedía la fase 2.
  *
- * Es la salida cuando un combo se cargó mal: como la composición no se edita
- * (`updateCombo`), lo que se hace es borrarlo y rehacerlo. Eso vale **mientras
- * nadie lo haya comprado**; después sólo se archiva, porque una compra vieja
- * tiene que poder seguir explicando qué se vendió.
+ * Borrar es la salida cuando un combo se cargó mal: como la composición no se
+ * edita (`updateCombo`), lo que se hace es borrarlo y rehacerlo. Eso vale
+ * **mientras nadie lo haya comprado**; después sólo se archiva, porque una
+ * compra vieja tiene que poder seguir explicando qué se vendió.
  *
- * Devuelve el motivo del rechazo, o `null` si borró.
+ * Vive en su propia función porque la usan los DOS lados —el preview y el
+ * DELETE— y que digan cosas distintas sería peor que no tener preview.
+ *
+ * Devuelve el motivo del rechazo, o `undefined` si se puede borrar.
  */
-export async function deleteComboPermanently(db: Db, id: string): Promise<string | null> {
+async function motivoParaNoBorrarCombo(db: Db, id: string): Promise<string | undefined> {
   const compras = await comprasDeCombo(db, id);
   if (compras > 0) {
     return compras === 1
@@ -596,6 +599,45 @@ export async function deleteComboPermanently(db: Db, id: string): Promise<string
   if (packs.length > 0) {
     return `No se puede borrar: hay packs que lo repiten (${packs.map((p) => p.name).join(", ")}). Borrá esos packs primero.`;
   }
+
+  return undefined;
+}
+
+/**
+ * Qué se lleva puesto borrar un combo o un pack, ANTES de confirmarlo.
+ *
+ * Existe por lo que pasó al arreglar el borrado: desde que
+ * `deleteComboPermanently` limpia `promotion_target`, el DELETE **funciona** —
+ * y sin este preview el cartel decía que no había nada colgando mientras la
+ * promo perdía ese destino en silencio. Si era su único destino, la promo
+ * queda viva pero inerte: no aplica a nada. Antes la base lo frenaba con un
+ * error de constraint; feo, pero frenaba.
+ *
+ * Las mismas dos guardas que usa el borrado (`motivoParaNoBorrarCombo`), para
+ * que el preview y el DELETE nunca digan cosas distintas.
+ */
+export async function getComboDeleteImpact(db: Db, id: string) {
+  const [blockReason, lineas, ofertas] = await Promise.all([
+    motivoParaNoBorrarCombo(db, id),
+    db.select({ id: comboService.id }).from(comboService).where(eq(comboService.comboId, id)),
+    db.select({ id: promotionTarget.id }).from(promotionTarget).where(eq(promotionTarget.comboId, id)),
+  ]);
+
+  return {
+    blocked: blockReason != null,
+    blockReason,
+    cascade: { servicios: lineas.length, promoTargets: ofertas.length },
+  };
+}
+
+/** Borra el combo (o el pack) y todo lo que colgaba de él. El caller debería
+ *  haber mirado `getComboDeleteImpact` antes, pero las guardas se revalidan
+ *  acá: entre el preview y el DELETE alguien pudo comprarlo.
+ *
+ *  Devuelve el motivo del rechazo, o `null` si borró. */
+export async function deleteComboPermanently(db: Db, id: string): Promise<string | null> {
+  const motivo = await motivoParaNoBorrarCombo(db, id);
+  if (motivo) return motivo;
 
   await db.delete(comboService).where(eq(comboService.comboId, id));
   // Y lo que este combo tuviera en oferta. `promotion_target.combo_id` es NO

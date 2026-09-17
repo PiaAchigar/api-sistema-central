@@ -1,8 +1,10 @@
-import { and, asc, eq, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
+  appointments,
   combos,
   customerPurchase,
+  customerPurchaseService,
   depilationCombo,
   promotions,
   promotionService,
@@ -315,9 +317,16 @@ export async function setPromotionStatus(db: Db, id: string, status: "active" | 
  *   acuerdo general en vez del pago negociado para la promo
  *   (`computeProviderEarning`). Sin este aviso, el botón promete que no hay
  *   nada colgando.
+ *
+ * `turnosAfectados` es ese último número, y es el que más duele: los turnos
+ * que HOY cobrarían el pago de la promo y mañana no. Se cuenta con el mismo
+ * match que usa `computeProviderEarning` —(promo, servicio, proveedora)— y
+ * sólo sobre los turnos que todavía no congelaron su `provider_earning`
+ * (`reserved`/`scheduled`). Un turno completado ya cobró: la plata está
+ * congelada y borrar la promo no la mueve.
  */
 export async function getPromotionDeleteImpact(db: Db, id: string) {
-  const [ventas, pagos] = await Promise.all([
+  const [ventas, pagos, turnos] = await Promise.all([
     db
       .select({ id: customerPurchase.id })
       .from(customerPurchase)
@@ -329,11 +338,38 @@ export async function getPromotionDeleteImpact(db: Db, id: string) {
       .select({ id: promotionService.id })
       .from(promotionService)
       .where(eq(promotionService.promotionId, id)),
+    db
+      .select({ id: appointments.id })
+      .from(appointments)
+      .innerJoin(customerPurchaseService, eq(customerPurchaseService.appointmentId, appointments.id))
+      .innerJoin(
+        customerPurchase,
+        eq(customerPurchase.id, customerPurchaseService.customerPurchaseId),
+      )
+      .innerJoin(
+        promotionService,
+        and(
+          eq(promotionService.promotionId, customerPurchase.promotionId),
+          eq(promotionService.serviceId, appointments.serviceId),
+          eq(promotionService.serviceProviderId, appointments.serviceProviderId),
+        ),
+      )
+      .where(
+        and(
+          eq(customerPurchase.promotionId, id),
+          isNull(customerPurchase.cancelledAt),
+          inArray(appointments.status, ["reserved", "scheduled"]),
+        ),
+      ),
   ]);
 
   return {
     blocked: false,
-    cascade: { ventasDesenganchadas: ventas.length, pagosAcordados: pagos.length },
+    cascade: {
+      ventasDesenganchadas: ventas.length,
+      pagosAcordados: pagos.length,
+      turnosAfectados: turnos.length,
+    },
   };
 }
 

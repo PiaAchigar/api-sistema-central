@@ -13,11 +13,11 @@ export function computeComboSubtotal(lines: ComboPricedLine[]): number {
  * Precio final del combo. Nunca negativo.
  *
  * OJO — `fixed` acá NO significa lo mismo que el `fixed_amount` de las promos.
- * En una promo, `fixed_amount` es un descuento: se resta del subtotal. En un
- * combo, `fixed` es el precio cerrado: el combo cuesta eso y el subtotal sólo
- * sirve para mostrar cuánto se ahorra. Por eso este módulo existe aparte de
- * `promo-pricing.ts` en vez de compartir `applyDiscount`: son dos operaciones
- * distintas y confundirlas es un error de plata.
+ * En una promo, `fixed_amount` es un descuento: se resta de lo que la clienta
+ * compra (`pack-pricing.aplicarPromo`). En un combo, `fixed` es el precio
+ * cerrado: el combo cuesta eso y el subtotal sólo sirve para mostrar cuánto se
+ * ahorra. Son dos operaciones distintas y confundirlas es un error de plata,
+ * así que el descuento de promo vive en su propio módulo y este no lo importa.
  *
  * Si falta el dato que el tipo de precio necesita, se devuelve el subtotal sin
  * tocar. Es preferible mostrar el precio de lista que un cero engañoso.

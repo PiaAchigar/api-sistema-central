@@ -9,6 +9,7 @@ import {
   deleteComboPermanently,
   duplicadosDe,
   getComboById,
+  getComboDeleteImpact,
   listCombos,
   listPublicCombos,
   guardarTarifario,
@@ -392,6 +393,24 @@ combosRouter.post(
     const restored = await setComboStatus(db, c.req.param("id"), true);
     if (!restored) throw notFound("Combo");
     return c.json(restored);
+  },
+);
+
+// Impacto de un borrado real: si está bloqueado (compras o packs que lo
+// repiten) y qué se desvincula — incluidas las promos que lo tienen en oferta.
+// Sin esto el cartel prometía que no había nada colgando mientras la promo
+// perdía su destino en silencio.
+combosRouter.get(
+  "/admin/:id/delete-impact",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "manage"),
+  async (c) => {
+    const db = createDb(c.env);
+    const id = c.req.param("id");
+    const combo = await getComboById(db, id);
+    if (!combo) throw notFound("Combo");
+    return c.json(await getComboDeleteImpact(db, id));
   },
 );
 
