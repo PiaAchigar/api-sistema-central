@@ -10,8 +10,17 @@ import {
   lineItems,
   payments,
   service,
+  depilationCombo,
+  training,
 } from "../db/schema";
-import { estadoDeSesion, resumenDeCompra, tieneTurno, type EstadoSesion } from "../lib/compras";
+import {
+  estadoDeSesion,
+  nombreDeCabecera,
+  nombreDeLaLinea,
+  resumenDeCompra,
+  tieneTurno,
+  type EstadoSesion,
+} from "../lib/compras";
 import { razonesParaNoBorrarCompra, type ImpactoDeBorrado } from "../lib/compra-borrado";
 import { saldoAAcreditar, type ServicioParaSaldo } from "../lib/saldo-de-cancelacion";
 import { planDePagoConSaldo } from "../lib/pago-con-saldo";
@@ -280,6 +289,44 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
       ),
   ]);
 
+  // Cómo se llama una línea que NO es un servicio.
+  //
+  // `customer_purchase_service.service_id` va en NULL para depilación y
+  // capacitaciones: esas compras no se desglosan en servicios. Quién es la
+  // línea lo sabe la CABECERA de la compra, así que el nombre sale de ahí.
+  // Sin esto la ficha de la clienta dibuja un guión en cada renglón —una
+  // compra de 3 sesiones de "Cuerpo Full" se ve como "—", "—", "—"— y no hay
+  // forma de saber qué compró.
+  //
+  // Funciona porque hoy una compra tiene UN solo origen. Cuando la promo se
+  // venda como paquete, la línea va a traer su propia identidad y esto queda
+  // como respaldo para las compras viejas.
+  const packIds = [...new Set(compras.map((c) => c.depilationComboId).filter((v): v is string => v != null))];
+  const capIds = [...new Set(compras.map((c) => c.trainingId).filter((v): v is string => v != null))];
+
+  const [packs, capacitaciones] = await Promise.all([
+    packIds.length > 0
+      ? db
+          .select({ id: depilationCombo.id, name: depilationCombo.name })
+          .from(depilationCombo)
+          .where(inArray(depilationCombo.id, packIds))
+      : [],
+    capIds.length > 0
+      ? db
+          .select({ id: training.id, name: training.name })
+          .from(training)
+          .where(inArray(training.id, capIds))
+      : [],
+  ]);
+  // `training.name` es nullable en el esquema, así que las sin nombre se
+  // descartan: dejar una entrada en null haría que el respaldo "funcione"
+  // devolviendo nada, que es el bug que esto viene a arreglar.
+  const nombrePorId = new Map<string, string>(
+    [...packs, ...capacitaciones]
+      .filter((f): f is { id: string; name: string } => f.name != null)
+      .map((f) => [f.id, f.name]),
+  );
+
   // Notas de crédito todavía en borrador. La emite Laura desde el facturador,
   // pero el CRM tiene que poder decir que falta: si la clienta llama
   // preguntando por su devolución, quien atiende no debería abrir otra app.
@@ -304,6 +351,8 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
 
   return compras.map((c) => {
     const mias = sesiones.filter((s) => s.customerPurchaseId === c.id);
+    // El nombre de respaldo de ESTA compra, para sus líneas sin servicio.
+    const respaldo = nombreDeCabecera(c, nombrePorId);
     const vigencia = { expiresAt: c.expiresAt, cancelledAt: c.cancelledAt };
     const resumen = resumenDeCompra(
       { finalAmount: Number(c.finalAmount), ...vigencia },
@@ -347,7 +396,7 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
           return {
             id: s.id,
             serviceId: s.serviceId,
-            serviceName: s.serviceName,
+            serviceName: nombreDeLaLinea(s.serviceName, respaldo),
             repeticion: s.repeticion,
             orden: s.orden,
             appointmentId: conTurno ? s.appointmentId : null,

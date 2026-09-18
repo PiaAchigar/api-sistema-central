@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { estadoDeSesion, resumenDeCompra, tieneTurno } from "./compras";
+import {
+  estadoDeSesion,
+  nombreDeCabecera,
+  nombreDeLaLinea,
+  resumenDeCompra,
+  tieneTurno,
+} from "./compras";
 
 const AHORA = new Date("2026-09-08T12:00:00Z");
 const VIGENTE = { expiresAt: new Date("2026-12-31T00:00:00Z"), cancelledAt: null };
@@ -164,5 +170,46 @@ describe("tieneTurno", () => {
 
   it("vencida tampoco", () => {
     expect(tieneTurno("vencida")).toBe(false);
+  });
+});
+
+describe("nombreDeLaLinea", () => {
+  it("usa el servicio cuando la línea tiene uno", () => {
+    expect(nombreDeLaLinea("Baby Botox", "Cuerpo Full")).toBe("Baby Botox");
+  });
+
+  it("cae a la cabecera cuando la línea no tiene servicio (depilación)", () => {
+    expect(nombreDeLaLinea(null, "Cuerpo Full")).toBe("Cuerpo Full");
+  });
+
+  it("devuelve null si no hay ninguno: no inventamos un nombre", () => {
+    expect(nombreDeLaLinea(null, null)).toBeNull();
+  });
+});
+
+describe("nombreDeCabecera", () => {
+  const nombres = new Map([
+    ["pack-1", "Cuerpo Full"],
+    ["cap-1", "Formación en Cosmetología"],
+  ]);
+
+  it("el pack de depilación", () => {
+    expect(nombreDeCabecera({ depilationComboId: "pack-1", trainingId: null }, nombres)).toBe(
+      "Cuerpo Full",
+    );
+  });
+
+  it("la capacitación", () => {
+    expect(nombreDeCabecera({ depilationComboId: null, trainingId: "cap-1" }, nombres)).toBe(
+      "Formación en Cosmetología",
+    );
+  });
+
+  it("una compra de combo o servicio no tiene respaldo: su línea ya trae nombre", () => {
+    expect(nombreDeCabecera({ depilationComboId: null, trainingId: null }, nombres)).toBeNull();
+  });
+
+  it("un id que no está en el mapa devuelve null, no undefined", () => {
+    expect(nombreDeCabecera({ depilationComboId: "pack-borrado", trainingId: null }, nombres)).toBeNull();
   });
 });
