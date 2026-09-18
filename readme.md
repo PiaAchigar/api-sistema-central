@@ -207,6 +207,75 @@ Mismo modelo de permisos. Archivar = `status='inactive'`. Crear un log recalcula
 > El servicio se vincula a su máquina principal vía `service_machine`: el `PATCH/POST`
 > de `services` acepta `machineId` (reemplaza el vínculo) y el `GET` devuelve `primaryMachine`.
 
+### Sitio Web — lectura pública (lo que consume `piubella_web`)
+
+Estas son **todas** las rutas que el sitio público le pide al Worker. La lista
+sale de `piubella_web/src/lib/worker-api.ts`, que es el único lugar del sitio
+que habla con la API: si una ruta no está acá, la web no la usa.
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| `GET` | `/api/agenda/categories` | Árbol de categorías. La web descarta las de `kind='area'`: cada servicio ya cuelga de su técnica, así que mostrarlas duplicaría el árbol |
+| `GET` | `/api/agenda/services?categoryId=&q=&featured=` | Servicios, filtrables por categoría, texto o destacados |
+| `GET` | `/api/agenda/availability/:serviceId?date=YYYY-MM-DD` | Slots disponibles |
+| `GET` | `/api/agenda/company-config` | Textos, contacto y horarios |
+| `GET` | `/api/agenda/promotions?featured=true` | Promos vigentes y con `is_visible_web`, con sus `targets` (1.53.0) |
+| `GET` | `/api/agenda/combos` | Combos y packs con `is_visible_web` |
+| `GET` | `/api/agenda/depilacion/packs-publicos` | Packs de depilación con `is_published_web` |
+| `GET` | `/api/agenda/trainings?featured=true` | Capacitaciones visibles |
+| `GET` | `/api/agenda/activities` | Actividades (Pilates, Thermobike) |
+
+> **Sin `auth`.** Es catálogo: lo lee cualquiera que abra la página. Verificado
+> en vivo para `/combos` y `/depilacion/packs-publicos`; el resto sigue el mismo
+> criterio desde antes.
+
+#### `GET /api/agenda/combos`
+
+Devuelve el combo con sus renglones y **sus dos precios**:
+
+- `servicesSubtotal` — la suma de los precios de lista de los servicios que
+  incluye. Es el número que la web **tacha**.
+- `finalAmount` — lo que sale el combo.
+
+Y, desde el rediseño de `/servicios` (2026-09-18), **dos formas de agrupar que
+no son lo mismo**:
+
+- `areaCategoryId` / `areaName` — el **área** del combo (son 6: Estética,
+  Depilación Definitiva, Medicina y Dermatología, Masajes y Bienestar,
+  Actividades, Capacitaciones). Es el título cuando se toca el botón "Combos".
+- `clasificaciones: [{ id, name }]` — las **clasificaciones** donde el combo
+  aparece dentro del árbol del menú (son 8: las categorías raíz que no son
+  áreas). Un combo sale en **cada** clasificación que tenga alguno de sus
+  servicios, así que la lista puede traer más de una y eso es querido:
+  `Combo1-prueba` es del área Estética pero sus servicios caen en Belleza y en
+  Tratamientos Médicos, así que aparece en las dos.
+
+Un **pack** (`kind='pack'`) no tiene renglones propios: repite otro combo. Sus
+clasificaciones se resuelven por `COALESCE(pack_of_combo_id, id)`, o saldría sin
+ninguna y desaparecería del árbol.
+
+#### `GET /api/agenda/depilacion/packs-publicos`
+
+Los packs de depilación que se muestran en la web. Filtra `kind='pack_fijo'`,
+`is_active` y **`is_published_web`**.
+
+```json
+[{ "id": "…", "name": "Cuerpo Full", "description": null,
+   "fixedPrice": 65000, "fixedDurationMinutes": 90,
+   "choiceZoneCount": 0, "zonas": ["Axilas", "Piernas completas"] }]
+```
+
+`choiceZoneCount > 0` significa que la clienta elige esa cantidad de zonas
+**además** de las de `zonas`.
+
+> **No confundir con `listarPacksFijos`**, que alimenta `/cotizar`: ésa trae
+> todos los activos —publicados o no— y devuelve **ids** de zona, no nombres.
+> Son dos lecturas distintas de la misma tabla y tienen que seguir siéndolo.
+
+> **Sin precio tachado, a propósito.** `depilation_combo` guarda `fixed_price` y
+> no hay contra qué compararlo, así que la card no muestra tachado. Inventar uno
+> sería mentirle a la clienta.
+
 ### Sitio Web — CRUD admin (Pieza 4)
 
 Contenido de la web pública: visibilidad, destacados, textos, galería, testimonios y FAQ.
