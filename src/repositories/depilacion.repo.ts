@@ -396,6 +396,81 @@ export async function listarPacksFijos(db: Db): Promise<PackFijo[]> {
   }));
 }
 
+/**
+ * Los packs de depilación que se muestran en la web pública.
+ *
+ * No es `listarPacksFijos`: ése alimenta `/cotizar` y por eso trae TODOS los
+ * activos con ids de zona. Éste es para que la clienta los lea, así que filtra
+ * por `is_published_web` y trae los NOMBRES de las zonas.
+ *
+ * Sin precio tachado a propósito: `depilation_combo` guarda `fixed_price` y
+ * nada contra qué compararlo. Ver el spec §6.2.
+ */
+export type PackPublico = {
+  id: string;
+  name: string;
+  description: string | null;
+  fixedPrice: number | null;
+  fixedDurationMinutes: number | null;
+  /** > 0 significa "la clienta elige N zonas" además de las de `zonas`. */
+  choiceZoneCount: number;
+  /** Nombres de las zonas que el pack incluye siempre. */
+  zonas: string[];
+};
+
+export async function listarPacksPublicos(db: Db): Promise<PackPublico[]> {
+  const packs = await db
+    .select({
+      id: depilationCombo.id,
+      name: depilationCombo.name,
+      description: depilationCombo.description,
+      fixedPrice: depilationCombo.fixedPrice,
+      fixedDurationMinutes: depilationCombo.fixedDurationMinutes,
+      choiceZoneCount: depilationCombo.choiceZoneCount,
+    })
+    .from(depilationCombo)
+    .where(
+      and(
+        eq(depilationCombo.kind, "pack_fijo"),
+        eq(depilationCombo.isActive, true),
+        eq(depilationCombo.isPublishedWeb, true),
+      ),
+    )
+    .orderBy(asc(depilationCombo.displayOrder), asc(depilationCombo.name));
+
+  if (packs.length === 0) return [];
+
+  const zoneRows = await db
+    .select({ comboId: depilationComboZone.comboId, zoneName: bodyZone.name })
+    .from(depilationComboZone)
+    .innerJoin(bodyZone, eq(bodyZone.id, depilationComboZone.zoneId))
+    .where(
+      inArray(
+        depilationComboZone.comboId,
+        packs.map((p) => p.id),
+      ),
+    );
+
+  const zonasPorPack = new Map<string, string[]>();
+  for (const r of zoneRows) {
+    const lista = zonasPorPack.get(r.comboId) ?? [];
+    lista.push(r.zoneName);
+    zonasPorPack.set(r.comboId, lista);
+  }
+
+  return packs.map((p) => ({
+    id: p.id,
+    name: p.name,
+    description: p.description,
+    fixedPrice: p.fixedPrice == null ? null : Number(p.fixedPrice),
+    fixedDurationMinutes: p.fixedDurationMinutes,
+    choiceZoneCount: p.choiceZoneCount,
+    // Alfabético: el orden de inserción de `depilation_combo_zone` no significa
+    // nada y la clienta lee esta lista.
+    zonas: (zonasPorPack.get(p.id) ?? []).sort((a, b) => a.localeCompare(b, "es")),
+  }));
+}
+
 // ── Combos (Solapa Combos: guardado y CRUD de packs) ────────────────────────
 
 /**

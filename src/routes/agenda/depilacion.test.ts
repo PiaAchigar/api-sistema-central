@@ -2093,3 +2093,20 @@ describe("Pack por combo (integración real)", () => {
     expect(cuerpoFull.pack.precio).toBe(166000);
   });
 });
+
+describe("packs públicos", () => {
+  it("la ruta existe y es GET", () => {
+    const gets = depilacionRouter.routes
+      .filter((r) => r.method === "GET")
+      .map((r) => r.path);
+    expect(gets).toContain("/packs-publicos");
+  });
+
+  it("va ANTES de cualquier ruta con parámetro: Hono resuelve por orden de registro", () => {
+    const paths = depilacionRouter.routes.filter((r) => r.method === "GET").map((r) => r.path);
+    const fija = paths.indexOf("/packs-publicos");
+    const conParam = paths.findIndex((p) => p.includes(":"));
+    expect(fija).toBeGreaterThanOrEqual(0);
+    if (conParam >= 0) expect(fija).toBeLessThan(conParam);
+  });
+});

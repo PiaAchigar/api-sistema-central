@@ -26,6 +26,7 @@ import {
   listarCombos,
   listarExclusiones,
   listarPacksFijos,
+  listarPacksPublicos,
   listarZonas,
   obtenerCombo,
   obtenerKindYPrecioDeCombo,
@@ -314,6 +315,16 @@ export const comboDepilacionBody = z
       vistos.add(id);
     }
   });
+
+// ── Pública (la consume piubella_web) ───────────────────────────────────────
+// Sin `auth`: es catálogo, igual que `GET /api/agenda/combos`.
+// Va ANTES de cualquier GET con `:param`: Hono resuelve por orden de
+// registro y una ruta fija registrada después de una con parámetro nunca se
+// alcanza.
+depilacionRouter.get("/packs-publicos", async (c) => {
+  const db = createDb(c.env);
+  return c.json(await listarPacksPublicos(db));
+});
 
 // ── Zonas ────────────────────────────────────────────────────────────────
 
