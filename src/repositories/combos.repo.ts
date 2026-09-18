@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   areaPackPolicy,
@@ -10,6 +10,11 @@ import {
   service,
 } from "../db/schema";
 import { computeComboFinalPrice, computeComboSubtotal, precioDeServicio } from "../lib/combo-pricing";
+import {
+  agruparClasificaciones,
+  type Clasificacion,
+  type FilaDeClasificacion,
+} from "../lib/clasificaciones-de-combo";
 import { type ComboComparable, combosDuplicados } from "../lib/combo-duplicado";
 import { precioPack } from "../lib/pack-pricing";
 import { type PoliticaDeArea, politicaDeUnPack } from "../lib/politica-de-pack";
@@ -130,6 +135,7 @@ export function assembleCombo(
     // Explícitas y no por el spread: `combo` entra como `Record<string,
     // unknown>`, así que al esparcirlo TypeScript no ve ninguna de estas
     // claves y todo lo que las lea después no compila.
+    id: combo.id as string,
     areaCategoryId: (combo.areaCategoryId as string | null) ?? null,
     packOfComboId: (combo.packOfComboId as string | null) ?? null,
     packSessions: (combo.packSessions as number | null) ?? null,
@@ -341,7 +347,82 @@ export async function listPublicCombos(db: Db) {
   }
   // Sin esta pasada un pack se publicaría con el precio de sus renglones —
   // cero, si repite un combo— en vez del precio del pack.
-  return conPrecioDePack(db, out);
+  const conPrecio = await conPrecioDePack(db, out);
+  return conAreaYClasificaciones(db, conPrecio);
+}
+
+/**
+ * Le agrega a cada combo el NOMBRE de su área y sus clasificaciones.
+ *
+ * Son dos agrupaciones distintas y la web usa las dos: el área es el título
+ * cuando se toca el botón "Combos"; las clasificaciones son los lugares del
+ * árbol del menú donde el combo aparece. Ver el spec §2 — confundirlas es el
+ * error fácil acá.
+ *
+ * Un PACK no tiene renglones propios: repite otro combo. Por eso los servicios
+ * se buscan por `COALESCE(pack_of_combo_id, id)`, o un pack saldría sin
+ * clasificaciones y desaparecería del árbol.
+ */
+async function conAreaYClasificaciones<T extends { id: string; areaCategoryId: string | null }>(
+  db: Db,
+  filas: T[],
+): Promise<(T & { areaName: string | null; clasificaciones: Clasificacion[] })[]> {
+  if (filas.length === 0) return [];
+  const ids = filas.map((f) => f.id);
+
+  const areaIds = [...new Set(filas.map((f) => f.areaCategoryId).filter((v): v is string => v != null))];
+  const [areas, crudas] = await Promise.all([
+    areaIds.length > 0
+      ? db
+          .select({ id: categories.id, name: categories.name })
+          .from(categories)
+          .where(inArray(categories.id, areaIds))
+      : Promise.resolve([] as { id: string; name: string }[]),
+    // Sube desde cada categoría de cada servicio hasta la raíz, y se queda con
+    // las raíces que no son áreas. `sube.origen` conserva de qué categoría se
+    // partió, que es por donde engancha `service_category`.
+    db.execute<{
+      combo_id: string;
+      clasificacion_id: string;
+      clasificacion_name: string | null;
+    }>(sql`
+      WITH RECURSIVE sube AS (
+        SELECT c.id, c.id AS origen, c.parent_category_id, c.kind, c.name
+          FROM categories c
+        UNION ALL
+        SELECT p.id, sube.origen, p.parent_category_id, p.kind, p.name
+          FROM categories p JOIN sube ON sube.parent_category_id = p.id
+      )
+      SELECT DISTINCT
+             c.id   AS combo_id,
+             sube.id   AS clasificacion_id,
+             sube.name AS clasificacion_name
+        FROM combos c
+        JOIN combo_service cs ON cs.combo_id = COALESCE(c.pack_of_combo_id, c.id)
+        JOIN service_category sc ON sc.service_id = cs.service_id
+        JOIN sube ON sube.origen = sc.category_id
+       WHERE sube.parent_category_id IS NULL
+         AND sube.kind <> 'area'
+         AND c.id = ANY(${ids})
+    `),
+  ]);
+
+  const nombreDeArea = new Map(areas.map((a) => [a.id, a.name]));
+  const clasifs = agruparClasificaciones(
+    [...crudas].map(
+      (r): FilaDeClasificacion => ({
+        comboId: r.combo_id,
+        clasificacionId: r.clasificacion_id,
+        clasificacionName: r.clasificacion_name,
+      }),
+    ),
+  );
+
+  return filas.map((f) => ({
+    ...f,
+    areaName: f.areaCategoryId ? (nombreDeArea.get(f.areaCategoryId) ?? null) : null,
+    clasificaciones: clasifs.get(f.id) ?? [],
+  }));
 }
 
 /**
