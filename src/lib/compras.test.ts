@@ -187,6 +187,28 @@ describe("nombreDeLaLinea", () => {
   });
 });
 
+describe("nombreDeLaLinea — con identidad propia (1.55.0)", () => {
+  it("el nombre propio de la línea gana sobre el de la cabecera", () => {
+    // En un paquete la cabecera no sabe quién es cada línea: puede haber dos
+    // packs distintos. La línea lo sabe.
+    expect(nombreDeLaLinea(null, "Cuerpo Full", "Piernas completas")).toBe("Piernas completas");
+  });
+
+  it("el servicio sigue ganando sobre todo lo demás", () => {
+    expect(nombreDeLaLinea("Baby Botox", "Cuerpo Full", "Piernas completas")).toBe("Baby Botox");
+  });
+
+  it("sin nombre propio cae a la cabecera, como las compras viejas", () => {
+    // Compatibilidad hacia atrás: una compra de depilación anterior a la
+    // 1.55.0 no tiene la columna rellena y se sigue viendo bien.
+    expect(nombreDeLaLinea(null, "Cuerpo Full", null)).toBe("Cuerpo Full");
+  });
+
+  it("sin nada devuelve null, no un string vacío", () => {
+    expect(nombreDeLaLinea(null, null, null)).toBeNull();
+  });
+});
+
 describe("nombreDeCabecera", () => {
   const nombres = new Map([
     ["pack-1", "Cuerpo Full"],

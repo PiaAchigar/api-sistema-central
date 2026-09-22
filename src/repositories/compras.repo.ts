@@ -492,10 +492,16 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
         consumedAt: customerPurchaseService.consumedAt,
         appointmentStatus: appointments.status,
         appointmentStart: appointments.appointmentStart,
+        depilationComboId: customerPurchaseService.depilationComboId,
+        trainingId: customerPurchaseService.trainingId,
+        packName: depilationCombo.name,
+        trainingName: training.name,
       })
       .from(customerPurchaseService)
       .leftJoin(service, eq(service.id, customerPurchaseService.serviceId))
       .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
+      .leftJoin(depilationCombo, eq(depilationCombo.id, customerPurchaseService.depilationComboId))
+      .leftJoin(training, eq(training.id, customerPurchaseService.trainingId))
       .where(inArray(customerPurchaseService.customerPurchaseId, ids)),
     db
       .select({
@@ -630,7 +636,7 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
           return {
             id: s.id,
             serviceId: s.serviceId,
-            serviceName: nombreDeLaLinea(s.serviceName, respaldo),
+            serviceName: nombreDeLaLinea(s.serviceName, respaldo, s.packName ?? s.trainingName ?? null),
             repeticion: s.repeticion,
             orden: s.orden,
             appointmentId: conTurno ? s.appointmentId : null,
