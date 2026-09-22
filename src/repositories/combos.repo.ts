@@ -381,6 +381,12 @@ async function conAreaYClasificaciones<T extends { id: string; areaCategoryId: s
     // Sube desde cada categoría de cada servicio hasta la raíz, y se queda con
     // las raíces que no son áreas. `sube.origen` conserva de qué categoría se
     // partió, que es por donde engancha `service_category`.
+    //
+    // Los ids van expandidos a un parámetro cada uno (`IN ($1, $2, …)`) y NO
+    // como un array en `= ANY($1)`. Bajo Hyperdrive el cliente corre con
+    // `fetch_types: false`, y así postgres-js no puede averiguar el OID de un
+    // array: lo aplasta a un escalar y Postgres contesta `malformed array
+    // literal`. Eso dejó GET /api/agenda/combos en 500 el 2026-09-22.
     db.execute<{
       combo_id: string;
       clasificacion_id: string;
@@ -403,7 +409,7 @@ async function conAreaYClasificaciones<T extends { id: string; areaCategoryId: s
         JOIN sube ON sube.origen = sc.category_id
        WHERE sube.parent_category_id IS NULL
          AND sube.kind <> 'area'
-         AND c.id = ANY(${ids})
+         AND c.id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
     `),
   ]);
 

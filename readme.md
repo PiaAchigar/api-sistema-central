@@ -363,6 +363,13 @@ psql "$DATABASE_URL" -f src/db/migrations/1.1.0/sync.sql
 - En dev (`wrangler dev`) se usa `localConnectionString` para hablar directo con Supabase.
 - `postgres.js` se configura con `max: 5`, `fetch_types: false`, `prepare: false` para evitar errores intermitentes con prepared statements en Hyperdrive y reducir latencia de primer query.
 - El cliente se crea **dentro de cada handler**, no a nivel modulo. Hyperdrive ya mantiene el pool subyacente.
+- **`fetch_types: false` tiene una consecuencia que muerde: no se pueden pasar arrays como parametro.**
+  Sin poder averiguar el OID del array, `postgres.js` lo aplasta a un escalar y Postgres contesta
+  `malformed array literal`. En un fragmento `sql` crudo, entonces, nunca `= ANY(${ids})`: los ids
+  van expandidos a un parametro cada uno — `IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})` —
+  o directamente con el helper `inArray()` de Drizzle, que hace lo mismo. Esto dejo
+  `GET /api/agenda/combos` en 500 el 2026-09-22, y **no lo agarra un test cuyo cliente use las
+  opciones por defecto**: el cliente de prueba tiene que repetir las de produccion.
 
 ## Recursos
 
