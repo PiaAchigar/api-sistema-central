@@ -1,6 +1,13 @@
 import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { customerPurchase, promotionTarget, promotions, service, training } from "../db/schema";
+import {
+  customerPurchase,
+  depilationCombo,
+  promotionTarget,
+  promotions,
+  service,
+  training,
+} from "../db/schema";
 import { precioDeServicio } from "../lib/combo-pricing";
 import { todayLocal } from "../lib/time";
 import type { ItemVendible, PromoVendible } from "../lib/cotizacion";
@@ -229,22 +236,50 @@ export async function obtenerItemVendible(
 /**
  * El precio de lista de cada cosa de un paquete, por id.
  *
- * Reutiliza `obtenerItemVendible`, que es el mismo camino por el que se cotiza
- * cualquier venta: así un combo sin precio o un pack archivado dan el mismo
- * resultado acá que en la venta suelta, y no hay una segunda definición de
- * "cuánto vale esto" que se desincronice.
+ * Combo y servicio reutilizan `obtenerItemVendible`, el mismo camino por el
+ * que se cotiza cualquier venta suelta: un combo sin precio o un servicio sin
+ * precio de lista dan el mismo resultado acá que en la venta suelta.
+ *
+ * **Depilación es la excepción, a propósito.** `obtenerItemVendible` calcula
+ * `unitario` con `assembleDepilationCombo`, que para un pack `guardado` (zonas
+ * a elección, sin `fixed_price`) cae a la fórmula sobre zonas — un precio que
+ * la venta de un paquete NUNCA usa: `lineasDeUnPaquete` (compras.repo.ts) sólo
+ * lee `depilation_combo.fixed_price` y, si es NULL, rechaza la venta. Cotizar
+ * con la fórmula prometería un precio que confirmar la compra después niega,
+ * y Laura se enteraría recién con la clienta delante. Por eso esta función lee
+ * `fixedPrice` DIRECTO para depilación, en vez de pasar por
+ * `obtenerItemVendible`: mismo criterio que la venta, mismo resultado — un
+ * `guardado` no resuelve precio acá tampoco, y `cotizarPaquete` lo rechaza
+ * nombrándolo, antes de que Laura llegue a cobrar (spec §14 deja los packs de
+ * zona a elección fuera de alcance: no se les inventa un precio nuevo).
  */
 export async function preciosDeListaDe(
   db: Db,
   destinos: readonly { tipo: "servicio" | "combo" | "depilacion"; id: string }[],
 ): Promise<Map<string, number>> {
   const precios = new Map<string, number>();
+
+  const idsDeDepilacion = destinos.filter((d) => d.tipo === "depilacion").map((d) => d.id);
+  if (idsDeDepilacion.length > 0) {
+    const filas = await db
+      .select({ id: depilationCombo.id, fixedPrice: depilationCombo.fixedPrice })
+      .from(depilationCombo)
+      .where(inArray(depilationCombo.id, idsDeDepilacion));
+    for (const f of filas) {
+      if (f.fixedPrice == null) continue;
+      const precio = Number(f.fixedPrice);
+      if (precio > 0) precios.set(f.id, precio);
+    }
+  }
+
   for (const d of destinos) {
+    if (d.tipo === "depilacion") continue;
     const item = await obtenerItemVendible(db, d.tipo, d.id);
     if (!item) continue;
     const precio = item.origen === "combo" ? item.conDescuento : item.unitario;
     if (precio > 0) precios.set(d.id, precio);
   }
+
   return precios;
 }
 
