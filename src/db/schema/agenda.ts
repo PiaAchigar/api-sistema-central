@@ -4,6 +4,7 @@ import {
   decimal,
   integer,
   jsonb,
+  numeric,
   pgTable,
   text,
   time,
@@ -375,6 +376,8 @@ export const promotions = pgTable("promotions", {
   notes: text("notes"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+  /** §4.1 — Precio fijo del paquete entero. NULL en las promos de descuento. */
+  precioDelPaquete: numeric("precio_del_paquete", { precision: 12, scale: 2 }),
 });
 
 /**

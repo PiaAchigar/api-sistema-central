@@ -225,6 +225,14 @@ export const customerPurchase = pgTable("customer_purchase", {
   notes: text("notes"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+  /**
+   * §4.3 — Esta compra es un paquete de promo: no tiene ningún origen suelto.
+   * Es una columna y no algo derivado de `promotionId` porque `promotionId`
+   * también se llena en las compras con promo de DESCUENTO, así que no
+   * distingue — y averiguar el tipo exige salir a `promotions`, cosa que un
+   * CHECK no puede hacer.
+   */
+  esPaqueteDePromo: boolean("es_paquete_de_promo").notNull().default(false),
 });
 
 /**
@@ -253,6 +261,9 @@ export const customerPurchaseService = pgTable("customer_purchase_service", {
   notes: text("notes"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+  /** §4.4 — Identidad propia de la línea. Exactamente uno de los tres, con `serviceId`. */
+  depilationComboId: uuid("depilation_combo_id"),
+  trainingId: uuid("training_id"),
 });
 
 /**
@@ -269,4 +280,6 @@ export const promotionTarget = pgTable("promotion_target", {
   comboId: uuid("combo_id"),
   depilationComboId: uuid("depilation_combo_id"),
   createdAt: createdAt(),
+  /** §4.2 — Cuántas veces entra esta cosa en el paquete. Siempre 1 si es descuento. */
+  cantidad: integer("cantidad").notNull().default(1),
 });
