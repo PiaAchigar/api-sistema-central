@@ -1271,7 +1271,16 @@ describe("Combos de depilación (integración real)", () => {
       fixedPrice: string | number | null;
       precioCalculado: number;
     }>;
-    const packs = combos.filter((c) => c.kind === "pack_fijo");
+    // Excluye fixtures ZZ_QA de OTRAS suites (no sólo la propia, que usa
+    // QA_PREFIX): `catalogo-venta.repo.test.ts` crea un `pack_fijo` llamado
+    // `ZZ_QA_CATALOGO_VENTA_PACK_FIJO` para probar que un pack fijo con
+    // `fixed_price` cargado cotiza con ese precio. Corriendo la suite entera
+    // en paralelo contra la misma base local, ese fixture puede estar vivo
+    // cuando este test cuenta "todos los pack_fijo" y el conteo sube a 4. El
+    // filtro genérico de prefijo devuelve al test la intención real: "ningún
+    // pack fijo DEL CATÁLOGO cuesta más que su fórmula", sin depender de qué
+    // fixtures de QA haya vivas en el momento.
+    const packs = combos.filter((c) => c.kind === "pack_fijo" && !c.name.startsWith("ZZ_QA"));
     expect(packs).toHaveLength(3);
     for (const p of packs) {
       expect(Number(p.fixedPrice)).toBeLessThan(p.precioCalculado);
