@@ -65,6 +65,7 @@ function serialize(p: Record<string, unknown>) {
 const destinoSchema = z.object({
   tipo: z.enum(["servicio", "combo", "depilacion"]),
   id: z.string().uuid(),
+  cantidad: z.number().int().positive().max(99).optional(),
 });
 const pagoSchema = z.object({
   serviceId: z.string().uuid(),
@@ -74,9 +75,10 @@ const pagoSchema = z.object({
 const headerSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().max(2000).nullish(),
-  promotionType: z.enum(["percentage", "fixed_amount"]).nullish(),
+  promotionType: z.enum(["percentage", "fixed_amount", "paquete"]).nullish(),
   discountPercentage: z.number().min(0).max(100).nullish(),
   discountAmount: z.number().nonnegative().nullish(),
+  precioDelPaquete: z.number().positive().nullish(),
   validFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
   validUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
   isFeatured: z.boolean().nullish(),

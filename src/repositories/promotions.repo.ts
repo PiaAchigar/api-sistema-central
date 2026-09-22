@@ -83,7 +83,15 @@ export async function updatePromotionFeatured(
 
 // ── CRUD admin de promos (cabecera + destinos + pagos acordados) ────────────
 
-export type PromoDestinoInput = { tipo: TipoDeDestino; id: string };
+export type PromoDestinoInput = {
+  tipo: TipoDeDestino;
+  id: string;
+  /**
+   * Cuántas veces entra esta cosa en el paquete (1.55.0). Sólo significa algo
+   * en las promos de tipo `paquete`; en las de descuento se fuerza a 1.
+   */
+  cantidad?: number;
+};
 export type PromoPagoInput = {
   serviceId: string;
   serviceProviderId: string;
@@ -92,9 +100,12 @@ export type PromoPagoInput = {
 export type PromoHeaderInput = {
   name: string;
   description?: string | null;
-  promotionType?: string | null; // 'percentage' | 'fixed_amount'
+  /** 'percentage' | 'fixed_amount' | 'paquete' */
+  promotionType?: string | null;
   discountPercentage?: number | null;
   discountAmount?: number | null;
+  /** Obligatorio si `promotionType === "paquete"`. NULL en las de descuento. */
+  precioDelPaquete?: number | null;
   validFrom?: string | null;
   validUntil?: string | null;
   isFeatured?: boolean | null;
@@ -103,7 +114,33 @@ export type PromoHeaderInput = {
   notes?: string | null;
 };
 
+/** Las promos que se venden enteras, no como descuento sobre una cosa. */
+export const TIPO_PAQUETE = "paquete";
+
 const dec = (v: number | null | undefined) => (v == null ? null : String(v));
+const num = (v: unknown) => (v == null ? null : Number(v));
+
+/**
+ * Por qué esta promo no se puede guardar. Vacío = se puede.
+ *
+ * Va acá y no en un CHECK de la base porque el tipo y el precio se escriben en
+ * la misma sentencia: un CHECK cruzado complicaría el update sin agregar
+ * seguridad real (spec §4.1).
+ */
+export function razonesParaNoGuardarPromo(
+  header: PromoHeaderInput,
+  destinos: readonly PromoDestinoInput[],
+): string[] {
+  if (header.promotionType !== TIPO_PAQUETE) return [];
+  const razones: string[] = [];
+  if (header.precioDelPaquete == null || header.precioDelPaquete <= 0) {
+    razones.push("una promo que se vende como paquete necesita un precio");
+  }
+  if (destinos.length === 0) {
+    razones.push("un paquete tiene que llevar al menos una cosa adentro");
+  }
+  return razones;
+}
 
 const promoFields = {
   id: promotions.id,
@@ -119,6 +156,7 @@ const promoFields = {
   isVisibleWeb: promotions.isVisibleWeb,
   usageLimit: promotions.usageLimit,
   notes: promotions.notes,
+  precioDelPaquete: promotions.precioDelPaquete,
 };
 
 /**
@@ -135,6 +173,7 @@ async function destinosDe(db: Db, promotionId: string) {
       serviceId: promotionTarget.serviceId,
       comboId: promotionTarget.comboId,
       depilationComboId: promotionTarget.depilationComboId,
+      cantidad: promotionTarget.cantidad,
       serviceName: service.name,
       comboName: combos.name,
       depilationComboName: depilationCombo.name,
@@ -148,12 +187,21 @@ async function destinosDe(db: Db, promotionId: string) {
   // Anotado explícito: sin él, TS infiere cada `return` del flatMap con su
   // literal propio ("servicio" | "combo" | "depilacion") y los tres arrays no
   // unifican en un solo tipo de retorno válido para el callback.
-  type DestinoConNombre = { filaId: string; tipo: TipoDeDestino; id: string; nombre: string | null };
+  type DestinoConNombre = {
+    filaId: string;
+    tipo: TipoDeDestino;
+    id: string;
+    nombre: string | null;
+    cantidad: number;
+  };
   return filas.flatMap((f): DestinoConNombre[] => {
-    if (f.serviceId) return [{ filaId: f.id, tipo: "servicio", id: f.serviceId, nombre: f.serviceName }];
-    if (f.comboId) return [{ filaId: f.id, tipo: "combo", id: f.comboId, nombre: f.comboName }];
+    const cantidad = f.cantidad ?? 1;
+    if (f.serviceId) return [{ filaId: f.id, tipo: "servicio", id: f.serviceId, nombre: f.serviceName, cantidad }];
+    if (f.comboId) return [{ filaId: f.id, tipo: "combo", id: f.comboId, nombre: f.comboName, cantidad }];
     if (f.depilationComboId)
-      return [{ filaId: f.id, tipo: "depilacion", id: f.depilationComboId, nombre: f.depilationComboName }];
+      return [
+        { filaId: f.id, tipo: "depilacion", id: f.depilationComboId, nombre: f.depilationComboName, cantidad },
+      ];
     // El CHECK ck_pt_destino_unico lo impide, pero una fila sin destino no es
     // un destino: se ignora en vez de romper la pantalla entera.
     return [];
@@ -181,12 +229,18 @@ async function pagosDe(db: Db, promotionId: string) {
   return filas.map((f) => ({ ...f, providerPayment: Number(f.providerPayment) }));
 }
 
-async function escribirDestinos(db: Db, promotionId: string, destinos: PromoDestinoInput[]) {
+async function escribirDestinos(
+  db: Db,
+  promotionId: string,
+  destinos: PromoDestinoInput[],
+  promotionType: string | null | undefined,
+) {
   await db.delete(promotionTarget).where(eq(promotionTarget.promotionId, promotionId));
   if (destinos.length === 0) return;
   // Sin deduplicar, ux_pt rechaza el lote entero y Laura pierde la promo por
   // haber tildado dos veces lo mismo.
   const unicos = [...new Map(destinos.map((d) => [`${d.tipo}:${d.id}`, d])).values()];
+  const esPaquete = promotionType === TIPO_PAQUETE;
   await db.insert(promotionTarget).values(
     unicos.map((d) => ({
       promotionId,
@@ -194,6 +248,9 @@ async function escribirDestinos(db: Db, promotionId: string, destinos: PromoDest
       comboId: d.tipo === "combo" ? d.id : null,
       depilationComboId: d.tipo === "depilacion" ? d.id : null,
       bodyZoneId: null,
+      // En una promo de descuento la cantidad no significa nada y se fuerza a
+      // 1: "20% off sobre 3 limpiezas" no quiere decir nada.
+      cantidad: esPaquete ? Math.max(1, Math.trunc(d.cantidad ?? 1)) : 1,
     })),
   );
 }
@@ -221,7 +278,12 @@ export async function listPromotions(db: Db, includeInactive = false) {
   const rows = includeInactive ? await base : await base.where(ne(promotions.status, "inactive"));
   const out = [];
   for (const p of rows) {
-    out.push({ ...p, destinos: await destinosDe(db, p.id), pagos: await pagosDe(db, p.id) });
+    out.push({
+      ...p,
+      precioDelPaquete: num(p.precioDelPaquete),
+      destinos: await destinosDe(db, p.id),
+      pagos: await pagosDe(db, p.id),
+    });
   }
   return out;
 }
@@ -229,7 +291,12 @@ export async function listPromotions(db: Db, includeInactive = false) {
 export async function getPromotionById(db: Db, id: string) {
   const [p] = await db.select(promoFields).from(promotions).where(eq(promotions.id, id)).limit(1);
   if (!p) return null;
-  return { ...p, destinos: await destinosDe(db, id), pagos: await pagosDe(db, id) };
+  return {
+    ...p,
+    precioDelPaquete: num(p.precioDelPaquete),
+    destinos: await destinosDe(db, id),
+    pagos: await pagosDe(db, id),
+  };
 }
 
 export async function createPromotion(
@@ -238,6 +305,9 @@ export async function createPromotion(
   destinos: PromoDestinoInput[],
   pagos: PromoPagoInput[],
 ) {
+  const razones = razonesParaNoGuardarPromo(header, destinos);
+  if (razones.length > 0) throw new Error(razones.join("; "));
+
   const [created] = await db
     .insert(promotions)
     .values({
@@ -246,6 +316,7 @@ export async function createPromotion(
       promotionType: header.promotionType ?? null,
       discountPercentage: dec(header.discountPercentage ?? null),
       discountAmount: dec(header.discountAmount ?? null),
+      precioDelPaquete: header.precioDelPaquete == null ? null : String(header.precioDelPaquete),
       validFrom: header.validFrom ?? null,
       validUntil: header.validUntil ?? null,
       status: "active",
@@ -256,7 +327,7 @@ export async function createPromotion(
     })
     .returning({ id: promotions.id });
   if (!created) return null;
-  await escribirDestinos(db, created.id, destinos);
+  await escribirDestinos(db, created.id, destinos, header.promotionType);
   await escribirPagos(db, created.id, pagos);
   return getPromotionById(db, created.id);
 }
@@ -268,6 +339,9 @@ export async function updatePromotion(
   destinos: PromoDestinoInput[],
   pagos: PromoPagoInput[],
 ) {
+  const razones = razonesParaNoGuardarPromo(header, destinos);
+  if (razones.length > 0) throw new Error(razones.join("; "));
+
   const updated = await db
     .update(promotions)
     .set({
@@ -276,6 +350,7 @@ export async function updatePromotion(
       promotionType: header.promotionType ?? null,
       discountPercentage: dec(header.discountPercentage ?? null),
       discountAmount: dec(header.discountAmount ?? null),
+      precioDelPaquete: header.precioDelPaquete == null ? null : String(header.precioDelPaquete),
       validFrom: header.validFrom ?? null,
       validUntil: header.validUntil ?? null,
       isFeatured: header.isFeatured ?? false,
@@ -286,7 +361,7 @@ export async function updatePromotion(
     .where(eq(promotions.id, id))
     .returning({ id: promotions.id });
   if (updated.length === 0) return null;
-  await escribirDestinos(db, id, destinos);
+  await escribirDestinos(db, id, destinos, header.promotionType);
   await escribirPagos(db, id, pagos);
   return getPromotionById(db, id);
 }
@@ -326,7 +401,7 @@ export async function setPromotionStatus(db: Db, id: string, status: "active" | 
  * congelada y borrar la promo no la mueve.
  */
 export async function getPromotionDeleteImpact(db: Db, id: string) {
-  const [ventas, pagos, turnos] = await Promise.all([
+  const [ventas, pagos, turnos, paquetes] = await Promise.all([
     db
       .select({ id: customerPurchase.id })
       .from(customerPurchase)
@@ -361,6 +436,12 @@ export async function getPromotionDeleteImpact(db: Db, id: string) {
           inArray(appointments.status, ["reserved", "scheduled"]),
         ),
       ),
+    db
+      .select({ id: customerPurchase.id })
+      .from(customerPurchase)
+      .where(
+        and(eq(customerPurchase.promotionId, id), eq(customerPurchase.esPaqueteDePromo, true)),
+      ),
   ]);
 
   return {
@@ -369,6 +450,7 @@ export async function getPromotionDeleteImpact(db: Db, id: string) {
       ventasDesenganchadas: ventas.length,
       pagosAcordados: pagos.length,
       turnosAfectados: turnos.length,
+      paquetesVendidos: paquetes.length,
     },
   };
 }

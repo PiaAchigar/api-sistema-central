@@ -125,6 +125,41 @@ describe("createPromotion", () => {
     const creada = await createPromotion(db, header, [{ tipo: "servicio", id: servicioId }], []);
     expect(creada!.pagos).toEqual([]);
   });
+
+  it("guarda el precio del paquete y la cantidad de cada destino", async () => {
+    const creada = await createPromotion(
+      db,
+      { ...header, promotionType: "paquete", precioDelPaquete: 250000 },
+      [{ tipo: "servicio", id: servicioId, cantidad: 3 }],
+      [],
+    );
+    expect(creada!.precioDelPaquete).toBe(250000);
+    expect(creada!.destinos[0]).toMatchObject({ id: servicioId, cantidad: 3 });
+  });
+
+  it("en una promo de DESCUENTO la cantidad se fuerza a 1", async () => {
+    // "20% off sobre 3 limpiezas" no quiere decir nada: el descuento se aplica
+    // a lo que la clienta elija, de a uno.
+    const creada = await createPromotion(
+      db,
+      { ...header, promotionType: "percentage", discountPercentage: 20 },
+      [{ tipo: "servicio", id: servicioId, cantidad: 3 }],
+      [],
+    );
+    expect(creada!.destinos[0]!.cantidad).toBe(1);
+  });
+
+  it("una promo de paquete SIN precio no se guarda", async () => {
+    await expect(
+      createPromotion(db, { ...header, promotionType: "paquete" }, [{ tipo: "servicio", id: servicioId }], []),
+    ).rejects.toThrow(/precio/i);
+  });
+
+  it("una promo de paquete SIN nada adentro no se guarda", async () => {
+    await expect(
+      createPromotion(db, { ...header, promotionType: "paquete", precioDelPaquete: 1000 }, [], []),
+    ).rejects.toThrow(/al menos una/i);
+  });
 });
 
 describe("updatePromotion", () => {
@@ -486,6 +521,22 @@ describe("getPromotionDeleteImpact — qué se lleva puesto borrar la promo", ()
       if (turnoId) await db.delete(appointments).where(eq(appointments.id, turnoId));
       await deletePromotionPermanently(db, promo!.id);
     }
+  });
+});
+
+describe("getPromotionDeleteImpact — paquetes vendidos", () => {
+  it("cuenta cuántos paquetes se vendieron con esa promo", async () => {
+    // No bloquea nunca: la compra se sostiene sola con `promotion_name`
+    // congelado. Pero Laura tiene que saber qué está por desenganchar.
+    const creada = await createPromotion(
+      db,
+      { ...header, promotionType: "paquete", precioDelPaquete: 1000 },
+      [{ tipo: "servicio", id: servicioId }],
+      [],
+    );
+    const impacto = await getPromotionDeleteImpact(db, creada!.id);
+    expect(impacto.blocked).toBe(false);
+    expect(impacto.cascade.paquetesVendidos).toBe(0);
   });
 });
 
