@@ -16,8 +16,8 @@ describe("filasDeServicioComprado", () => {
       { serviceId: DEPI, sessionsIncluded: 1, price: 17500 },
     ]);
     expect(filas).toEqual([
-      { serviceId: BABY, repeticion: 1, orden: 1, price: 249000 },
-      { serviceId: DEPI, repeticion: 1, orden: 1, price: 17500 },
+      { serviceId: BABY, depilationComboId: null, trainingId: null, repeticion: 1, orden: 1, price: 249000 },
+      { serviceId: DEPI, depilationComboId: null, trainingId: null, repeticion: 1, orden: 1, price: 17500 },
     ]);
   });
 
@@ -45,16 +45,16 @@ describe("filasDeServicioComprado", () => {
   it("un servicio suelto con 3 sesiones da 3 filas del mismo servicio", () => {
     const filas = filasDeServicioComprado(3, [{ serviceId: BABY, sessionsIncluded: 1, price: 249000 }]);
     expect(filas).toEqual([
-      { serviceId: BABY, repeticion: 1, orden: 1, price: 249000 },
-      { serviceId: BABY, repeticion: 2, orden: 1, price: 249000 },
-      { serviceId: BABY, repeticion: 3, orden: 1, price: 249000 },
+      { serviceId: BABY, depilationComboId: null, trainingId: null, repeticion: 1, orden: 1, price: 249000 },
+      { serviceId: BABY, depilationComboId: null, trainingId: null, repeticion: 2, orden: 1, price: 249000 },
+      { serviceId: BABY, depilationComboId: null, trainingId: null, repeticion: 3, orden: 1, price: 249000 },
     ]);
   });
 
   it("sin líneas —depilación, capacitación— da una fila por vuelta con serviceId null", () => {
     expect(filasDeServicioComprado(2, [])).toEqual([
-      { serviceId: null, repeticion: 1, orden: 1, price: null },
-      { serviceId: null, repeticion: 2, orden: 1, price: null },
+      { serviceId: null, depilationComboId: null, trainingId: null, repeticion: 1, orden: 1, price: null },
+      { serviceId: null, depilationComboId: null, trainingId: null, repeticion: 2, orden: 1, price: null },
     ]);
   });
 
@@ -62,9 +62,9 @@ describe("filasDeServicioComprado", () => {
     // La clienta pagó 3 Baby Botox: tiene que poder agendar 3, no 1.
     const filas = filasDeServicioComprado(1, [{ serviceId: BABY, sessionsIncluded: 3, price: 249000 }]);
     expect(filas).toEqual([
-      { serviceId: BABY, repeticion: 1, orden: 1, price: 249000 },
-      { serviceId: BABY, repeticion: 1, orden: 2, price: 249000 },
-      { serviceId: BABY, repeticion: 1, orden: 3, price: 249000 },
+      { serviceId: BABY, depilationComboId: null, trainingId: null, repeticion: 1, orden: 1, price: 249000 },
+      { serviceId: BABY, depilationComboId: null, trainingId: null, repeticion: 1, orden: 2, price: 249000 },
+      { serviceId: BABY, depilationComboId: null, trainingId: null, repeticion: 1, orden: 3, price: 249000 },
     ]);
   });
 
@@ -144,5 +144,45 @@ describe("ordenDeServiciosComprados", () => {
     const a = fila({ id: "a", repeticion: null, orden: null });
     const b = fila({ id: "b", repeticion: 1, orden: 1 });
     expect(ordenDeServiciosComprados(a, b)).toBeLessThan(0);
+  });
+});
+
+describe("filasDeServicioComprado — líneas que no son un servicio", () => {
+  // Un paquete de promo mezcla cosas de distinto tipo en la MISMA compra, así
+  // que la cabecera ya no puede decir quién es cada línea: dos packs de
+  // depilación distintos en un paquete se verían iguales. La identidad baja a
+  // la fila.
+  it("propaga el pack de depilación a la fila", () => {
+    const filas = filasDeServicioComprado(1, [
+      { serviceId: null, depilationComboId: "pack1", trainingId: null, sessionsIncluded: 1, price: 65000 },
+    ]);
+    expect(filas).toEqual([
+      { serviceId: null, depilationComboId: "pack1", trainingId: null, repeticion: 1, orden: 1, price: 65000 },
+    ]);
+  });
+
+  it("propaga la capacitación a la fila", () => {
+    const filas = filasDeServicioComprado(1, [
+      { serviceId: null, depilationComboId: null, trainingId: "cap1", sessionsIncluded: 1, price: 30000 },
+    ]);
+    expect(filas[0]).toMatchObject({ trainingId: "cap1", serviceId: null, depilationComboId: null });
+  });
+
+  it("mezcla los tres tipos en una sola compra, que es lo que hace un paquete", () => {
+    const filas = filasDeServicioComprado(1, [
+      { serviceId: "s1", depilationComboId: null, trainingId: null, sessionsIncluded: 1, price: 100 },
+      { serviceId: null, depilationComboId: "pack1", trainingId: null, sessionsIncluded: 1, price: 200 },
+      { serviceId: null, depilationComboId: null, trainingId: "cap1", sessionsIncluded: 1, price: 300 },
+    ]);
+    expect(filas).toHaveLength(3);
+    expect(filas.map((f) => f.price)).toEqual([100, 200, 300]);
+  });
+
+  it("una compra sin líneas sigue dando una fila anónima por vuelta", () => {
+    // Compatibilidad hacia atrás: es como se venden hoy depilación y
+    // capacitaciones sueltas, y esas compras no se tocan.
+    const filas = filasDeServicioComprado(3, []);
+    expect(filas).toHaveLength(3);
+    expect(filas.every((f) => f.serviceId === null && f.depilationComboId === null)).toBe(true);
   });
 });

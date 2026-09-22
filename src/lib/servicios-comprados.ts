@@ -9,30 +9,44 @@
  * ser una *sesión* recién cuando se le engancha un turno.
  */
 
-/** Un renglón del combo que se está vendiendo. */
+/**
+ * Un renglón de lo que se está vendiendo.
+ *
+ * **Exactamente uno de los tres ids.** Hasta la 1.55.0 una línea era siempre
+ * un servicio, y la identidad de las que no lo eran vivía en la CABECERA de la
+ * compra. Un paquete de promo mezcla cosas de distinto tipo en la misma
+ * compra, así que la cabecera ya no alcanza: dos packs de depilación en el
+ * mismo paquete se verían iguales. Lo garantiza `ck_cpsv_identidad_unica`.
+ */
 export type LineaDeCombo = {
-  serviceId: string;
-  /** Cuántas veces entra ESE servicio en una vuelta. Casi siempre 1. */
+  serviceId: string | null;
+  /** Pack de depilación (1.55.0). */
+  depilationComboId?: string | null;
+  /** Capacitación (1.55.0). */
+  trainingId?: string | null;
+  /** Cuántas veces entra ESE renglón en una vuelta. Casi siempre 1. */
   sessionsIncluded: number;
   /**
-   * Lo que vale ese servicio, congelado en el combo. Viaja hasta la fila
-   * comprada porque al cancelar es lo que decide cuánta plata le queda a
-   * favor a la clienta: sin él, un combo de un servicio de $249.000 y otro de
-   * $17.500 se repartiría por la mitad (1.52.0).
+   * Lo que vale ese renglón, congelado al vender. Viaja hasta la fila comprada
+   * porque al cancelar es lo que decide cuánta plata le queda a favor a la
+   * clienta: sin él, un combo de un servicio de $249.000 y otro de $17.500 se
+   * repartiría por la mitad (1.52.0).
    */
   price: number | null;
 };
 
 export type FilaDeServicioComprado = {
-  /** NULL para depilación y capacitaciones: no se desglosan en servicios. */
+  /** NULL cuando la línea es un pack de depilación o una capacitación. */
   serviceId: string | null;
+  depilationComboId: string | null;
+  trainingId: string | null;
   repeticion: number;
   orden: number;
   /**
-   * Lo que valía al venderse. NULL cuando la compra no se desglosa en
-   * servicios con precio propio — y también para un servicio suelto, donde
-   * todas las filas son el MISMO servicio y el reparto en partes iguales ya
-   * da lo correcto.
+   * Lo que valía al venderse. NULL cuando la compra no se desglosa en partes
+   * con precio propio — y también para un servicio suelto, donde todas las
+   * filas son el MISMO servicio y el reparto en partes iguales ya da lo
+   * correcto.
    */
   price: number | null;
 };
@@ -55,8 +69,16 @@ export function filasDeServicioComprado(
   const filas: FilaDeServicioComprado[] = [];
   for (let repeticion = 1; repeticion <= repeticiones; repeticion++) {
     if (lineas.length === 0) {
-      // Depilación y capacitaciones: una fila por vuelta y nada que desglosar.
-      filas.push({ serviceId: null, repeticion, orden: 1, price: null });
+      // Depilación y capacitaciones vendidas SUELTAS, como hasta la 1.55.0:
+      // una fila por vuelta y la identidad en la cabecera de la compra.
+      filas.push({
+        serviceId: null,
+        depilationComboId: null,
+        trainingId: null,
+        repeticion,
+        orden: 1,
+        price: null,
+      });
       continue;
     }
     for (const linea of lineas) {
@@ -64,7 +86,14 @@ export function filasDeServicioComprado(
       // Ignorarlo crearía UNA fila para algo que la clienta pagó tres veces, y
       // se enteraría recién al querer agendar la segunda.
       for (let orden = 1; orden <= Math.max(1, linea.sessionsIncluded); orden++) {
-        filas.push({ serviceId: linea.serviceId, repeticion, orden, price: linea.price });
+        filas.push({
+          serviceId: linea.serviceId,
+          depilationComboId: linea.depilationComboId ?? null,
+          trainingId: linea.trainingId ?? null,
+          repeticion,
+          orden,
+          price: linea.price,
+        });
       }
     }
   }
