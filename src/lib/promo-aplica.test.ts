@@ -6,8 +6,8 @@ const BABY_BOTOX = "svc-baby-botox";
 const CUERPO_FULL = "depi-cuerpo-full";
 
 const destinos: DestinoDePromo[] = [
-  { tipo: "combo", id: COMBO_FACIAL },
-  { tipo: "servicio", id: BABY_BOTOX },
+  { tipo: "combo", id: COMBO_FACIAL, cantidad: 1 },
+  { tipo: "servicio", id: BABY_BOTOX, cantidad: 1 },
 ];
 
 describe("tipoDeOrigen", () => {
@@ -49,12 +49,12 @@ describe("promoAplica", () => {
   it("NO confunde un servicio con un combo del mismo id", () => {
     // Los ids son uuid de tablas distintas: podrían coincidir y el tipo es lo
     // único que los separa.
-    expect(promoAplica([{ tipo: "combo", id: BABY_BOTOX }], { origen: "servicio", id: BABY_BOTOX }))
+    expect(promoAplica([{ tipo: "combo", id: BABY_BOTOX, cantidad: 1 }], { origen: "servicio", id: BABY_BOTOX }))
       .toBe(false);
   });
 
   it("NO aplica a una capacitación aunque su id esté en la lista", () => {
-    expect(promoAplica([{ tipo: "servicio", id: "cap-1" }], { origen: "capacitacion", id: "cap-1" }))
+    expect(promoAplica([{ tipo: "servicio", id: "cap-1", cantidad: 1 }], { origen: "capacitacion", id: "cap-1" }))
       .toBe(false);
   });
 
@@ -65,15 +65,16 @@ describe("promoAplica", () => {
   });
 
   it("aplica a un combo de depilación", () => {
-    expect(promoAplica([{ tipo: "depilacion", id: CUERPO_FULL }], { origen: "depilacion", id: CUERPO_FULL }))
-      .toBe(true);
+    expect(
+      promoAplica([{ tipo: "depilacion", id: CUERPO_FULL, cantidad: 1 }], { origen: "depilacion", id: CUERPO_FULL }),
+    ).toBe(true);
   });
 });
 
 describe("promosQueAplican", () => {
   const promos = [
-    { id: "p1", destinos: [{ tipo: "combo", id: COMBO_FACIAL }] as DestinoDePromo[] },
-    { id: "p2", destinos: [{ tipo: "servicio", id: BABY_BOTOX }] as DestinoDePromo[] },
+    { id: "p1", destinos: [{ tipo: "combo", id: COMBO_FACIAL, cantidad: 1 }] as DestinoDePromo[] },
+    { id: "p2", destinos: [{ tipo: "servicio", id: BABY_BOTOX, cantidad: 1 }] as DestinoDePromo[] },
   ];
 
   it("deja sólo las que sirven para lo elegido", () => {

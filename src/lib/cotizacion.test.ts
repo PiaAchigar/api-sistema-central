@@ -105,7 +105,15 @@ describe("cotizar — sesiones que no son las del pack", () => {
 });
 
 describe("cotizar — la promo va encima de todo", () => {
-  const promo = { id: "p1", name: "Primavera", discountPercentage: 10, discountAmount: null, destinos: [] };
+  const promo = {
+    id: "p1",
+    name: "Primavera",
+    promotionType: null,
+    precioDelPaquete: null,
+    discountPercentage: 10,
+    discountAmount: null,
+    destinos: [],
+  };
 
   it("descuenta sobre el precio del pack, no sobre la base", () => {
     const q = cotizar(zona, 6, promo, COMPRA);
@@ -119,7 +127,15 @@ describe("cotizar — la promo va encima de todo", () => {
   });
 
   it("una promo en pesos se resta", () => {
-    const enPesos = { id: "p2", name: "Fijo", discountPercentage: null, discountAmount: 1000, destinos: [] };
+    const enPesos = {
+      id: "p2",
+      name: "Fijo",
+      promotionType: null,
+      precioDelPaquete: null,
+      discountPercentage: null,
+      discountAmount: 1000,
+      destinos: [],
+    };
     expect(cotizar(zona, 6, enPesos, COMPRA).finalAmount).toBe(50000);
   });
 
@@ -153,7 +169,15 @@ describe("cotizar — lo que se rechaza", () => {
 
 describe("cotizar — los montos siempre van de mayor a menor", () => {
   it("aunque la promo sea enorme, nunca queda negativo", () => {
-    const enorme = { id: "p3", name: "Regalo", discountPercentage: null, discountAmount: 999999, destinos: [] };
+    const enorme = {
+      id: "p3",
+      name: "Regalo",
+      promotionType: null,
+      precioDelPaquete: null,
+      discountPercentage: null,
+      discountAmount: 999999,
+      destinos: [],
+    };
     const q = cotizar(zona, 6, enorme, COMPRA);
     expect(q.finalAmount).toBe(0);
     expect(q.finalAmount).toBeLessThanOrEqual(q.discountedAmount);

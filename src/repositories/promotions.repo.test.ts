@@ -24,7 +24,7 @@ import {
 } from "./promotions.repo";
 import { cancelCompra, createCompra } from "./compras.repo";
 import { getComboDeleteImpact } from "./combos.repo";
-import { motivoPromoNoVendible, obtenerPromoVendible } from "./catalogo-venta.repo";
+import { listPromosVendibles, motivoPromoNoVendible, obtenerPromoVendible } from "./catalogo-venta.repo";
 
 const NOMBRE_PROMO_DE_PRUEBA = "Promo de prueba";
 
@@ -669,5 +669,30 @@ describe("vender con promo — invariante de servicios agendables", () => {
       await db.delete(comboService).where(eq(comboService.comboId, comboVentaId));
       await db.delete(combos).where(eq(combos.id, comboVentaId));
     }
+  });
+});
+
+describe("listPromosVendibles — paquetes", () => {
+  it("un paquete vigente viene con su tipo, su precio y las cantidades", async () => {
+    // Sin esto la solapa Promos del CRM no puede saber si mostrar un desglose
+    // ("lleva 3 limpiezas") o la lista de items elegibles.
+    const creada = await createPromotion(
+      db,
+      {
+        name: NOMBRE_PROMO_DE_PRUEBA,
+        promotionType: "paquete",
+        precioDelPaquete: 250000,
+        validFrom: null,
+        validUntil: null,
+      },
+      [{ tipo: "servicio", id: servicioId, cantidad: 3 }],
+      [],
+    );
+
+    const vendibles = await listPromosVendibles(db);
+    const mia = vendibles.find((p) => p.id === creada!.id)!;
+    expect(mia.promotionType).toBe("paquete");
+    expect(mia.precioDelPaquete).toBe(250000);
+    expect(mia.destinos[0]).toMatchObject({ tipo: "servicio", id: servicioId, cantidad: 3 });
   });
 });

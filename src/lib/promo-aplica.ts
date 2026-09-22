@@ -10,7 +10,15 @@
 export type TipoDeDestino = "servicio" | "combo" | "depilacion";
 
 /** Una fila de `promotion_target`, ya resuelta a tipo + id. */
-export type DestinoDePromo = { tipo: TipoDeDestino; id: string };
+export type DestinoDePromo = {
+  tipo: TipoDeDestino;
+  id: string;
+  /**
+   * Cuántas veces entra en el paquete (1.55.0). En las promos de descuento es
+   * siempre 1: ahí la lista dice SOBRE QUÉ se puede aplicar, no qué lleva.
+   */
+  cantidad: number;
+};
 
 /** Lo que la usuaria eligió vender: un `ItemVendible` del catálogo. */
 export type ItemElegido = { origen: string; id: string };

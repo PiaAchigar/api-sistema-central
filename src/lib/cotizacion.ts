@@ -71,6 +71,8 @@ export type ItemVendible =
 export type PromoVendible = {
   id: string;
   name: string | null;
+  promotionType: string | null;
+  precioDelPaquete: number | null;
   discountPercentage: number | null;
   discountAmount: number | null;
   destinos: DestinoDePromo[];

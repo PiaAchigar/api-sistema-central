@@ -240,6 +240,8 @@ export async function listPromosVendibles(db: Db): Promise<PromoVendible[]> {
     .select({
       id: promotions.id,
       name: promotions.name,
+      promotionType: promotions.promotionType,
+      precioDelPaquete: promotions.precioDelPaquete,
       discountPercentage: promotions.discountPercentage,
       discountAmount: promotions.discountAmount,
       validFrom: promotions.validFrom,
@@ -261,6 +263,7 @@ export async function listPromosVendibles(db: Db): Promise<PromoVendible[]> {
         serviceId: promotionTarget.serviceId,
         comboId: promotionTarget.comboId,
         depilationComboId: promotionTarget.depilationComboId,
+        cantidad: promotionTarget.cantidad,
       })
       .from(promotionTarget)
       .where(inArray(promotionTarget.promotionId, ids)),
@@ -276,9 +279,10 @@ export async function listPromosVendibles(db: Db): Promise<PromoVendible[]> {
   for (const d of destinos) {
     if (!d.promotionId) continue;
     const lista = destinosPorPromo.get(d.promotionId) ?? [];
-    if (d.serviceId) lista.push({ tipo: "servicio", id: d.serviceId });
-    else if (d.comboId) lista.push({ tipo: "combo", id: d.comboId });
-    else if (d.depilationComboId) lista.push({ tipo: "depilacion", id: d.depilationComboId });
+    const cantidad = d.cantidad ?? 1;
+    if (d.serviceId) lista.push({ tipo: "servicio", id: d.serviceId, cantidad });
+    else if (d.comboId) lista.push({ tipo: "combo", id: d.comboId, cantidad });
+    else if (d.depilationComboId) lista.push({ tipo: "depilacion", id: d.depilationComboId, cantidad });
     destinosPorPromo.set(d.promotionId, lista);
   }
   const usosPorPromo = new Map(usos.map((u) => [u.promotionId ?? "", Number(u.usos)]));
@@ -288,6 +292,8 @@ export async function listPromosVendibles(db: Db): Promise<PromoVendible[]> {
     .map((p) => ({
       id: p.id,
       name: p.name,
+      promotionType: p.promotionType ?? null,
+      precioDelPaquete: num(p.precioDelPaquete),
       discountPercentage: num(p.discountPercentage),
       discountAmount: num(p.discountAmount),
       destinos: destinosPorPromo.get(p.id) ?? [],
