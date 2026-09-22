@@ -178,13 +178,14 @@ comprasRouter.post(
  * precio, nunca la fórmula que lo produjo. Eso es lo que hace que la venta
  * sobreviva a cualquier cambio de precios o de motor.
  */
-const compraBody = z
+export const compraBody = z
   .object({
     customerId: z.string().uuid(),
     comboId: z.string().uuid().nullish(),
     serviceId: z.string().uuid().nullish(),
     depilationComboId: z.string().uuid().nullish(),
     trainingId: z.string().uuid().nullish(),
+    esPaquete: z.boolean().optional(),
     description: z.string().min(1).max(200),
     sessionsTotal: z.number().int().positive(),
     baseAmount: z.number().nonnegative(),
@@ -197,11 +198,16 @@ const compraBody = z
     usarSaldo: z.number().nonnegative().nullish(),
   })
   .refine(
-    (v) =>
-      [v.comboId, v.serviceId, v.depilationComboId, v.trainingId].filter(Boolean).length === 1,
+    (v) => {
+      const sueltos = [v.comboId, v.serviceId, v.depilationComboId, v.trainingId].filter(Boolean);
+      // Un paquete no tiene origen suelto: lo que lleva sale de la promo.
+      if (v.esPaquete) return sueltos.length === 0 && !!v.promotionId;
+      return sueltos.length === 1;
+    },
     {
       message:
-        "Una compra tiene exactamente un origen: combo, servicio, combo de depilación o capacitación",
+        "Una compra tiene exactamente un origen: combo, servicio, combo de depilación o capacitación. " +
+        "Un paquete de promo no lleva ninguno, pero sí la promo.",
     },
   )
   .refine((v) => v.finalAmount <= v.discountedAmount && v.discountedAmount <= v.baseAmount, {
@@ -219,6 +225,21 @@ comprasRouter.post(
   async (c) => {
     const db = createDb(c.env);
     const b = c.req.valid("json");
+
+    if (b.esPaquete) {
+      const promo = await obtenerPromoVendible(db, b.promotionId!);
+      if (!promo) throw badRequest(await motivoPromoNoVendible(db, b.promotionId!));
+      try {
+        const compra = await createCompra(db, {
+          ...b,
+          promotionName: promo.name ?? null,
+          expiresAt: b.expiresAt ? new Date(b.expiresAt) : null,
+        });
+        return c.json(compra, 201);
+      } catch (e) {
+        throw badRequest((e as Error).message);
+      }
+    }
 
     // Mismo origen/id que validó el CHECK de arriba (exactamente uno de los
     // cuatro), para poder chequear la promo contra sus destinos.
