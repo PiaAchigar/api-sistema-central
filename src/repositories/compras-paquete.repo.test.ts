@@ -77,12 +77,14 @@ beforeAll(async () => {
   await limpiar();
   const [cli] = await db.execute<{ id: string }>("select id from customers limit 1" as never);
   const [srv] = await db.execute<{ id: string }>(
-    "select id from service where is_active = true and unit_price_list > 0 limit 1" as never,
+    "select id from service where is_active = true and unit_price_list > 0 and name not like 'ZZ_QA%' order by id limit 1" as never,
   );
   const [area] = await db.execute<{ id: string }>(
-    "select id from categories where kind = 'area' limit 1" as never,
+    "select id from categories where kind = 'area' and name not like 'ZZ_QA%' order by id limit 1" as never,
   );
-  const [zona] = await db.execute<{ id: string }>("select id from body_zone limit 1" as never);
+  const [zona] = await db.execute<{ id: string }>(
+    "select id from body_zone where name not like 'ZZ_QA%' order by id limit 1" as never,
+  );
   clienteId = cli!.id;
   servicioId = srv!.id;
   bodyZoneId = zona!.id;

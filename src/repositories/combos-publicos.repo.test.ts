@@ -40,14 +40,15 @@ beforeAll(async () => {
   await limpiar();
 
   const [area] = await db.execute<{ id: string }>(
-    "select id from categories where kind = 'area' limit 1" as never,
+    "select id from categories where kind = 'area' and name not like 'ZZ_QA%' order by id limit 1" as never,
   );
   // Un servicio que cuelga de alguna categoría: sin eso el combo no tendría
   // clasificaciones y la parte que importa del test no probaría nada.
   const [servicio] = await db.execute<{ id: string }>(
     `select s.id from service s
        join service_category sc on sc.service_id = s.id
-      where s.is_active = true limit 1` as never,
+      where s.is_active = true and s.name not like 'ZZ_QA%'
+      order by s.id limit 1` as never,
   );
 
   const [creado] = await db

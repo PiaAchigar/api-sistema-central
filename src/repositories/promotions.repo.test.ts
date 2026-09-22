@@ -56,10 +56,10 @@ beforeAll(async () => {
   await limpiar();
 
   const [s] = await db.execute<{ id: string }>(
-    "select id from service where is_active = true limit 1" as never,
+    "select id from service where is_active = true and name not like 'ZZ_QA%' order by id limit 1" as never,
   );
   const [p] = await db.execute<{ id: string }>(
-    "select id from service_providers limit 1" as never,
+    "select id from service_providers where full_name not like 'ZZ_QA%' or full_name is null order by id limit 1" as never,
   );
   // Sólo sirve un combo REAL del catálogo, no un QA que haya quedado de
   // OTRO archivo — `limpiar()` de acá arriba sólo conoce y borra el propio
@@ -71,7 +71,7 @@ beforeAll(async () => {
   // a todos, no sólo al propio, es lo que hace falta para no ser un test
   // "de cualquier combo que haya".
   const [c] = await db.execute<{ id: string }>(
-    "select id from combos where name not like 'ZZ_QA%' limit 1" as never,
+    "select id from combos where name not like 'ZZ_QA%' order by id limit 1" as never,
   );
   servicioId = s!.id;
   proveedoraId = p!.id;
@@ -83,7 +83,7 @@ beforeAll(async () => {
     // uno mínimo y se borra en el afterAll, igual que hace categories.test.ts
     // con sus categorías QA.
     const [area] = await db.execute<{ id: string }>(
-      "select id from categories where kind = 'area' limit 1" as never,
+      "select id from categories where kind = 'area' and name not like 'ZZ_QA%' order by id limit 1" as never,
     );
     const [creado] = await db
       .insert(combos)
@@ -554,7 +554,7 @@ describe("getComboDeleteImpact — el combo que está en oferta", () => {
    *  del catálogo real y el contador de ofertas arranca en cero. */
   async function comboDePrueba() {
     const [area] = await db.execute<{ id: string }>(
-      "select id from categories where kind = 'area' limit 1" as never,
+      "select id from categories where kind = 'area' and name not like 'ZZ_QA%' order by id limit 1" as never,
     );
     const [creado] = await db
       .insert(combos)
@@ -613,7 +613,7 @@ describe("vender con promo — invariante de servicios agendables", () => {
     // por no tener nada que comparar. Por eso este test arma SU PROPIO combo,
     // con un servicio real adentro.
     const [area] = await db.execute<{ id: string }>(
-      "select id from categories where kind = 'area' limit 1" as never,
+      "select id from categories where kind = 'area' and name not like 'ZZ_QA%' order by id limit 1" as never,
     );
     const [comboDeVenta] = await db
       .insert(combos)

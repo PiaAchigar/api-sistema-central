@@ -28,7 +28,7 @@ let packDepilacionId: string;
 beforeAll(async () => {
   const [cli] = await db.execute<{ id: string }>("select id from customers limit 1" as never);
   const [pack] = await db.execute<{ id: string }>(
-    "select id from depilation_combo where is_active = true limit 1" as never,
+    "select id from depilation_combo where is_active = true and name not like 'ZZ_QA%' order by id limit 1" as never,
   );
   clienteId = cli!.id;
   packDepilacionId = pack!.id;

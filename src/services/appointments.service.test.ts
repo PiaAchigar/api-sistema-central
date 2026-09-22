@@ -102,7 +102,7 @@ beforeAll(async () => {
   await limpiar();
 
   const [s] = await db.execute<{ id: string }>(
-    "select id from service where is_active = true limit 1" as never,
+    "select id from service where is_active = true and name not like 'ZZ_QA%' order by id limit 1" as never,
   );
   servicioId = s!.id;
 
