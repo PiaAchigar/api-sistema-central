@@ -151,6 +151,7 @@ Rutas montadas en `src/routes/index.ts`:
 
 - **`/api/agenda`** — `services`, `services/:id`, `categories` (árbol), `availability/:serviceId?date=`, `appointments` (GET por día / POST con validaciones / PATCH estado con snapshot de comisión), `providers`, `company-config`, `trainings`, `machines`, `web` (galería + testimonios), `faq`.
 - **`/api/billing`** — `customers` (búsqueda + alta rápida), `customers/:id/invoices`, `checkout` (cobranza orquestada), `invoices` (+ `:id/emit`, `emit-batch`, `:id/cancel`), `payments`, `cash-register` (+ `daily-report`), `commissions`.
+- **`/api/crm`** — `contacts`, `deals`, `customers/:id/purchases` + `purchases` (catálogo de venta, cotizar, vender, cancelar, devolver — ver más abajo), `credits`, `channels`, `conversations`, `automations`, `automation-faqs`.
 
 Capas: `routes` (Hono + zod) → `services` (lógica de negocio) → `repositories` (Drizzle). El adapter ARCA está en `src/arca/` (interfaz `ArcaClient`, mock por default).
 
@@ -206,6 +207,117 @@ Mismo modelo de permisos. Archivar = `status='inactive'`. Crear un log recalcula
 
 > El servicio se vincula a su máquina principal vía `service_machine`: el `PATCH/POST`
 > de `services` acepta `machineId` (reemplaza el vínculo) y el `GET` devuelve `primaryMachine`.
+
+### CRM — Compras (venta de packs, combos, servicios y paquetes de promo)
+
+Todo lo que se puede vender pasa por `/api/crm/purchases`. El permiso es el de
+quien vende (`crm.view` para leer/cotizar, `crm.edit` para vender/cancelar),
+no el de catálogo.
+
+| Método | Ruta | Permiso | Descripción |
+|---|---|---|---|
+| `GET` | `/api/crm/customers/:id/purchases` | crm.view | Compras de la clienta: qué llevó, cuánto pagó/debe, estado de cada sesión |
+| `GET` | `/api/crm/purchases/catalog` | crm.view | Todo lo vendible (combos, packs de depilación, servicios, capacitaciones) + promos vigentes, en una sola llamada |
+| `POST` | `/api/crm/purchases/quote` | crm.view | Cotiza sin vender (ver abajo) |
+| `POST` | `/api/crm/purchases` | crm.edit | Vende (ver abajo) |
+| `POST` | `/api/crm/purchases/:id/cancel` | crm.edit | Cancela (no borra) |
+| `GET` | `/api/crm/purchases/:id/delete-impact` | crm.view | Qué cuelga de la compra, antes de ofrecer borrarla |
+| `DELETE` | `/api/crm/purchases/:id` | crm.edit | Borra para siempre (solo si no cuelga nada) |
+| `GET` | `/api/crm/purchases/:id/refund-check` | crm.view | Si se le puede devolver la plata, y cuánta |
+| `POST` | `/api/crm/purchases/:id/refund` | admin | Devuelve la plata en mano |
+
+#### `POST /api/crm/purchases/quote` — paquete de promo
+
+Desde la 1.55.0, además de cotizar un combo/servicio/pack/capacitación suelto
+(`{ origen, id, sessions, promotionId? }`), esta misma ruta cotiza una
+**promo de tipo paquete**: se manda la promo sola, sin origen — lo que lleva
+sale de sus `promotion_target`.
+
+```json
+// Request
+{ "origen": "paquete", "promotionId": "b6b6b6b6-...-promo-novia" }
+```
+
+```json
+// Response
+{
+  "description": "Promo Novia",
+  "sessionsTotal": 1,
+  "promotionId": "b6b6b6b6-...-promo-novia",
+  "expiresAt": null,
+  "baseAmount": 335000,
+  "discountedAmount": 250000,
+  "finalAmount": 250000,
+  "esPaquete": true,
+  "comboId": null,
+  "depilationComboId": null,
+  "serviceId": null,
+  "trainingId": null
+}
+```
+
+`baseAmount` es la suma de los precios de lista de todo lo que lleva el
+paquete (para poder mostrar "valen $335.000 — te los llevás por $250.000").
+`discountedAmount` y `finalAmount` son el `precio_del_paquete` cargado en la
+promo. La respuesta ya viene lista para mandarse tal cual a
+`POST /api/crm/purchases`, igual que la cotización de una venta suelta.
+
+Si algún destino de la promo no tiene precio resoluble —un pack de depilación
+`kind: "guardado"` (zonas a elección, sin `fixed_price`), un combo o servicio
+sin precio cargado, o una promo sin `precio_del_paquete`— la ruta responde
+`400` nombrando qué falta, en vez de cotizar con un número inventado.
+
+#### `POST /api/crm/purchases` — vender el paquete entero
+
+```json
+// Request
+{
+  "customerId": "3f3f3f3f-...-cliente",
+  "esPaquete": true,
+  "promotionId": "b6b6b6b6-...-promo-novia",
+  "description": "Promo Novia",
+  "sessionsTotal": 1,
+  "baseAmount": 335000,
+  "discountedAmount": 250000,
+  "finalAmount": 250000,
+  "expiresAt": null
+}
+```
+
+```json
+// Response (201) — la cabecera de la compra (customerPurchase)
+{
+  "id": "c1c1c1c1-...-compra",
+  "customerId": "3f3f3f3f-...-cliente",
+  "comboId": null,
+  "serviceId": null,
+  "depilationComboId": null,
+  "trainingId": null,
+  "esPaqueteDePromo": true,
+  "promotionId": "b6b6b6b6-...-promo-novia",
+  "promotionName": "Promo Novia",
+  "description": "Promo Novia",
+  "sessionsTotal": 1,
+  "baseAmount": "335000.00",
+  "discountedAmount": "250000.00",
+  "finalAmount": "250000.00",
+  "purchasedAt": "2026-09-22T15:00:00.000Z",
+  "expiresAt": null,
+  "cancelledAt": null,
+  "notes": null,
+  "pagadoConSaldo": 0
+}
+```
+
+`esPaquete: true` no lleva `comboId`/`serviceId`/`depilationComboId`/
+`trainingId` (el `refine` de `compraBody` lo exige así), pero sí
+`promotionId`: de ahí sale, del lado del servidor, qué lleva el paquete y
+cómo se reparte el precio entre sus líneas. Cada línea se inserta en
+`customer_purchase_service` con su propia identidad (`service_id`,
+`depilation_combo_id` o `training_id`) y su propio `orden` — la respuesta de
+este POST es solo la cabecera; las líneas se ven después con
+`GET /api/crm/customers/:id/purchases`, que es de donde la ficha de la
+clienta saca el nombre de cada una.
 
 ### Sitio Web — lectura pública (lo que consume `piubella_web`)
 
