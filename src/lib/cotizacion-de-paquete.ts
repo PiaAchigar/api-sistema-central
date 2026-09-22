@@ -7,6 +7,26 @@ export type PromoParaCotizar = {
   destinos: readonly { tipo: "servicio" | "combo" | "depilacion"; id: string; cantidad: number }[];
 };
 
+/**
+ * El catálogo resuelto de un paquete: qué vale cada parte y cómo se llama.
+ *
+ * Los nombres no son decorativos y por eso viajan JUNTO a los precios, en un
+ * solo objeto, en vez de como un parámetro opcional aparte: el error de "esta
+ * parte no tiene precio" tiene que nombrarla. Laura no puede hacer nada con
+ * "No se pudo resolver el precio de: 0d3e1a7c-…" — tiene que ir a mirar la
+ * promo y adivinar cuál de las cosas que tildó es esa. Si el nombre fuera
+ * opcional, el día que alguien agregue un llamador nuevo y se lo olvide, el
+ * mensaje vuelve a ser un UUID sin que nada avise.
+ *
+ * `nombres` tiene entrada para todo destino que EXISTA en el catálogo, tenga
+ * precio o no — que es justamente el caso que hay que nombrar. `precios` sólo
+ * para los que resuelven precio.
+ */
+export type CatalogoDelPaquete = {
+  precios: ReadonlyMap<string, number>;
+  nombres: ReadonlyMap<string, string>;
+};
+
 export type CotizacionDePaquete = {
   description: string;
   sessionsTotal: number;
@@ -33,9 +53,10 @@ export type CotizacionDePaquete = {
  */
 export function cotizarPaquete(
   promo: PromoParaCotizar,
-  preciosDeLista: ReadonlyMap<string, number>,
+  catalogo: CatalogoDelPaquete,
   _compradoEl: Date,
 ): CotizacionDePaquete {
+  const { precios: preciosDeLista, nombres } = catalogo;
   if (promo.promotionType !== "paquete") {
     throw new Error("Esta promo no se vende como paquete: es un descuento sobre una cosa");
   }
@@ -48,7 +69,14 @@ export function cotizarPaquete(
 
   // Toda parte tiene que tener precio conocido. Inventar un reparto sería
   // peor: la clienta cobraría cualquier cosa al cancelar (spec §5).
-  const sinPrecio = promo.destinos.filter((d) => !preciosDeLista.has(d.id)).map((d) => d.id);
+  //
+  // Se rechaza NOMBRANDO la parte, que es lo que el readme y PENDIENTES.md
+  // prometen y lo que ya hace la venta (`compras.repo.ts`). El id crudo queda
+  // sólo para el destino que ni siquiera está en el catálogo —borrado después
+  // de armar la promo—, donde no hay mejor nombre que dar.
+  const sinPrecio = promo.destinos
+    .filter((d) => !preciosDeLista.has(d.id))
+    .map((d) => (nombres.get(d.id) ? `"${nombres.get(d.id)}"` : d.id));
   if (sinPrecio.length > 0) {
     throw new Error(`No se pudo resolver el precio de: ${sinPrecio.join(", ")}`);
   }

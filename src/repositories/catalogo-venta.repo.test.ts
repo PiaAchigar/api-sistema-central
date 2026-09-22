@@ -103,23 +103,32 @@ afterAll(async () => {
 describe("preciosDeListaDe — depilación pesa igual que la venta", () => {
   it("un pack_fijo con fixed_price cargado cotiza con ESE precio, sin tocar la fórmula", async () => {
     const promo = await obtenerPromoVendible(db, promoPackFijoId);
-    const precios = await preciosDeListaDe(db, promo!.destinos);
-    expect(precios.get(packFijoId)).toBe(65000);
+    const catalogo = await preciosDeListaDe(db, promo!.destinos);
+    expect(catalogo.precios.get(packFijoId)).toBe(65000);
 
-    const q = cotizarPaquete(promo!, precios, new Date());
+    const q = cotizarPaquete(promo!, catalogo, new Date());
     expect(q.baseAmount).toBe(65000);
     expect(q.finalAmount).toBe(50000);
   });
 
   it("un pack guardado (sin fixed_price) no resuelve precio: cotizarPaquete lo rechaza nombrándolo", async () => {
     const promo = await obtenerPromoVendible(db, promoPackGuardadoId);
-    const precios = await preciosDeListaDe(db, promo!.destinos);
+    const catalogo = await preciosDeListaDe(db, promo!.destinos);
     // No lo resuelve — ni siquiera con la fórmula sobre zonas: sería un
     // precio que la venta real del paquete nunca usa.
-    expect(precios.has(packGuardadoId)).toBe(false);
+    expect(catalogo.precios.has(packGuardadoId)).toBe(false);
 
-    expect(() => cotizarPaquete(promo!, precios, new Date())).toThrow(
-      new RegExp(packGuardadoId),
-    );
+    // NOMBRÁNDOLO, que es lo que dice el título y lo que el readme promete.
+    // Este test antes exigía el UUID —cementaba el bug que decía arreglar—:
+    // Laura leía "No se pudo resolver el precio de: 0d3e1a7c-…" y tenía que
+    // ir a la promo a adivinar cuál de las cosas que tildó era esa.
+    let mensaje = "";
+    try {
+      cotizarPaquete(promo!, catalogo, new Date());
+    } catch (e) {
+      mensaje = (e as Error).message;
+    }
+    expect(mensaje).toContain(`${QA}_PACK_GUARDADO`);
+    expect(mensaje).not.toContain(packGuardadoId);
   });
 });

@@ -11,6 +11,7 @@ import {
 import { precioDeServicio } from "../lib/combo-pricing";
 import { todayLocal } from "../lib/time";
 import type { ItemVendible, PromoVendible } from "../lib/cotizacion";
+import type { CatalogoDelPaquete } from "../lib/cotizacion-de-paquete";
 import type { DestinoDePromo } from "../lib/promo-aplica";
 import { promoAgotada, promoEstaVigente } from "../lib/promo-vigente";
 import { getComboById, listCombos } from "./combos.repo";
@@ -256,16 +257,21 @@ export async function obtenerItemVendible(
 export async function preciosDeListaDe(
   db: Db,
   destinos: readonly { tipo: "servicio" | "combo" | "depilacion"; id: string }[],
-): Promise<Map<string, number>> {
+): Promise<CatalogoDelPaquete> {
   const precios = new Map<string, number>();
+  // El nombre se guarda aunque el precio no resuelva: es JUSTO el caso que
+  // `cotizarPaquete` tiene que nombrar al rechazar. Antes el error salía con
+  // el UUID y Laura tenía que ir a la promo a adivinar cuál era.
+  const nombres = new Map<string, string>();
 
   const idsDeDepilacion = destinos.filter((d) => d.tipo === "depilacion").map((d) => d.id);
   if (idsDeDepilacion.length > 0) {
     const filas = await db
-      .select({ id: depilationCombo.id, fixedPrice: depilationCombo.fixedPrice })
+      .select({ id: depilationCombo.id, name: depilationCombo.name, fixedPrice: depilationCombo.fixedPrice })
       .from(depilationCombo)
       .where(inArray(depilationCombo.id, idsDeDepilacion));
     for (const f of filas) {
+      if (f.name) nombres.set(f.id, f.name);
       if (f.fixedPrice == null) continue;
       const precio = Number(f.fixedPrice);
       if (precio > 0) precios.set(f.id, precio);
@@ -276,11 +282,12 @@ export async function preciosDeListaDe(
     if (d.tipo === "depilacion") continue;
     const item = await obtenerItemVendible(db, d.tipo, d.id);
     if (!item) continue;
+    nombres.set(d.id, item.nombre);
     const precio = item.origen === "combo" ? item.conDescuento : item.unitario;
     if (precio > 0) precios.set(d.id, precio);
   }
 
-  return precios;
+  return { precios, nombres };
 }
 
 /**
