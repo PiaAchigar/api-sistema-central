@@ -12,6 +12,7 @@ import {
   service,
   serviceProviders,
 } from "../db/schema";
+import { badRequest } from "../lib/errors";
 import type { TipoDeDestino } from "../lib/promo-aplica";
 import { promoEstaVigente } from "../lib/promo-vigente";
 import { todayLocal } from "../lib/time";
@@ -306,7 +307,12 @@ export async function createPromotion(
   pagos: PromoPagoInput[],
 ) {
   const razones = razonesParaNoGuardarPromo(header, destinos);
-  if (razones.length > 0) throw new Error(razones.join("; "));
+  // `badRequest` y no un `Error` pelado: el `onError` de `src/index.ts` sólo
+  // mapea errores que traen `status`, así que un Error a secas salía como
+  // `{"error":"Internal server error"}` con 500 — Laura veía "error interno"
+  // en vez de "un paquete necesita un precio", que es lo único que la deja
+  // arreglarlo.
+  if (razones.length > 0) throw badRequest(razones.join("; "));
 
   const [created] = await db
     .insert(promotions)
@@ -340,7 +346,12 @@ export async function updatePromotion(
   pagos: PromoPagoInput[],
 ) {
   const razones = razonesParaNoGuardarPromo(header, destinos);
-  if (razones.length > 0) throw new Error(razones.join("; "));
+  // `badRequest` y no un `Error` pelado: el `onError` de `src/index.ts` sólo
+  // mapea errores que traen `status`, así que un Error a secas salía como
+  // `{"error":"Internal server error"}` con 500 — Laura veía "error interno"
+  // en vez de "un paquete necesita un precio", que es lo único que la deja
+  // arreglarlo.
+  if (razones.length > 0) throw badRequest(razones.join("; "));
 
   const updated = await db
     .update(promotions)

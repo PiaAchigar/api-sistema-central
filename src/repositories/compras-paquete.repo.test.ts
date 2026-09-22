@@ -8,8 +8,12 @@ import {
   categories,
   combos,
   comboService,
+  customerCreditMovements,
+  customers,
   customerPurchase,
   customerPurchaseService,
+  depilationCombo,
+  payments,
   promotions,
   promotionTarget,
   service,
@@ -53,6 +57,19 @@ let comboDelPackId: string;
 let packId: string;
 let promoConPackId: string;
 
+// ── MENOR 3: un pack de depilación con fixed_price en 0 ───────────────────
+let packDepilacionCeroId: string;
+let promoDepilacionCeroId: string;
+
+// ── MENOR 4: cancelar un paquete a medio usar (spec §9) ───────────────────
+// Clienta propia: este es el único test que mueve saldo a favor, y acreditarle
+// plata a una clienta real de la base local la dejaría con un credit_balance
+// inventado después de correr la suite.
+let clienteDeCancelacionId: string;
+let servicioCaroId: string;
+let servicioBaratoId: string;
+let promoParaCancelarId: string;
+
 async function limpiar() {
   // Las compras de test primero: si una corrida anterior dejó una fila
   // cancelada (pero no borrada, `cancelCompra` no borra) que referencia un
@@ -63,8 +80,21 @@ async function limpiar() {
     .from(customerPurchase)
     .where(like(customerPurchase.description, `${QA}%`));
   for (const c of compras) {
+    // Pagos y movimientos de saldo primero: los dos apuntan a la compra por FK.
+    await db.delete(customerCreditMovements).where(eq(customerCreditMovements.customerPurchaseId, c.id));
+    await db.delete(payments).where(eq(payments.customerPurchaseId, c.id));
     await db.delete(customerPurchaseService).where(eq(customerPurchaseService.customerPurchaseId, c.id));
     await db.delete(customerPurchase).where(eq(customerPurchase.id, c.id));
+  }
+
+  // La clienta QA del test de cancelación, con lo que le haya quedado a favor.
+  const clientesQA = await db
+    .select({ id: customers.id })
+    .from(customers)
+    .where(like(customers.dni, `${QA}%`));
+  for (const cl of clientesQA) {
+    await db.delete(customerCreditMovements).where(eq(customerCreditMovements.customerId, cl.id));
+    await db.delete(customers).where(eq(customers.id, cl.id));
   }
 
   const promos = await db.select({ id: promotions.id }).from(promotions).where(like(promotions.name, `${QA}%`));
@@ -96,6 +126,7 @@ async function limpiar() {
   }
 
   await db.delete(service).where(like(service.name, `${QA}%`));
+  await db.delete(depilationCombo).where(like(depilationCombo.name, `${QA}%`));
 
   // El área QA y su tarifario de packs, al final: los combos que la usaban ya
   // no están.
@@ -305,6 +336,58 @@ beforeAll(async () => {
     [],
   );
   promoConPackId = promoConPack!.id;
+
+  // ── MENOR 3: un pack de depilación con el precio en CERO ────────────────
+  // El CHECK de la base sólo exige que un `pack_fijo` tenga `fixed_price` NO
+  // NULL; 0 pasa. Cotizar ya lo rechazaba (`preciosDeListaDe` exige > 0) pero
+  // la venta lo dejaba entrar pesando $0.
+  const [packCero] = await db
+    .insert(depilationCombo)
+    .values({
+      name: `${QA}_DEPI_CERO`, kind: "pack_fijo", fixedPrice: "0", choiceZoneCount: 0,
+      isPublishedWeb: false, displayOrder: 0, isActive: false,
+    })
+    .returning({ id: depilationCombo.id });
+  packDepilacionCeroId = packCero!.id;
+
+  const promoDepiCero = await createPromotion(
+    db,
+    { name: `${QA}_DEPI_CERO`, promotionType: "paquete", precioDelPaquete: 10000 },
+    [{ tipo: "depilacion", id: packDepilacionCeroId, cantidad: 1 }],
+    [],
+  );
+  promoDepilacionCeroId = promoDepiCero!.id;
+
+  // ── MENOR 4: el escenario textual del spec §9 ───────────────────────────
+  // Paquete de $250.000 = un servicio de $200.000 + otro de $100.000 ($300.000
+  // de lista). El reparto le da $166.667 al caro y $83.333 al barato.
+  const [cli2] = await db
+    .insert(customers)
+    .values({ dni: `${QA}_CANCELAR`, creditBalance: "0" })
+    .returning({ id: customers.id });
+  clienteDeCancelacionId = cli2!.id;
+
+  const [caro] = await db
+    .insert(service)
+    .values({ name: `${QA}_CARO`, isActive: false, unitPriceList: "200000" })
+    .returning({ id: service.id });
+  servicioCaroId = caro!.id;
+  const [barato] = await db
+    .insert(service)
+    .values({ name: `${QA}_BARATO`, isActive: false, unitPriceList: "100000" })
+    .returning({ id: service.id });
+  servicioBaratoId = barato!.id;
+
+  const promoCancelar = await createPromotion(
+    db,
+    { name: `${QA}_CANCELAR`, promotionType: "paquete", precioDelPaquete: 250000 },
+    [
+      { tipo: "servicio", id: servicioCaroId, cantidad: 1 },
+      { tipo: "servicio", id: servicioBaratoId, cantidad: 1 },
+    ],
+    [],
+  );
+  promoParaCancelarId = promoCancelar!.id;
 });
 
 afterAll(async () => {
@@ -535,6 +618,20 @@ describe("createCompra — el paquete no se desentiende de destinos raros", () =
     ).rejects.toThrow(/destino/i);
   });
 
+  // ── Menor 3 (revisión final) ───────────────────────────────────────────
+  it("un pack de depilación con precio CERO no se vende: la venta exige lo mismo que cotizar", async () => {
+    // Antes la guarda era sólo `== null` y un `fixed_price` en 0 pasaba: la
+    // parte entraba al paquete pesando $0 y se llevaba una parte
+    // proporcional de $0, mientras cotizar (que exige > 0) ya lo rechazaba.
+    await expect(
+      createCompra(db, {
+        customerId: clienteId, esPaquete: true, promotionId: promoDepilacionCeroId,
+        promotionName: `${QA}_DEPI_CERO`, description: `${QA}_DEPI_CERO`, sessionsTotal: 1,
+        baseAmount: 10000, discountedAmount: 10000, finalAmount: 10000,
+      }),
+    ).rejects.toThrow(/no tiene precio cargado/i);
+  });
+
   // ── Menor 2 ────────────────────────────────────────────────────────────
   it("una promo de descuento no se vende como paquete", async () => {
     await expect(
@@ -544,5 +641,74 @@ describe("createCompra — el paquete no se desentiende de destinos raros", () =
         baseAmount: 10000, discountedAmount: 10000, finalAmount: 10000,
       }),
     ).rejects.toThrow(/no es un paquete/i);
+  });
+});
+
+describe("cancelCompra — un paquete a medio usar acredita lo que falta (spec §9)", () => {
+  // ── MENOR 4 (revisión final) ───────────────────────────────────────────
+  // El escenario textual del spec y el que más plata mueve: paquete de
+  // $250.000, la clienta se hace una parte, cancela, y se le acredita el
+  // resto. No hay código propio del paquete en `cancelCompra` — y justamente
+  // por eso hace falta el test: lo que sostiene la cuenta es que cada fila de
+  // `customer_purchase_service` tenga SU precio, que es lo que hace
+  // `lineasDeUnPaquete`. Si el reparto se rompiera, acá se ve.
+  it("le acredita exactamente lo que vale la parte que NO se hizo", async () => {
+    const compra = await createCompra(db, {
+      customerId: clienteDeCancelacionId, esPaquete: true, promotionId: promoParaCancelarId,
+      promotionName: `${QA}_CANCELAR`, description: `${QA}_CANCELAR`, sessionsTotal: 1,
+      baseAmount: 300000, discountedAmount: 250000, finalAmount: 250000,
+    });
+
+    // El reparto: $166.667 el servicio de $200.000, $83.333 el de $100.000.
+    const lineas = await db
+      .select({
+        id: customerPurchaseService.id,
+        serviceId: customerPurchaseService.serviceId,
+        price: customerPurchaseService.price,
+      })
+      .from(customerPurchaseService)
+      .where(eq(customerPurchaseService.customerPurchaseId, compra.id));
+    const caro = lineas.find((l) => l.serviceId === servicioCaroId)!;
+    const barato = lineas.find((l) => l.serviceId === servicioBaratoId)!;
+    expect(Number(caro.price)).toBe(166667);
+    expect(Number(barato.price)).toBe(83333);
+
+    // La clienta pagó el paquete entero.
+    const ahora = new Date();
+    await db.insert(payments).values({
+      customerId: clienteDeCancelacionId,
+      customerPurchaseId: compra.id,
+      amount: "250000",
+      paymentMethod: "cash",
+      status: "confirmed",
+      paymentDate: ahora,
+      isDeclared: true,
+      confirmedAt: ahora,
+    });
+
+    // Y se hizo la parte cara.
+    await db
+      .update(customerPurchaseService)
+      .set({ consumedAt: ahora })
+      .where(eq(customerPurchaseService.id, caro.id));
+
+    const cancelada = await cancelCompra(db, compra.id, "la clienta se mudó");
+
+    // $250.000 pagados − $166.667 de lo que se hizo = $83.333. Que es,
+    // exactamente, lo que vale la parte que le quedó sin hacer.
+    expect(cancelada!.saldoAcreditado).toBe(83333);
+
+    const [cli] = await db
+      .select({ saldo: customers.creditBalance })
+      .from(customers)
+      .where(eq(customers.id, clienteDeCancelacionId));
+    expect(Number(cli!.saldo)).toBe(83333);
+
+    const movimientos = await db
+      .select({ amount: customerCreditMovements.amount })
+      .from(customerCreditMovements)
+      .where(eq(customerCreditMovements.customerPurchaseId, compra.id));
+    expect(movimientos).toHaveLength(1);
+    expect(Number(movimientos[0]!.amount)).toBe(83333);
   });
 });

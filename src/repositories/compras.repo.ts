@@ -404,12 +404,18 @@ async function lineasDeUnPaquete(
         .limit(1);
       // Sin precio no se puede repartir nada, y adivinar sería peor: la
       // clienta cobraría cualquier cosa al cancelar (spec §5).
-      if (p?.precio == null) {
+      //
+      // `<= 0` y no sólo `== null`: cotizar ya exige `> 0` (`preciosDeListaDe`
+      // no guarda los que no lo cumplen, y `cotizarPaquete` los rechaza), así
+      // que dejar pasar un `fixed_price` en 0 acá significaba que la venta
+      // aceptaba algo que la cotización ya había rechazado — la parte entraba
+      // al paquete pesando $0 y se llevaba una parte proporcional de $0.
+      const precio = p?.precio == null ? null : Number(p.precio);
+      if (precio == null || precio <= 0) {
         throw new Error(
           `"${p?.nombre ?? "Un pack de depilación"}" del paquete no tiene precio cargado: no se puede vender`,
         );
       }
-      const precio = Number(p.precio);
       partes.push({
         tipo: "depilacion", id: d.depilationComboId, cantidad, precioDeLista: precio,
         lineas: [{ serviceId: null, depilationComboId: d.depilationComboId, trainingId: null, sessionsIncluded: 1, price: precio }],

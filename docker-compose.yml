@@ -121,6 +121,18 @@ services:
       # difiere de "40-seed.sql" y de "39n-..." en el primer dígito, antes de
       # llegar a ningún guion, así que no hay ambigüedad que probar a mano.
       - ./src/db/migrations/1.50.0/01-combos-por-area-y-packs.sql:/docker-entrypoint-initdb.d/41-combos-por-area-y-packs.sql:ro
+      # 42: la 1.55.0 (paquete de promo). Va al final porque toca tablas que
+      # crean migraciones de más arriba (`customer_purchase_service` de la
+      # 1.51.0, `training` de la 1.48.0, `depilation_combo` de la 1.35.0) y
+      # porque su bloque `DO $$` valida las filas existentes antes de crear
+      # los CHECK. Sin esto, un `db:reset` dejaba la base sin
+      # `promotions.precio_del_paquete`, `promotion_target.cantidad`,
+      # `customer_purchase.es_paquete_de_promo` ni las dos columnas de
+      # identidad de `customer_purchase_service` — y las cuatro suites del
+      # paquete reventaban contra una base recién creada.
+      # "42-" es seguro contra el bug de colación documentado arriba: difiere
+      # de "41-" en el primer dígito, antes de llegar a ningún guion.
+      - ./src/db/migrations/1.55.0/01-promo-paquete.sql:/docker-entrypoint-initdb.d/42-promo-paquete.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]
