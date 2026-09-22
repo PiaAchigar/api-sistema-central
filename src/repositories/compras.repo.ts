@@ -12,6 +12,7 @@ import {
   service,
   depilationCombo,
   training,
+  promotionTarget,
 } from "../db/schema";
 import {
   estadoDeSesion,
@@ -40,6 +41,8 @@ import {
   ordenDeServiciosComprados,
   type LineaDeCombo,
 } from "../lib/servicios-comprados";
+import { lineasDelPaquete, type ParteDelPaquete } from "../lib/desglose-de-paquete";
+import { repartirPrecioDelPaquete } from "../lib/reparto-de-paquete";
 
 const compraFields = {
   id: customerPurchase.id,
@@ -59,6 +62,7 @@ const compraFields = {
   expiresAt: customerPurchase.expiresAt,
   cancelledAt: customerPurchase.cancelledAt,
   notes: customerPurchase.notes,
+  esPaqueteDePromo: customerPurchase.esPaqueteDePromo,
 };
 
 export type CompraInput = {
@@ -83,6 +87,12 @@ export type CompraInput = {
    * ausente = no usar saldo. Se topea contra lo que hay y contra el precio.
    */
   usarSaldo?: number | null;
+  /**
+   * Esta compra es un paquete de promo (1.55.0): no tiene ningún origen
+   * suelto, y sus líneas salen de los destinos de la promo. Exige
+   * `promotionId`.
+   */
+  esPaquete?: boolean | null;
 };
 
 const dec = (n: number) => String(n);
@@ -98,16 +108,23 @@ const dec = (n: number) => String(n);
  * se le engancha un turno (spec 2026-09-11 §2).
  */
 export async function createCompra(db: Db, input: CompraInput) {
-  const origenes = [
-    input.comboId,
-    input.serviceId,
-    input.depilationComboId,
-    input.trainingId,
-  ].filter(Boolean);
-  if (origenes.length !== 1) {
-    throw new Error(
-      "Una compra tiene exactamente un origen: combo, servicio, combo de depilación o capacitación",
-    );
+  if (input.esPaquete) {
+    const sueltos = [input.comboId, input.serviceId, input.depilationComboId, input.trainingId]
+      .filter(Boolean);
+    if (sueltos.length > 0) {
+      throw new Error("Un paquete de promo no lleva ningún origen suelto: lo que lleva sale de la promo");
+    }
+    if (!input.promotionId) {
+      throw new Error("Un paquete de promo necesita la promo: es de donde salen las cosas que lleva");
+    }
+  } else {
+    const origenes = [input.comboId, input.serviceId, input.depilationComboId, input.trainingId]
+      .filter(Boolean);
+    if (origenes.length !== 1) {
+      throw new Error(
+        "Una compra tiene exactamente un origen: combo, servicio, combo de depilación o capacitación",
+      );
+    }
   }
   if (input.sessionsTotal < 1) throw new Error("La compra necesita al menos una repetición");
 
@@ -130,25 +147,52 @@ export async function createCompra(db: Db, input: CompraInput) {
         purchasedAt: new Date(),
         expiresAt: input.expiresAt ?? null,
         notes: input.notes ?? null,
+        esPaqueteDePromo: input.esPaquete === true,
       })
       .returning(compraFields);
 
     const compra = filas[0]!;
 
-    // Qué servicios hay que agendar. Sólo un combo se desglosa: un servicio
-    // suelto es uno solo, y depilación y capacitaciones no se desglosan.
-    const lineas: LineaDeCombo[] = input.comboId
-      ? await lineasParaVender(tx, input.comboId)
-      : input.serviceId
-        ? // Sin precio a propósito: todas las filas son el mismo servicio, así
-          // que el reparto en partes iguales ya da lo correcto.
-          [{ serviceId: input.serviceId, sessionsIncluded: 1, price: null }]
-        : [];
+    // Qué hay que agendar. Un paquete sale de los destinos de la promo; el
+    // resto es como hasta la 1.55.0.
+    const lineas: LineaDeCombo[] = input.esPaquete
+      ? await lineasDeUnPaquete(tx, input.promotionId!, input.finalAmount)
+      : input.comboId
+        ? await lineasParaVender(tx, input.comboId)
+        : input.serviceId
+          ? // Sin precio a propósito: todas las filas son el mismo servicio,
+            // así que el reparto en partes iguales ya da lo correcto.
+            [{ serviceId: input.serviceId, sessionsIncluded: 1, price: null }]
+          : [];
+
+    // Un paquete no tiene "vueltas": `lineasDeUnPaquete` ya expandió cantidad
+    // y sessionsIncluded en filas separadas (una por cosa a agendar), así que
+    // acá cada línea es directamente una fila, con `orden` = su posición.
+    //
+    // No se puede reusar `filasDeServicioComprado` para esto: reinicia
+    // `orden` en 1 por cada línea, y dos líneas de un paquete pueden compartir
+    // el mismo `service_id` (p. ej. "3 limpiezas de cutis" son 3 líneas con
+    // el mismo servicio) — las tres caerían con `orden: 1` y chocarían contra
+    // `ux_cpsv_fila` (customer_purchase_id, repeticion, service_id, orden).
+    // Un `orden` por posición es además más correcto para un paquete: no hay
+    // "vuelta" que numerar, sólo el orden en que Laura armó el paquete.
+    const filasDeCompra = input.esPaquete
+      ? lineas.map((l, i) => ({
+          serviceId: l.serviceId,
+          depilationComboId: l.depilationComboId ?? null,
+          trainingId: l.trainingId ?? null,
+          repeticion: 1,
+          orden: i + 1,
+          price: l.price,
+        }))
+      : filasDeServicioComprado(input.sessionsTotal, lineas);
 
     await tx.insert(customerPurchaseService).values(
-      filasDeServicioComprado(input.sessionsTotal, lineas).map((f) => ({
+      filasDeCompra.map((f) => ({
         customerPurchaseId: compra.id,
         serviceId: f.serviceId,
+        depilationComboId: f.depilationComboId,
+        trainingId: f.trainingId,
         repeticion: f.repeticion,
         orden: f.orden,
         price: f.price == null ? null : String(f.price),
@@ -215,6 +259,89 @@ async function aplicarSaldoAFavor(tx: Db, compraId: string, input: CompraInput):
   if (!ok) throw new Error("El saldo a favor de la clienta no alcanza para esta compra");
 
   return plan.conSaldo;
+}
+
+/**
+ * Las líneas de un paquete, ya con su parte del precio.
+ *
+ * **Se desglosa AL VENDER, y queda congelado.** Si mañana Laura le saca una
+ * cosa a la promo o le cambia el precio, la compra ya vendida no se mueve. Es
+ * el mismo criterio que el resto del sistema: la compra no depende de que el
+ * catálogo siga igual.
+ */
+async function lineasDeUnPaquete(
+  tx: Db,
+  promotionId: string,
+  precioDelPaquete: number,
+): Promise<LineaDeCombo[]> {
+  const destinos = await tx
+    .select({
+      serviceId: promotionTarget.serviceId,
+      comboId: promotionTarget.comboId,
+      depilationComboId: promotionTarget.depilationComboId,
+      cantidad: promotionTarget.cantidad,
+    })
+    .from(promotionTarget)
+    .where(eq(promotionTarget.promotionId, promotionId));
+
+  if (destinos.length === 0) {
+    throw new Error("Esta promo no lleva nada adentro: no hay paquete que vender");
+  }
+
+  const partes: ParteDelPaquete[] = [];
+  for (const d of destinos) {
+    const cantidad = d.cantidad ?? 1;
+
+    if (d.comboId) {
+      const lineas = await lineasParaVender(tx, d.comboId);
+      const precio = lineas.reduce((a, l) => a + (l.price ?? 0) * Math.max(1, l.sessionsIncluded), 0);
+      partes.push({ tipo: "combo", id: d.comboId, cantidad, precioDeLista: precio, lineas });
+      continue;
+    }
+
+    if (d.serviceId) {
+      const [s] = await tx
+        .select({ precio: service.unitPriceList })
+        .from(service)
+        .where(eq(service.id, d.serviceId))
+        .limit(1);
+      const precio = Number(s?.precio ?? 0);
+      partes.push({
+        tipo: "servicio", id: d.serviceId, cantidad, precioDeLista: precio,
+        lineas: [{ serviceId: d.serviceId, depilationComboId: null, trainingId: null, sessionsIncluded: 1, price: precio }],
+      });
+      continue;
+    }
+
+    if (d.depilationComboId) {
+      const [p] = await tx
+        .select({ precio: depilationCombo.fixedPrice, nombre: depilationCombo.name })
+        .from(depilationCombo)
+        .where(eq(depilationCombo.id, d.depilationComboId))
+        .limit(1);
+      // Sin precio no se puede repartir nada, y adivinar sería peor: la
+      // clienta cobraría cualquier cosa al cancelar (spec §5).
+      if (p?.precio == null) {
+        throw new Error(
+          `"${p?.nombre ?? "Un pack de depilación"}" del paquete no tiene precio cargado: no se puede vender`,
+        );
+      }
+      const precio = Number(p.precio);
+      partes.push({
+        tipo: "depilacion", id: d.depilationComboId, cantidad, precioDeLista: precio,
+        lineas: [{ serviceId: null, depilationComboId: d.depilationComboId, trainingId: null, sessionsIncluded: 1, price: precio }],
+      });
+    }
+  }
+
+  const lineas = lineasDelPaquete(partes);
+  // El reparto se hace sobre las líneas YA desglosadas, no sobre las partes:
+  // un combo de 2 servicios aporta 2 filas, y cada una necesita su precio.
+  const montos = repartirPrecioDelPaquete(
+    precioDelPaquete,
+    lineas.map((l) => l.price ?? 0),
+  );
+  return lineas.map((l, i) => ({ ...l, price: montos[i]! }));
 }
 
 export type ServicioLeido = {
