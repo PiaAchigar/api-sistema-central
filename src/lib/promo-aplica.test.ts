@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { promoAplica, promosQueAplican, tipoDeOrigen, type DestinoDePromo } from "./promo-aplica";
+import {
+  promoAplica,
+  promosQueAplican,
+  razonParaNoAplicarPromoSuelta,
+  tipoDeOrigen,
+  type DestinoDePromo,
+} from "./promo-aplica";
 
 const COMBO_FACIAL = "combo-facial";
 const BABY_BOTOX = "svc-baby-botox";
@@ -86,5 +92,49 @@ describe("promosQueAplican", () => {
     // Ofrecer promos antes de saber qué se vende invita a elegir una que
     // después no va a aplicar.
     expect(promosQueAplican(promos, null)).toEqual([]);
+  });
+});
+
+describe("razonParaNoAplicarPromoSuelta", () => {
+  // ── IMPORTANTE 3 (revisión final de la 1.55.0) ─────────────────────────
+  const paquete = {
+    name: "Promo Novia",
+    promotionType: "paquete",
+    // Los destinos de un paquete SON los items que lleva: `promoAplica`
+    // matchea perfecto, y por eso el filtro de tipo tiene que ir primero.
+    destinos: [{ tipo: "combo", id: COMBO_FACIAL, cantidad: 1 }] as DestinoDePromo[],
+  };
+
+  it("una promo de PAQUETE no se aplica como descuento sobre una venta suelta", () => {
+    // Antes esto pasaba: matcheaba, no descontaba un peso, y la compra
+    // quedaba enganchada consumiendo un uso del cupo del paquete.
+    expect(promoAplica(paquete.destinos, { origen: "combo", id: COMBO_FACIAL })).toBe(true);
+    expect(razonParaNoAplicarPromoSuelta(paquete, { origen: "combo", id: COMBO_FACIAL })).toMatch(
+      /paquete entero/i,
+    );
+  });
+
+  it("y el mensaje la nombra, para que Laura sepa cuál sacar", () => {
+    expect(razonParaNoAplicarPromoSuelta(paquete, { origen: "combo", id: COMBO_FACIAL })).toContain(
+      "Promo Novia",
+    );
+  });
+
+  it("una promo de descuento que SÍ aplica pasa: null", () => {
+    expect(
+      razonParaNoAplicarPromoSuelta(
+        { name: "15% facial", promotionType: "percentage", destinos },
+        { origen: "combo", id: COMBO_FACIAL },
+      ),
+    ).toBeNull();
+  });
+
+  it("una promo de descuento que no aplica a lo elegido sigue diciendo lo de siempre", () => {
+    expect(
+      razonParaNoAplicarPromoSuelta(
+        { name: "15% facial", promotionType: "percentage", destinos },
+        { origen: "depilacion", id: CUERPO_FULL },
+      ),
+    ).toMatch(/no aplica/i);
   });
 });

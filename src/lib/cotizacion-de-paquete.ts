@@ -37,6 +37,41 @@ export type CotizacionDePaquete = {
   finalAmount: number;
 };
 
+/** Los montos van a mensajes que lee Laura, no a un log. */
+const pesos = (n: number) => n.toLocaleString("es-AR");
+
+/**
+ * Por qué NO vender este paquete a este precio. `null` = adelante.
+ *
+ * El `finalAmount` que manda la pantalla no sólo se congela: **es el número
+ * que se reparte entre las líneas** (`lineasDeUnPaquete`). Si no coincide con
+ * el precio que hoy tiene la promo, la pantalla está vieja — Laura le cambió
+ * el precio al paquete en otra solapa, o quedó abierta desde antes.
+ *
+ * **Se rechaza en vez de pisar el número en silencio.** Pisarlo haría la
+ * venta con un precio que Laura NO vio, y esconder la única señal de que la
+ * pantalla se le quedó atrás. Con la clienta delante, "recargá y fijate el
+ * precio" es mejor que cobrar otra cosa.
+ *
+ * Lógica pura, sin base de datos: la promo ya la releyó el que llama.
+ */
+export function razonParaNoVenderElPaquete(
+  promo: { name: string | null; precioDelPaquete: number | null },
+  finalAmount: number,
+): string | null {
+  if (promo.precioDelPaquete == null || promo.precioDelPaquete <= 0) {
+    return `"${promo.name ?? "La promo"}" no tiene precio de paquete cargado`;
+  }
+  if (finalAmount !== promo.precioDelPaquete) {
+    return (
+      `"${promo.name ?? "La promo"}" sale $${pesos(promo.precioDelPaquete)} y se está ` +
+      `intentando vender a $${pesos(finalAmount)}. La pantalla quedó vieja: recargá y ` +
+      "volvé a cotizar antes de cobrar."
+    );
+  }
+  return null;
+}
+
 /**
  * Cuánto sale un paquete y cuánto valdría suelto.
  *
@@ -85,6 +120,21 @@ export function cotizarPaquete(
     (a, d) => a + preciosDeLista.get(d.id)! * Math.max(1, d.cantidad),
     0,
   );
+
+  // Un paquete que sale MÁS que sus partes sueltas no es un paquete.
+  //
+  // Se avisa acá, al cotizar, y no recién al apretar Vender: hasta la
+  // revisión final la cotización salía redonda y el `.refine` de `compraBody`
+  // tiraba "Los montos tienen que ir de mayor a menor: base ≥ con descuento ≥
+  // final" con la clienta delante — un mensaje sobre tres campos de un JSON
+  // que Laura nunca vio, para un error que está en el precio que ella cargó.
+  if (promo.precioDelPaquete > baseAmount) {
+    throw new Error(
+      `"${promo.name ?? "La promo"}" está cargada en $${pesos(promo.precioDelPaquete)}, ` +
+        `pero lo que lleva adentro vale $${pesos(baseAmount)} de lista. Un paquete no puede ` +
+        "salir más caro que comprar las cosas por separado: revisá el precio del paquete en la promo.",
+    );
+  }
 
   return {
     description: promo.name ?? "Promo",

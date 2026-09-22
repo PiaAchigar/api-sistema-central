@@ -29,8 +29,8 @@ import {
   preciosDeListaDe,
 } from "../../repositories/catalogo-venta.repo";
 import { cotizar } from "../../lib/cotizacion";
-import { cotizarPaquete } from "../../lib/cotizacion-de-paquete";
-import { promoAplica } from "../../lib/promo-aplica";
+import { cotizarPaquete, razonParaNoVenderElPaquete } from "../../lib/cotizacion-de-paquete";
+import { razonParaNoAplicarPromoSuelta } from "../../lib/promo-aplica";
 import type { AppBindings, Variables } from "../../env";
 
 const comprasRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
@@ -147,9 +147,8 @@ comprasRouter.post(
       // La pantalla ya filtra, pero una pantalla abierta hace media hora
       // puede ofrecer una promo que ya venció o se agotó. Es plata: se
       // vuelve a chequear acá.
-      if (!promoAplica(promo.destinos, { origen, id })) {
-        throw badRequest(`La promo "${promo.name ?? ""}" no aplica a lo que estás vendiendo`);
-      }
+      const razon = razonParaNoAplicarPromoSuelta(promo, { origen, id });
+      if (razon) throw badRequest(razon);
     }
 
     try {
@@ -229,6 +228,12 @@ comprasRouter.post(
     if (b.esPaquete) {
       const promo = await obtenerPromoVendible(db, b.promotionId!);
       if (!promo) throw badRequest(await motivoPromoNoVendible(db, b.promotionId!));
+      // El `finalAmount` que llega no sólo se congela: es el número que
+      // `lineasDeUnPaquete` reparte entre las líneas. El servidor ya releyó la
+      // promo y tiene el precio autoritativo, así que una discrepancia se
+      // rechaza en vez de pisarse en silencio (ver la función).
+      const razon = razonParaNoVenderElPaquete(promo, b.finalAmount);
+      if (razon) throw badRequest(razon);
       try {
         const compra = await createCompra(db, {
           ...b,
@@ -258,10 +263,11 @@ comprasRouter.post(
       if (!promo) throw badRequest(await motivoPromoNoVendible(db, b.promotionId));
       // La pantalla ya filtra, pero una pantalla abierta hace media hora
       // puede ofrecer una promo que ya venció o se agotó. Es plata: se
-      // vuelve a chequear acá.
-      if (!promoAplica(promo.destinos, { origen, id })) {
-        throw badRequest(`La promo "${promo.name ?? ""}" no aplica a lo que estás vendiendo`);
-      }
+      // vuelve a chequear acá. Y una promo de PAQUETE no se aplica por este
+      // camino: matchearía (sus destinos SON estos items) sin descontar nada,
+      // gastándole un uso del cupo a un paquete que nadie vendió.
+      const razon = razonParaNoAplicarPromoSuelta(promo, { origen, id });
+      if (razon) throw badRequest(razon);
     }
 
     try {

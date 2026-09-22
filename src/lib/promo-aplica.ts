@@ -54,6 +54,39 @@ export function promoAplica(
   return destinos.some((d) => d.tipo === tipo && d.id === item.id);
 }
 
+/**
+ * Por qué esta promo NO se puede aplicar a esta venta suelta. `null` = se puede.
+ *
+ * Son dos motivos y el segundo no lo veía nadie del lado del servidor
+ * (revisión final de la 1.55.0):
+ *
+ * 1. **No aplica a lo elegido** — la promo de depilación sobre un Baby Botox.
+ * 2. **Es una promo de PAQUETE.** Sus destinos SON los items que lleva, así
+ *    que `promoAplica` matchea perfecto; pero un paquete no tiene
+ *    `discount_percentage` ni `discount_amount`, así que `aplicarPromo` no
+ *    baja ni un peso. La compra quedaba enganchada a la promo y **consumía un
+ *    uso del cupo** sin haber vendido el paquete: la Promo Novia con límite 5
+ *    se gastaba vendiendo sueltos. La única defensa era un `.filter()` del
+ *    front (`VenderModal.tsx`), y una pantalla abierta hace media hora —o
+ *    cualquier cosa que le pegue a la API— se la saltea.
+ */
+export function razonParaNoAplicarPromoSuelta(
+  promo: { name: string | null; promotionType: string | null; destinos: readonly DestinoDePromo[] },
+  item: ItemElegido,
+): string | null {
+  const nombre = promo.name ?? "";
+  if (promo.promotionType === "paquete") {
+    return (
+      `La promo "${nombre}" se vende como un paquete entero, no como un descuento ` +
+      "sobre una cosa suelta. Para venderla, elegí el paquete en vez del item."
+    );
+  }
+  if (!promoAplica(promo.destinos, item)) {
+    return `La promo "${nombre}" no aplica a lo que estás vendiendo`;
+  }
+  return null;
+}
+
 /** Las promos que sirven para lo elegido. Sin nada elegido, ninguna. */
 export function promosQueAplican<P extends { destinos: readonly DestinoDePromo[] }>(
   promos: readonly P[],
