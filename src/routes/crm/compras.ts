@@ -26,8 +26,10 @@ import {
   motivoPromoNoVendible,
   obtenerItemVendible,
   obtenerPromoVendible,
+  preciosDeListaDe,
 } from "../../repositories/catalogo-venta.repo";
 import { cotizar } from "../../lib/cotizacion";
+import { cotizarPaquete } from "../../lib/cotizacion-de-paquete";
 import { promoAplica } from "../../lib/promo-aplica";
 import type { AppBindings, Variables } from "../../env";
 
@@ -86,16 +88,46 @@ comprasRouter.post(
   requirePermission("crm", "view"),
   zValidator(
     "json",
-    z.object({
-      origen: z.enum(["combo", "depilacion", "servicio", "capacitacion"]),
-      id: z.string().uuid(),
-      sessions: z.number().int().positive(),
-      promotionId: z.string().uuid().nullish(),
-    }),
+    z.union([
+      z.object({
+        origen: z.enum(["combo", "depilacion", "servicio", "capacitacion"]),
+        id: z.string().uuid(),
+        sessions: z.number().int().positive(),
+        promotionId: z.string().uuid().nullish(),
+      }),
+      // Un paquete no tiene "origen": lo que lleva sale de la promo.
+      z.object({
+        origen: z.literal("paquete"),
+        promotionId: z.string().uuid(),
+      }),
+    ]),
   ),
   async (c) => {
     const db = createDb(c.env);
-    const { origen, id, sessions, promotionId } = c.req.valid("json");
+    const body = c.req.valid("json");
+
+    if (body.origen === "paquete") {
+      const promo = await obtenerPromoVendible(db, body.promotionId);
+      if (!promo) throw badRequest(await motivoPromoNoVendible(db, body.promotionId));
+      try {
+        const q = cotizarPaquete(promo, await preciosDeListaDe(db, promo.destinos), new Date());
+        return c.json({
+          ...q,
+          expiresAt: null,
+          // Listo para mandarlo a POST /purchases sin rearmarlo, igual que la
+          // forma vieja.
+          esPaquete: true,
+          comboId: null,
+          depilationComboId: null,
+          serviceId: null,
+          trainingId: null,
+        });
+      } catch (e) {
+        throw badRequest((e as Error).message);
+      }
+    }
+
+    const { origen, id, sessions, promotionId } = body;
 
     const item = await obtenerItemVendible(db, origen, id);
     if (!item) {

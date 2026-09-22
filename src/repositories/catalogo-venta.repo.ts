@@ -227,6 +227,28 @@ export async function obtenerItemVendible(
 }
 
 /**
+ * El precio de lista de cada cosa de un paquete, por id.
+ *
+ * Reutiliza `obtenerItemVendible`, que es el mismo camino por el que se cotiza
+ * cualquier venta: así un combo sin precio o un pack archivado dan el mismo
+ * resultado acá que en la venta suelta, y no hay una segunda definición de
+ * "cuánto vale esto" que se desincronice.
+ */
+export async function preciosDeListaDe(
+  db: Db,
+  destinos: readonly { tipo: "servicio" | "combo" | "depilacion"; id: string }[],
+): Promise<Map<string, number>> {
+  const precios = new Map<string, number>();
+  for (const d of destinos) {
+    const item = await obtenerItemVendible(db, d.tipo, d.id);
+    if (!item) continue;
+    const precio = item.origen === "combo" ? item.conDescuento : item.unitario;
+    if (precio > 0) precios.set(d.id, precio);
+  }
+  return precios;
+}
+
+/**
  * Las promos que hoy se pueden aplicar a una venta.
  *
  * Filtra por vigencia (fecha LOCAL, no UTC: una promo que vence hoy no puede
