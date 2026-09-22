@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq, like } from "drizzle-orm";
+import { and, eq, like } from "drizzle-orm";
 import * as schema from "../db/schema";
 import {
+  areaPackPolicy,
+  categories,
   combos,
   comboService,
   customerPurchase,
@@ -15,6 +17,8 @@ import {
 import type { Db } from "../db/client";
 import { createCompra, cancelCompra } from "./compras.repo";
 import { createPromotion, deletePromotionPermanently } from "./promotions.repo";
+import { obtenerPromoVendible, preciosDeListaDe } from "./catalogo-venta.repo";
+import { cotizarPaquete } from "../lib/cotizacion-de-paquete";
 
 const pgClient = postgres("postgresql://piubella:piubella@localhost:5499/piubella", {
   max: 1,
@@ -41,6 +45,14 @@ let promoDescuentoId: string;
 let promoZonaId: string;
 let bodyZoneId: string;
 
+// ── CRÍTICO 1: un pack (kind='pack') adentro de un paquete ─────────────────
+let areaDePackId: string;
+let servicioPackAId: string;
+let servicioPackBId: string;
+let comboDelPackId: string;
+let packId: string;
+let promoConPackId: string;
+
 async function limpiar() {
   // Las compras de test primero: si una corrida anterior dejó una fila
   // cancelada (pero no borrada, `cancelCompra` no borra) que referencia un
@@ -58,6 +70,19 @@ async function limpiar() {
   const promos = await db.select({ id: promotions.id }).from(promotions).where(like(promotions.name, `${QA}%`));
   for (const p of promos) await deletePromotionPermanently(db, p.id);
 
+  // Los PACKS primero: un `kind='pack'` apunta con `pack_of_combo_id` al
+  // combo que repite, y borrar ese combo antes revienta por FK. El SELECT de
+  // abajo no promete orden, así que el orden se fuerza acá.
+  const packsQA = await db
+    .select({ id: combos.id })
+    .from(combos)
+    .where(and(like(combos.name, `${QA}%`), eq(combos.kind, "pack")));
+  for (const p of packsQA) {
+    await db.delete(promotionTarget).where(eq(promotionTarget.comboId, p.id));
+    await db.delete(comboService).where(eq(comboService.comboId, p.id));
+    await db.delete(combos).where(eq(combos.id, p.id));
+  }
+
   const viejos = await db.select({ id: combos.id }).from(combos).where(like(combos.name, `${QA}%`));
   for (const c of viejos) {
     // Defensivo: corriendo la suite entera (paralelismo de archivos) se vio
@@ -71,6 +96,17 @@ async function limpiar() {
   }
 
   await db.delete(service).where(like(service.name, `${QA}%`));
+
+  // El área QA y su tarifario de packs, al final: los combos que la usaban ya
+  // no están.
+  const areasQA = await db
+    .select({ id: categories.id })
+    .from(categories)
+    .where(like(categories.name, `${QA}%`));
+  for (const a of areasQA) {
+    await db.delete(areaPackPolicy).where(eq(areaPackPolicy.areaCategoryId, a.id));
+    await db.delete(categories).where(eq(categories.id, a.id));
+  }
 }
 
 beforeAll(async () => {
@@ -205,6 +241,70 @@ beforeAll(async () => {
   );
   promoZonaId = promoZona!.id;
   await db.insert(promotionTarget).values({ promotionId: promoZonaId, bodyZoneId, cantidad: 1 });
+
+  // ── CRÍTICO 1: un pack de N sesiones adentro de un paquete ──────────────
+  // Área propia con tarifario propio: `conPrecioDePack` se va sin tocar el
+  // precio si el área no tiene fila en `area_pack_policy`, y ninguna de las
+  // áreas reales del catálogo local la tiene. Descuento 0 y redondeo 1 para
+  // que la aritmética del test sea exacta y no dependa de la política.
+  const [areaPack] = await db
+    .insert(categories)
+    .values({ name: `${QA}_AREA_PACK`, kind: "area", isActive: true })
+    .returning({ id: categories.id });
+  areaDePackId = areaPack!.id;
+  await db.insert(areaPackPolicy).values({
+    areaCategoryId: areaDePackId,
+    packSessions: 4,
+    packDiscountPercentage: 0,
+    packRoundingBase: 1,
+  });
+
+  const [packA] = await db
+    .insert(service)
+    .values({ name: `${QA}_PACK_A`, isActive: false, unitPriceList: "10000" })
+    .returning({ id: service.id });
+  servicioPackAId = packA!.id;
+  const [packB] = await db
+    .insert(service)
+    .values({ name: `${QA}_PACK_B`, isActive: false, unitPriceList: "5000" })
+    .returning({ id: service.id });
+  servicioPackBId = packB!.id;
+
+  // El combo que el pack repite: dos servicios, $12.000 fijos la vuelta.
+  const [comboDelPack] = await db
+    .insert(combos)
+    .values({ name: `${QA}_COMBO_DEL_PACK`, priceType: "fixed", fixedPrice: "12000",
+             validityMonths: 12, isActive: true, isVisibleWeb: false, areaCategoryId: areaDePackId })
+    .returning({ id: combos.id });
+  comboDelPackId = comboDelPack!.id;
+  await db.insert(comboService).values([
+    { comboId: comboDelPackId, serviceId: servicioPackAId, sessionsIncluded: 1, servicePrice: "10000" },
+    { comboId: comboDelPackId, serviceId: servicioPackBId, sessionsIncluded: 1, servicePrice: "5000" },
+  ]);
+
+  // El pack: 4 vueltas de ese combo. `getComboById` le va a devolver
+  // `finalAmount` = 12.000 × 4 = $48.000 (descuento 0).
+  const [pack] = await db
+    .insert(combos)
+    .values({ name: `${QA}_PACK_4`, priceType: "fixed", fixedPrice: "12000", validityMonths: 12,
+             isActive: true, isVisibleWeb: false, areaCategoryId: areaDePackId,
+             kind: "pack", packOfComboId: comboDelPackId, packSessions: 4, servicesTogether: false })
+    .returning({ id: combos.id });
+  packId = pack!.id;
+
+  // Paquete de $118.000 = pack de $48.000 + servicio de $70.000. Al precio de
+  // lista exacto, así el reparto no mete redondeos y los números del test
+  // dicen lo que dicen.
+  const promoConPack = await createPromotion(
+    db,
+    { name: `${QA}_CON_PACK`, promotionType: "paquete", precioDelPaquete: 118000 },
+    [
+      { tipo: "combo", id: packId, cantidad: 1 },
+      { tipo: "servicio", id: servicioListaConocidaId, cantidad: 1 },
+    ],
+    [],
+  );
+  promoConPackId = promoConPack!.id;
 });
 
 afterAll(async () => {
@@ -355,6 +455,71 @@ describe("createCompra — el paquete pesa cada parte por lo que vale, no por lo
     const suma = lineas.reduce((a, l) => a + Number(l.price ?? 0), 0);
     expect(suma).toBe(150000);
     await cancelCompra(db, compra.id, "limpieza de test");
+  });
+});
+
+describe("createCompra — un pack adentro de un paquete entrega las N sesiones que cobra", () => {
+  // ── CRÍTICO 1 (revisión final) ─────────────────────────────────────────
+  // `getComboById(pack).finalAmount` YA viene multiplicado por las sesiones
+  // del pack, pero `lineasParaVender` devuelve las líneas de UNA vuelta. En
+  // la venta suelta la multiplicidad la aporta `sessionsTotal`; en un paquete
+  // es 1 siempre. Sin expandir, la clienta paga 4 vueltas y agenda 1 — y al
+  // cancelar, si usó esa única fila, se le acredita $0.
+  async function venderElPaqueteConPack() {
+    return createCompra(db, {
+      customerId: clienteId, esPaquete: true, promotionId: promoConPackId,
+      promotionName: `${QA}_CON_PACK`, description: `${QA}_CON_PACK`, sessionsTotal: 1,
+      baseAmount: 118000, discountedAmount: 118000, finalAmount: 118000,
+    });
+  }
+
+  it("crea N × (líneas del combo): un pack de 4 sobre un combo de 2 servicios da 8 filas", async () => {
+    const compra = await venderElPaqueteConPack();
+    const lineas = await db
+      .select({ price: customerPurchaseService.price, serviceId: customerPurchaseService.serviceId })
+      .from(customerPurchaseService)
+      .where(eq(customerPurchaseService.customerPurchaseId, compra.id));
+
+    expect(lineas.filter((l) => l.serviceId === servicioPackAId)).toHaveLength(4);
+    expect(lineas.filter((l) => l.serviceId === servicioPackBId)).toHaveLength(4);
+    // Más la del servicio suelto del paquete.
+    expect(lineas).toHaveLength(9);
+    await cancelCompra(db, compra.id, "limpieza de test");
+  });
+
+  it("y la suma de las partes SIGUE dando exactamente el precio del paquete", async () => {
+    // La invariante que sostiene la devolución: si expandir rompiera el
+    // reparto, cancelar le acreditaría a la clienta de más o de menos.
+    const compra = await venderElPaqueteConPack();
+    const lineas = await db
+      .select({ price: customerPurchaseService.price, serviceId: customerPurchaseService.serviceId })
+      .from(customerPurchaseService)
+      .where(eq(customerPurchaseService.customerPurchaseId, compra.id));
+
+    const suma = lineas.reduce((a, l) => a + Number(l.price ?? 0), 0);
+    expect(suma).toBe(118000);
+
+    // Y cada fila se lleva SU parte, no el precio del pack entero: las 4
+    // vueltas del servicio de $10.000 valen $8.000 cada una dentro del
+    // paquete, no $48.000 una y $0 las otras tres.
+    const deA = lineas.filter((l) => l.serviceId === servicioPackAId).map((l) => Number(l.price));
+    const deB = lineas.filter((l) => l.serviceId === servicioPackBId).map((l) => Number(l.price));
+    expect(deA).toEqual([8000, 8000, 8000, 8000]);
+    expect(deB).toEqual([4000, 4000, 4000, 4000]);
+    // El pack completo pesa sus $48.000 y el servicio suelto sus $70.000.
+    expect(deA.concat(deB).reduce((a, b) => a + b, 0)).toBe(48000);
+    await cancelCompra(db, compra.id, "limpieza de test");
+  });
+
+  it("cotizar y vender pesan el pack IGUAL: el baseAmount cuadra con el reparto", async () => {
+    // Las dos puntas leen el precio del pack por caminos distintos
+    // (`preciosDeListaDe` → `obtenerItemVendible` vs. `getComboById` adentro
+    // de `lineasDeUnPaquete`). Si una multiplicara por las sesiones y la otra
+    // no, la pantalla mostraría un "valen $X" que el reparto no respeta.
+    const promo = await obtenerPromoVendible(db, promoConPackId);
+    const q = cotizarPaquete(promo!, await preciosDeListaDe(db, promo!.destinos), new Date());
+    expect(q.baseAmount).toBe(118000);
+    expect(q.finalAmount).toBe(118000);
   });
 });
 

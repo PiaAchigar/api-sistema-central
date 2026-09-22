@@ -340,7 +340,7 @@ async function lineasDeUnPaquete(
       // `assembleCombo` documenta por qué sólo tipa lo explícito. El cast es
       // fiel a lo que la fila realmente trae.
       const comboArmado = (await getComboById(tx, d.comboId)) as
-        | { finalAmount: number; name?: string | null }
+        | { finalAmount: number; name?: string | null; packEffectiveSessions?: number | null }
         | null;
       const precio = comboArmado?.finalAmount ?? 0;
       if (precio <= 0) {
@@ -348,7 +348,27 @@ async function lineasDeUnPaquete(
           `"${comboArmado?.name ?? "Un combo"}" del paquete no tiene precio: no se puede vender`,
         );
       }
-      const lineas = await lineasParaVender(tx, d.comboId);
+      // Un PACK se cobra por N sesiones y hay que entregar las N.
+      //
+      // `lineasParaVender` devuelve las líneas de UNA vuelta —las del combo
+      // que el pack repite— mientras que `finalAmount` ya viene multiplicado
+      // por las sesiones (`conPrecioDePack` → `precioPack`). En la venta
+      // SUELTA esa multiplicidad la aporta `sessionsTotal`; en un paquete
+      // `sessionsTotal` es 1 siempre (el paquete es UNA compra), así que si
+      // no se expande acá la clienta paga 4 sesiones y puede agendar 1 — y al
+      // cancelar, si usó esa única fila, se le acredita $0.
+      //
+      // Se repite la vuelta entera, no se multiplica `sessionsIncluded`: así
+      // las líneas salen vuelta por vuelta (A, B, A, B…) y la ficha de la
+      // clienta se lee como lo que es, N pasadas del mismo combo.
+      //
+      // `packEffectiveSessions` y no `packSessions`: son las sesiones por las
+      // que REALMENTE se multiplicó el precio (ver `conPrecioDePack`). Contar
+      // las declaradas expandiría 4 filas sobre un precio de 1 cuando el área
+      // no tiene tarifario.
+      const vueltas = Math.max(1, comboArmado?.packEffectiveSessions ?? 1);
+      const lineasDeUnaVuelta = await lineasParaVender(tx, d.comboId);
+      const lineas = Array.from({ length: vueltas }, () => lineasDeUnaVuelta).flat();
       partes.push({ tipo: "combo", id: d.comboId, cantidad, precioDeLista: precio, lineas });
       continue;
     }

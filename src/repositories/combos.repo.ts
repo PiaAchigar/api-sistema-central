@@ -247,6 +247,18 @@ async function conPrecioDePack(db: Db, filas: FilaArmada[]): Promise<FilaArmada[
       /** De dónde salió el descuento, para que la pantalla lo diga. */
       packDiscountSource: f.packDiscountPercentage == null ? "area" : "propio",
       packEffectiveDiscount: politica.descuentoPct,
+      /**
+       * Por cuántas sesiones se multiplicó `finalAmount` recién acá arriba.
+       *
+       * No es lo mismo que `packSessions` y la diferencia es plata: cuando el
+       * área no tiene tarifario (`if (!area) return f`) esta función se va sin
+       * tocar el precio, y `packSessions` sigue diciendo 4 sobre un
+       * `finalAmount` de UNA sesión. Quien tenga que expandir el pack en N
+       * cosas a agendar —`lineasDeUnPaquete`, al vender un paquete de promo—
+       * tiene que contar las MISMAS N que se cobraron, no las declaradas, o
+       * cobra N y entrega 1 (o al revés).
+       */
+      packEffectiveSessions: politica.sesiones,
     };
   });
 }
