@@ -140,3 +140,42 @@ export function resumenDeCompra(
     saldada: saldo === 0,
   };
 }
+
+/**
+ * Cómo se llama una línea de la compra en la ficha de la clienta.
+ *
+ * Normalmente es el nombre del servicio. Pero `customer_purchase_service.
+ * service_id` va en NULL cuando la compra es de **depilación** o de una
+ * **capacitación**: esas no se desglosan en servicios. Ahí el nombre sale de
+ * la cabecera de la compra, que es quien sabe qué pack o qué capacitación se
+ * vendió.
+ *
+ * Sin este respaldo la ficha dibujaba un guión en cada renglón: una compra de
+ * 3 sesiones de "Cuerpo Full" se veía como "—", "—", "—", y no había forma de
+ * saber qué había comprado la clienta.
+ *
+ * Devuelve `null` sólo si no hay ninguno de los dos, y ahí la pantalla sigue
+ * mostrando su guión — que es lo honesto: no inventamos un nombre.
+ */
+export function nombreDeLaLinea(
+  serviceName: string | null,
+  nombreDeLaCabecera: string | null,
+): string | null {
+  return serviceName ?? nombreDeLaCabecera;
+}
+
+/**
+ * El nombre de respaldo de una compra: su pack de depilación o su capacitación.
+ *
+ * Una compra tiene UN solo origen, así que a lo sumo uno de los dos existe.
+ * Cuando la promo se venda como paquete, la línea va a traer su propia
+ * identidad y esto queda como respaldo para las compras viejas.
+ */
+export function nombreDeCabecera(
+  compra: { depilationComboId: string | null; trainingId: string | null },
+  nombrePorId: ReadonlyMap<string, string>,
+): string | null {
+  if (compra.depilationComboId) return nombrePorId.get(compra.depilationComboId) ?? null;
+  if (compra.trainingId) return nombrePorId.get(compra.trainingId) ?? null;
+  return null;
+}
