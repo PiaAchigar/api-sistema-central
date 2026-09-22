@@ -61,9 +61,18 @@ beforeAll(async () => {
   const [p] = await db.execute<{ id: string }>(
     "select id from service_providers limit 1" as never,
   );
-  // Sólo sirve un combo REAL del catálogo, no el QA que puede haber quedado
-  // de una corrida anterior — si lo tomara, `limpiar()` ya lo borró arriba.
-  const [c] = await db.execute<{ id: string }>("select id from combos limit 1" as never);
+  // Sólo sirve un combo REAL del catálogo, no un QA que haya quedado de
+  // OTRO archivo — `limpiar()` de acá arriba sólo conoce y borra el propio
+  // (`ZZ_QA_PROMOTIONS_TEST_combo`). Corriendo la suite entera en paralelo,
+  // esto agarró de verdad un combo QA de `compras-paquete.repo.test.ts`
+  // (creado y borrado por ese archivo durante su propia corrida) y reventó
+  // acá más tarde por FK cuando ya no existía. `ZZ_QA%` es la convención de
+  // prefijo que usa TODA la suite para nombrar fixtures de test — excluirlos
+  // a todos, no sólo al propio, es lo que hace falta para no ser un test
+  // "de cualquier combo que haya".
+  const [c] = await db.execute<{ id: string }>(
+    "select id from combos where name not like 'ZZ_QA%' limit 1" as never,
+  );
   servicioId = s!.id;
   proveedoraId = p!.id;
   if (c?.id) {

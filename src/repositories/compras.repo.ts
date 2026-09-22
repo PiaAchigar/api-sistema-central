@@ -13,6 +13,7 @@ import {
   depilationCombo,
   training,
   promotionTarget,
+  promotions,
 } from "../db/schema";
 import {
   estadoDeSesion,
@@ -35,7 +36,7 @@ import {
   type CompraParaDevolver,
 } from "../lib/devolucion";
 import { creditCustomer, debitCustomerCredit, getCustomerById } from "./customers.repo";
-import { lineasParaVender } from "./combos.repo";
+import { lineasParaVender, getComboById } from "./combos.repo";
 import {
   filasDeServicioComprado,
   ordenDeServiciosComprados,
@@ -43,6 +44,8 @@ import {
 } from "../lib/servicios-comprados";
 import { lineasDelPaquete, type ParteDelPaquete } from "../lib/desglose-de-paquete";
 import { repartirPrecioDelPaquete } from "../lib/reparto-de-paquete";
+import { precioDeServicio } from "../lib/combo-pricing";
+import { TIPO_PAQUETE } from "./promotions.repo";
 
 const compraFields = {
   id: customerPurchase.id,
@@ -116,6 +119,15 @@ export async function createCompra(db: Db, input: CompraInput) {
     }
     if (!input.promotionId) {
       throw new Error("Un paquete de promo necesita la promo: es de donde salen las cosas que lleva");
+    }
+    // Un paquete es UNA compra, no "N vueltas": lo que lleva ya salió
+    // expandido de `lineasDeUnPaquete` (cantidad × sessionsIncluded de cada
+    // destino). Aceptar `sessionsTotal !== 1` en silencio multiplicaría todo
+    // eso otra vez y la cabecera diría "3 vueltas" con una sola vendida.
+    if (input.sessionsTotal !== 1) {
+      throw new Error(
+        "Un paquete de promo se vende una sola vez: no admite varias repeticiones en la cabecera",
+      );
     }
   } else {
     const origenes = [input.comboId, input.serviceId, input.depilationComboId, input.trainingId]
@@ -191,8 +203,15 @@ export async function createCompra(db: Db, input: CompraInput) {
       filasDeCompra.map((f) => ({
         customerPurchaseId: compra.id,
         serviceId: f.serviceId,
-        depilationComboId: f.depilationComboId,
-        trainingId: f.trainingId,
+        // Un pack de depilación o una capacitación vendidos SUELTOS no traen
+        // identidad propia en la línea (`lineas = []`, ver arriba): la fila
+        // sale con los tres ids en NULL y viola `ck_cpsv_identidad_unica`.
+        // Ahí es la CABECERA la que dice quién es — como hasta la 1.55.0, la
+        // identidad vivía sólo ahí. Un paquete nunca entra por acá: sus
+        // líneas ya traen la suya propia, y `input.depilationComboId` /
+        // `input.trainingId` son siempre null (lo exige la guarda de arriba).
+        depilationComboId: f.depilationComboId ?? input.depilationComboId ?? null,
+        trainingId: f.trainingId ?? input.trainingId ?? null,
         repeticion: f.repeticion,
         orden: f.orden,
         price: f.price == null ? null : String(f.price),
@@ -274,11 +293,29 @@ async function lineasDeUnPaquete(
   promotionId: string,
   precioDelPaquete: number,
 ): Promise<LineaDeCombo[]> {
+  const [promo] = await tx
+    .select({ promotionType: promotions.promotionType, name: promotions.name })
+    .from(promotions)
+    .where(eq(promotions.id, promotionId))
+    .limit(1);
+  if (!promo) {
+    throw new Error("La promo de este paquete no existe: no hay qué desglosar");
+  }
+  // Una promo de descuento no tiene precio de paquete: desglosarla igual
+  // vendería sus destinos como si Laura los hubiera armado en un paquete,
+  // cuando en realidad son sólo "a qué le aplica el %".
+  if (promo.promotionType !== TIPO_PAQUETE) {
+    throw new Error(
+      `"${promo.name ?? "Esta promo"}" no es un paquete: es de descuento, y una promo de descuento no se vende como una cosa`,
+    );
+  }
+
   const destinos = await tx
     .select({
       serviceId: promotionTarget.serviceId,
       comboId: promotionTarget.comboId,
       depilationComboId: promotionTarget.depilationComboId,
+      bodyZoneId: promotionTarget.bodyZoneId,
       cantidad: promotionTarget.cantidad,
     })
     .from(promotionTarget)
@@ -293,19 +330,45 @@ async function lineasDeUnPaquete(
     const cantidad = d.cantidad ?? 1;
 
     if (d.comboId) {
+      // El peso de un combo es lo que CUESTA, no la suma de lo que valen sus
+      // servicios sueltos — un combo es justamente algo que vale menos que
+      // la suma de sus partes. `getComboById` ya resuelve precio fijo,
+      // porcentaje Y pack (repite el precio de otro combo); usar el subtotal
+      // acá le habría dado a la clienta de menos al cancelar (spec §5).
+      // `getComboById` sí trae `name` (viene del spread de `combo` adentro de
+      // `assembleCombo`), pero su tipo inferido no lo expone —
+      // `assembleCombo` documenta por qué sólo tipa lo explícito. El cast es
+      // fiel a lo que la fila realmente trae.
+      const comboArmado = (await getComboById(tx, d.comboId)) as
+        | { finalAmount: number; name?: string | null }
+        | null;
+      const precio = comboArmado?.finalAmount ?? 0;
+      if (precio <= 0) {
+        throw new Error(
+          `"${comboArmado?.name ?? "Un combo"}" del paquete no tiene precio: no se puede vender`,
+        );
+      }
       const lineas = await lineasParaVender(tx, d.comboId);
-      const precio = lineas.reduce((a, l) => a + (l.price ?? 0) * Math.max(1, l.sessionsIncluded), 0);
       partes.push({ tipo: "combo", id: d.comboId, cantidad, precioDeLista: precio, lineas });
       continue;
     }
 
     if (d.serviceId) {
       const [s] = await tx
-        .select({ precio: service.unitPriceList })
+        .select({ nombre: service.name, unitPriceList: service.unitPriceList, unitPriceCash: service.unitPriceCash })
         .from(service)
         .where(eq(service.id, d.serviceId))
         .limit(1);
-      const precio = Number(s?.precio ?? 0);
+      // Cae a `unit_price_cash` cuando no hay precio de lista — en
+      // producción 79 de 213 servicios activos están así. Sin este respaldo
+      // el servicio entraba al paquete pesando $0 y se llevaba una parte
+      // proporcional de $0 del precio (spec §5: "adivinar sería peor").
+      const precio = precioDeServicio(s?.unitPriceList, s?.unitPriceCash);
+      if (precio <= 0) {
+        throw new Error(
+          `"${s?.nombre ?? "Un servicio"}" del paquete no tiene precio cargado: no se puede vender`,
+        );
+      }
       partes.push({
         tipo: "servicio", id: d.serviceId, cantidad, precioDeLista: precio,
         lineas: [{ serviceId: d.serviceId, depilationComboId: null, trainingId: null, sessionsIncluded: 1, price: precio }],
@@ -331,17 +394,61 @@ async function lineasDeUnPaquete(
         tipo: "depilacion", id: d.depilationComboId, cantidad, precioDeLista: precio,
         lineas: [{ serviceId: null, depilationComboId: d.depilationComboId, trainingId: null, sessionsIncluded: 1, price: precio }],
       });
+      continue;
+    }
+
+    // `promotion_target` también admite `body_zone_id` (zonas de depilación
+    // "a elección", sin precio propio): un destino así no tiene con qué
+    // pesarse ni qué vender suelto. Mejor un error nombrable que perderlo en
+    // silencio — la clienta pagaría el paquete y le faltaría un pedazo.
+    throw new Error(
+      "Un destino del paquete no es servicio, combo ni pack de depilación: no se puede vender",
+    );
+  }
+
+  // El reparto es de DOS NIVELES porque el precio se conoce a nivel PARTE
+  // (lo que cuesta el combo, el servicio, el pack) pero las filas que hay
+  // que crear son a nivel LÍNEA (cada servicio de un combo, cada copia de
+  // una cantidad). Repartir todo junto en un solo nivel, ponderando cada
+  // línea por su precio de lista, le habría dado a un combo de $80.000 armado
+  // con $130.000 en servicios de lista el peso de $130.000 — de más.
+  //
+  // Nivel 1: `precioDelPaquete` entre las UNIDADES (una por cada `cantidad`
+  // de cada parte), ponderado por lo que esa parte vale de lista.
+  // Nivel 2: lo que le tocó a cada unidad, entre SUS líneas, ponderado por
+  // el precio de cada línea. Las dos pasadas usan `repartirPrecioDelPaquete`,
+  // así que las dos dan suma exacta — y por lo tanto la suma total también.
+  type Unidad = { parte: ParteDelPaquete; lineasDeLaUnidad: LineaDeCombo[] };
+  const unidades: Unidad[] = [];
+  for (const parte of partes) {
+    // Las líneas de UNA unidad de esta parte — sessionsIncluded ya viene
+    // expandido por `lineasDelPaquete`. Se recalcula por parte (no por
+    // unidad) porque todas las unidades de la misma parte tienen las mismas
+    // líneas: pedirlas una vez y repetirlas evita rearmar la lista adentro
+    // del `for`.
+    const lineasDeLaUnidad = lineasDelPaquete([{ ...parte, cantidad: 1 }]);
+    for (let unidad = 0; unidad < Math.max(1, parte.cantidad); unidad++) {
+      unidades.push({ parte, lineasDeLaUnidad });
     }
   }
 
-  const lineas = lineasDelPaquete(partes);
-  // El reparto se hace sobre las líneas YA desglosadas, no sobre las partes:
-  // un combo de 2 servicios aporta 2 filas, y cada una necesita su precio.
-  const montos = repartirPrecioDelPaquete(
+  const montosPorUnidad = repartirPrecioDelPaquete(
     precioDelPaquete,
-    lineas.map((l) => l.price ?? 0),
+    unidades.map((u) => u.parte.precioDeLista),
   );
-  return lineas.map((l, i) => ({ ...l, price: montos[i]! }));
+
+  const lineasFinales: LineaDeCombo[] = [];
+  unidades.forEach((u, i) => {
+    const montosPorLinea = repartirPrecioDelPaquete(
+      montosPorUnidad[i]!,
+      u.lineasDeLaUnidad.map((l) => l.price ?? 0),
+    );
+    u.lineasDeLaUnidad.forEach((l, j) => {
+      lineasFinales.push({ ...l, price: montosPorLinea[j]! });
+    });
+  });
+
+  return lineasFinales;
 }
 
 export type ServicioLeido = {
