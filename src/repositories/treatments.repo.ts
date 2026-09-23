@@ -114,6 +114,12 @@ export async function searchTreatments(
       JOIN service s ON se.service_id = s.id
       WHERE se.embedding IS NOT NULL
         AND s.is_active = true
+        -- Este endpoint es público y sin auth (buscador del home de
+        -- piubella_web): el ancla de depilación no es un tratamiento que se
+        -- ofrezca, es plomería de la agenda. IS DISTINCT FROM true en vez
+        -- de = false para que una fila con no_vendible en NULL siga
+        -- apareciendo (mismo criterio que en services.repo.ts).
+        AND s.no_vendible IS DISTINCT FROM true
         AND (1 - (se.embedding <=> ${vectorLiteral}::vector)) >= ${threshold}
 
       UNION ALL
