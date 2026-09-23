@@ -337,22 +337,35 @@ export async function obtenerItemVendible(
  * que se cotiza cualquier venta suelta: un combo sin precio o un servicio sin
  * precio de lista dan el mismo resultado acá que en la venta suelta.
  *
- * **Depilación es la excepción, a propósito.** `obtenerItemVendible` calcula
- * `unitario` con `assembleDepilationCombo`, que para un pack `guardado` (zonas
- * a elección, sin `fixed_price`) cae a la fórmula sobre zonas — un precio que
- * la venta de un paquete NUNCA usa: `lineasDeUnPaquete` (compras.repo.ts) sólo
- * lee `depilation_combo.fixed_price` y, si es NULL, rechaza la venta. Cotizar
- * con la fórmula prometería un precio que confirmar la compra después niega,
- * y Laura se enteraría recién con la clienta delante. Por eso esta función lee
- * `fixedPrice` DIRECTO para depilación, en vez de pasar por
- * `obtenerItemVendible`: mismo criterio que la venta, mismo resultado — un
- * `guardado` no resuelve precio acá tampoco, y `cotizarPaquete` lo rechaza
- * nombrándolo, antes de que Laura llegue a cobrar (spec §14 deja los packs de
+ * **`sexo` sin default, a propósito (Task 6).** Antes esta función leía
+ * `depilation_combo.fixed_price` crudo, el mismo número para cualquiera. Un
+ * paquete de promo reparte su precio único en proporción a esto, y ese
+ * reparto es lo que decide cuánto se le acredita a la clienta si cancela: si
+ * el pack de depilación pesa el precio de mujer, a un hombre el paquete le
+ * sale más barato de lo que cuesta y, al cancelar, se le acredita de menos.
+ * Un tercer parámetro CON default habría dejado el mismo agujero abierto en
+ * el primer llamador nuevo que se lo olvidara — por eso ningún llamador
+ * puede cotizar sin decir explícitamente para quién.
+ *
+ * **Depilación sigue siendo la excepción, pero ahora pasa por
+ * `obtenerCombo`.** `obtenerCombo(db, id, sexo)` ya resuelve `precioFinal`
+ * con la derivación de `precioDePackFijo` (Task 3/4) — un `pack_fijo` cobra
+ * proporcional al tiempo de ESE sexo, un `guardado` no tiene con qué. Pero
+ * `guardado` (zonas a elección, sin `fixed_price`: lo prohíbe
+ * `ck_dc_precio_guardado`) sigue sin resolver precio ACÁ, a propósito: su
+ * `precioFinal` cae a la fórmula sobre zonas, un número que la venta de un
+ * paquete NUNCA usa (`lineasDeUnPaquete` en `compras.repo.ts` sólo vende un
+ * `pack_fijo` con `fixed_price` cargado). Cotizar con la fórmula prometería
+ * un precio que confirmar la compra después niega, y Laura se enteraría
+ * recién con la clienta delante — por eso se filtra por `kind === "pack_fijo"`
+ * antes de llamar a `obtenerCombo`, y un `guardado` queda sin precio, para
+ * que `cotizarPaquete` lo rechace nombrándolo (spec §14 deja los packs de
  * zona a elección fuera de alcance: no se les inventa un precio nuevo).
  */
 export async function preciosDeListaDe(
   db: Db,
   destinos: readonly { tipo: "servicio" | "combo" | "depilacion"; id: string }[],
+  sexo: Sexo,
 ): Promise<CatalogoDelPaquete> {
   const precios = new Map<string, number>();
   // El nombre se guarda aunque el precio no resuelva: es JUSTO el caso que
@@ -363,14 +376,21 @@ export async function preciosDeListaDe(
   const idsDeDepilacion = destinos.filter((d) => d.tipo === "depilacion").map((d) => d.id);
   if (idsDeDepilacion.length > 0) {
     const filas = await db
-      .select({ id: depilationCombo.id, name: depilationCombo.name, fixedPrice: depilationCombo.fixedPrice })
+      .select({
+        id: depilationCombo.id,
+        name: depilationCombo.name,
+        kind: depilationCombo.kind,
+        fixedPrice: depilationCombo.fixedPrice,
+      })
       .from(depilationCombo)
       .where(inArray(depilationCombo.id, idsDeDepilacion));
     for (const f of filas) {
       if (f.name) nombres.set(f.id, f.name);
-      if (f.fixedPrice == null) continue;
-      const precio = Number(f.fixedPrice);
-      if (precio > 0) precios.set(f.id, precio);
+      // Un `guardado` no resuelve precio acá: ver el porqué en el docstring.
+      if (f.kind !== "pack_fijo" || f.fixedPrice == null) continue;
+      const combo = await obtenerCombo(db, f.id, sexo);
+      if (!combo) continue;
+      if (combo.precioFinal > 0) precios.set(f.id, combo.precioFinal);
     }
   }
 

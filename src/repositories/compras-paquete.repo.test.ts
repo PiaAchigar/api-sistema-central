@@ -1,13 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { and, eq, like } from "drizzle-orm";
+import { and, eq, like, notLike } from "drizzle-orm";
 import * as schema from "../db/schema";
 import {
   areaPackPolicy,
+  bodyZone,
   categories,
   combos,
   comboService,
+  contacts,
   customerCreditMovements,
   customers,
   customerPurchase,
@@ -22,6 +24,7 @@ import type { Db } from "../db/client";
 import { createCompra, cancelCompra } from "./compras.repo";
 import { createPromotion, deletePromotionPermanently } from "./promotions.repo";
 import { obtenerPromoVendible, preciosDeListaDe } from "./catalogo-venta.repo";
+import { crearCombo } from "./depilacion.repo";
 import { cotizarPaquete } from "../lib/cotizacion-de-paquete";
 
 const pgClient = postgres("postgresql://piubella:piubella@localhost:5499/piubella", {
@@ -70,6 +73,13 @@ let servicioCaroId: string;
 let servicioBaratoId: string;
 let promoParaCancelarId: string;
 
+// ── Task 6: el pack de depilación adentro de un paquete pesa por sexo ─────
+// Clienta propia, con sexo "hombre" cargado en el contacto: `clienteId` (el
+// primer customer de la base local) no tiene sexo garantizado.
+let idClienteHombre: string;
+let packDepilacionHombreId: string;
+let promoConDepilacionId: string;
+
 async function limpiar() {
   // Las compras de test primero: si una corrida anterior dejó una fila
   // cancelada (pero no borrada, `cancelCompra` no borra) que referencia un
@@ -95,6 +105,14 @@ async function limpiar() {
   for (const cl of clientesQA) {
     await db.delete(customerCreditMovements).where(eq(customerCreditMovements.customerId, cl.id));
     await db.delete(customers).where(eq(customers.id, cl.id));
+  }
+
+  // El cliente "hombre" de Task 6, que vive de un `contacts` propio (no de
+  // `customers.dni`, que el bloque de arriba ya cubre).
+  const contactosQA = await db.select({ id: contacts.id }).from(contacts).where(like(contacts.name, `${QA}%`));
+  for (const ct of contactosQA) {
+    await db.delete(customers).where(eq(customers.contactId, ct.id));
+    await db.delete(contacts).where(eq(contacts.id, ct.id));
   }
 
   const promos = await db.select({ id: promotions.id }).from(promotions).where(like(promotions.name, `${QA}%`));
@@ -388,6 +406,53 @@ beforeAll(async () => {
     [],
   );
   promoParaCancelarId = promoCancelar!.id;
+
+  // ── Task 6: el pack de depilación adentro de un paquete pesa por sexo ────
+  // Dos zonas reales de categorías distintas: con una sola, la duración de
+  // mujer y de hombre caen las dos en el piso de `turnoMinimo` y el precio
+  // de hombre sale IGUAL al de mujer — el mismo motivo que en
+  // catalogo-venta.repo.test.ts (Task 6).
+  const zonasParaDepilacion = await db
+    .select({ id: bodyZone.id })
+    .from(bodyZone)
+    .where(notLike(bodyZone.name, "ZZ_QA%"))
+    .orderBy(bodyZone.name)
+    .limit(2);
+  const packDepilacionHombre = await crearCombo(db, {
+    name: `${QA}_DEPI_HOMBRE`,
+    kind: "pack_fijo",
+    fixedPrice: 65000,
+    zonaIds: zonasParaDepilacion.map((z) => z.id),
+  });
+  packDepilacionHombreId = packDepilacionHombre!.id;
+
+  // Un contacto con sexo "hombre" propio: `clienteId` (el primer customer de
+  // la base local) no tiene el sexo garantizado.
+  const [contactoHombre] = await db
+    .insert(contacts)
+    .values({ name: `${QA}_HOMBRE`, sexo: "hombre" })
+    .returning({ id: contacts.id });
+  const [clienteHombre] = await db
+    .insert(customers)
+    .values({ contactId: contactoHombre!.id })
+    .returning({ id: customers.id });
+  idClienteHombre = clienteHombre!.id;
+
+  // El paquete lleva el pack de depilación MÁS un servicio de precio
+  // conocido: con un solo destino el reparto es trivial (se lleva el 100%
+  // del precio pase lo que pase adentro) y no probaría nada — con dos, la
+  // parte de depilación sólo se lleva lo que le toca si `precioFinal` para
+  // "hombre" es el que de verdad entró en el reparto.
+  const promoConDepilacion = await createPromotion(
+    db,
+    { name: `${QA}_CON_DEPILACION`, promotionType: "paquete", precioDelPaquete: 168000 },
+    [
+      { tipo: "depilacion", id: packDepilacionHombreId, cantidad: 1 },
+      { tipo: "servicio", id: servicioListaConocidaId, cantidad: 1 },
+    ],
+    [],
+  );
+  promoConDepilacionId = promoConDepilacion!.id;
 });
 
 afterAll(async () => {
@@ -600,7 +665,7 @@ describe("createCompra — un pack adentro de un paquete entrega las N sesiones 
     // de `lineasDeUnPaquete`). Si una multiplicara por las sesiones y la otra
     // no, la pantalla mostraría un "valen $X" que el reparto no respeta.
     const promo = await obtenerPromoVendible(db, promoConPackId);
-    const q = cotizarPaquete(promo!, await preciosDeListaDe(db, promo!.destinos), new Date());
+    const q = cotizarPaquete(promo!, await preciosDeListaDe(db, promo!.destinos, "mujer"), new Date());
     expect(q.baseAmount).toBe(118000);
     expect(q.finalAmount).toBe(118000);
   });
@@ -710,5 +775,64 @@ describe("cancelCompra — un paquete a medio usar acredita lo que falta (spec �
       .where(eq(customerCreditMovements.customerPurchaseId, compra.id));
     expect(movimientos).toHaveLength(1);
     expect(Number(movimientos[0]!.amount)).toBe(83333);
+  });
+});
+
+/**
+ * El agujero que cierra Task 6: `lineasDeUnPaquete` hoy lee `fixed_price`
+ * crudo, el precio de mujer. Si `preciosDeListaDe` (la cotización) ya pesa el
+ * pack por sexo pero la venta no, la pantalla promete un número y la venta
+ * guarda otro — y al cancelar se le acredita de menos a un hombre.
+ */
+describe("createCompra — el paquete pesa el pack de depilación por sexo, no sólo la cotización", () => {
+  it("un paquete con un pack de depilación le reparte a un hombre su precio, no el de mujer", async () => {
+    // Lo que ESA clienta paga por el pack, resuelto por el mismo camino que
+    // la cotización — la prueba de que la venta no inventa un número propio.
+    const paraHombre = await preciosDeListaDe(
+      db,
+      [{ tipo: "depilacion", id: packDepilacionHombreId }],
+      "hombre",
+    );
+    const precioDepilacionHombre = paraHombre.precios.get(packDepilacionHombreId)!;
+    expect(precioDepilacionHombre).toBeGreaterThan(65000);
+
+    // Sin descuento (finalAmount = suma de las dos partes de lista): así el
+    // reparto de cada línea da un número exacto y previsible, sin depender
+    // de en qué orden `lineasDeUnPaquete` recorra los destinos (la última
+    // parte absorbe el redondeo — ver `repartirPrecioDelPaquete`).
+    const finalAmount = precioDepilacionHombre + 70000;
+    const compra = await createCompra(db, {
+      customerId: idClienteHombre,
+      esPaquete: true,
+      promotionId: promoConDepilacionId,
+      promotionName: `${QA}_CON_DEPILACION`,
+      sexo: "hombre",
+      description: `${QA}_CON_DEPILACION`,
+      sessionsTotal: 1,
+      baseAmount: finalAmount,
+      discountedAmount: finalAmount,
+      finalAmount,
+    });
+
+    const filas = await db
+      .select({
+        depilationComboId: customerPurchaseService.depilationComboId,
+        serviceId: customerPurchaseService.serviceId,
+        price: customerPurchaseService.price,
+      })
+      .from(customerPurchaseService)
+      .where(eq(customerPurchaseService.customerPurchaseId, compra.id));
+
+    // Las partes suman EXACTAMENTE el precio del paquete: si no sumara,
+    // cancelar le acreditaría a la clienta de más o de menos (spec §5).
+    const suma = filas.reduce((t, f) => t + Number(f.price ?? 0), 0);
+    expect(suma).toBe(Number(compra.finalAmount));
+
+    // Y la línea de depilación se llevó SU precio de hombre — no el de
+    // mujer, y no cualquier reparto que igual sumara el total.
+    const deDepilacion = filas.find((f) => f.depilationComboId === packDepilacionHombreId);
+    expect(Number(deDepilacion!.price)).toBe(precioDepilacionHombre);
+
+    await cancelCompra(db, compra.id, "limpieza de test");
   });
 });

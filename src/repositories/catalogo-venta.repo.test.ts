@@ -82,16 +82,24 @@ async function limpiar() {
 beforeAll(async () => {
   await limpiar();
 
-  // Una zona real, activa, que NO sea de un fixture QA de otra suite: un
+  // Dos zonas reales, activas, que NO sean de un fixture QA de otra suite: un
   // `select ... limit 1` sin este filtro agarró una vez un fixture QA vivo
   // de otro archivo en una corrida anterior de la suite entera.
-  const [zona] = await db
+  //
+  // Task 6: el pack fijo necesita DOS zonas (o de categorías distintas) para
+  // que la duración de mujer y de hombre difieran. Con una sola, las dos
+  // caen en el piso de `turnoMinimo` (10') sea cual sea la categoría —
+  // `precioDePackFijo` saca la relación de esos minutos, así que con un solo
+  // piso igual para los dos sexos el precio de hombre daría IGUAL al de
+  // mujer y este test no probaría nada.
+  const zonasIniciales = await db
     .select({ id: bodyZone.id })
     .from(bodyZone)
     .where(notLike(bodyZone.name, "ZZ_QA%"))
     .orderBy(bodyZone.name)
-    .limit(1);
-  zonaId = zona!.id;
+    .limit(2);
+  zonaId = zonasIniciales[0]!.id;
+  const zonaIdBis = zonasIniciales[1]!.id;
 
   // Regresión: un pack_fijo CON fixed_price cargado — tiene que seguir
   // cotizando exactamente igual que antes de este fix.
@@ -99,7 +107,7 @@ beforeAll(async () => {
     name: `${QA}_PACK_FIJO`,
     kind: "pack_fijo",
     fixedPrice: 65000,
-    zonaIds: [zonaId],
+    zonaIds: [zonaId, zonaIdBis],
   });
   packFijoId = packFijo!.id;
 
@@ -200,7 +208,7 @@ afterAll(async () => {
 describe("preciosDeListaDe — depilación pesa igual que la venta", () => {
   it("un pack_fijo con fixed_price cargado cotiza con ESE precio, sin tocar la fórmula", async () => {
     const promo = await obtenerPromoVendible(db, promoPackFijoId);
-    const catalogo = await preciosDeListaDe(db, promo!.destinos);
+    const catalogo = await preciosDeListaDe(db, promo!.destinos, "mujer");
     expect(catalogo.precios.get(packFijoId)).toBe(65000);
 
     const q = cotizarPaquete(promo!, catalogo, new Date());
@@ -210,7 +218,7 @@ describe("preciosDeListaDe — depilación pesa igual que la venta", () => {
 
   it("un pack guardado (sin fixed_price) no resuelve precio: cotizarPaquete lo rechaza nombrándolo", async () => {
     const promo = await obtenerPromoVendible(db, promoPackGuardadoId);
-    const catalogo = await preciosDeListaDe(db, promo!.destinos);
+    const catalogo = await preciosDeListaDe(db, promo!.destinos, "mujer");
     // No lo resuelve — ni siquiera con la fórmula sobre zonas: sería un
     // precio que la venta real del paquete nunca usa.
     expect(catalogo.precios.has(packGuardadoId)).toBe(false);
@@ -227,6 +235,23 @@ describe("preciosDeListaDe — depilación pesa igual que la venta", () => {
     }
     expect(mensaje).toContain(`${QA}_PACK_GUARDADO`);
     expect(mensaje).not.toContain(packGuardadoId);
+  });
+});
+
+/**
+ * Un paquete de promo con un pack de depilación adentro tiene que pesar lo que
+ * ESA clienta paga. Si `preciosDeListaDe` lee `fixed_price` crudo, a Juan se
+ * le reparte el precio de mujer: el paquete le sale más barato de lo que
+ * cuesta y, al cancelar, se le acredita de menos.
+ */
+describe("preciosDeListaDe — la depilación pesa según el sexo", () => {
+  it("un pack de depilación pesa más para un hombre", async () => {
+    const promo = await obtenerPromoVendible(db, promoPackFijoId);
+    const mujer = await preciosDeListaDe(db, promo!.destinos, "mujer");
+    const hombre = await preciosDeListaDe(db, promo!.destinos, "hombre");
+
+    expect(mujer.precios.get(packFijoId)).toBe(65000);
+    expect(hombre.precios.get(packFijoId)!).toBeGreaterThan(65000);
   });
 });
 

@@ -46,6 +46,8 @@ import { lineasDelPaquete, type ParteDelPaquete } from "../lib/desglose-de-paque
 import { repartirPrecioDelPaquete } from "../lib/reparto-de-paquete";
 import { precioDeServicio } from "../lib/combo-pricing";
 import { TIPO_PAQUETE } from "./promotions.repo";
+import { obtenerCombo } from "./depilacion.repo";
+import type { Sexo } from "../lib/depilation-pricing";
 
 const compraFields = {
   id: customerPurchase.id,
@@ -96,6 +98,15 @@ export type CompraInput = {
    * `promotionId`.
    */
   esPaquete?: boolean | null;
+  /**
+   * A quién se le vende (Task 6, 1.56.0): sólo pesa si el paquete lleva un
+   * pack de depilación adentro — `lineasDeUnPaquete` lo usa para resolver
+   * `precioFinal` con `obtenerCombo`, igual que la cotización. Default
+   * `"mujer"` para no romper a los llamadores que no venden depilación (todo
+   * el resto del catálogo cobra lo mismo a cualquiera); la ruta de venta SÍ
+   * lo resuelve siempre con `sexoDeLaClienta`, que ya tiene el `customerId`.
+   */
+  sexo?: Sexo | null;
 };
 
 const dec = (n: number) => String(n);
@@ -168,7 +179,7 @@ export async function createCompra(db: Db, input: CompraInput) {
     // Qué hay que agendar. Un paquete sale de los destinos de la promo; el
     // resto es como hasta la 1.55.0.
     const lineas: LineaDeCombo[] = input.esPaquete
-      ? await lineasDeUnPaquete(tx, input.promotionId!, input.finalAmount)
+      ? await lineasDeUnPaquete(tx, input.promotionId!, input.finalAmount, input.sexo ?? "mujer")
       : input.comboId
         ? await lineasParaVender(tx, input.comboId)
         : input.serviceId
@@ -292,6 +303,7 @@ async function lineasDeUnPaquete(
   tx: Db,
   promotionId: string,
   precioDelPaquete: number,
+  sexo: Sexo,
 ): Promise<LineaDeCombo[]> {
   const [promo] = await tx
     .select({ promotionType: promotions.promotionType, name: promotions.name })
@@ -397,11 +409,18 @@ async function lineasDeUnPaquete(
     }
 
     if (d.depilationComboId) {
-      const [p] = await tx
-        .select({ precio: depilationCombo.fixedPrice, nombre: depilationCombo.name })
-        .from(depilationCombo)
-        .where(eq(depilationCombo.id, d.depilationComboId))
-        .limit(1);
+      // `obtenerCombo` deriva `precioFinal` con `precioDePackFijo` (Task 3/4):
+      // mismo camino que `preciosDeListaDe`, así que lo que Laura cotizó es
+      // EXACTAMENTE lo que se reparte acá — nunca un `fixed_price` leído
+      // crudo, que pesaría el precio de mujer aunque se le esté vendiendo a
+      // un hombre.
+      //
+      // Sólo un `pack_fijo` resuelve precio: un `guardado` (sin `fixed_price`,
+      // el CHECK de la base lo garantiza) cae a la fórmula sobre zonas en
+      // `precioFinal`, un número que la venta de un paquete NUNCA usa — mismo
+      // criterio que `preciosDeListaDe`, que ya lo rechazó al cotizar.
+      const combo = await obtenerCombo(tx, d.depilationComboId, sexo);
+      const conPrecioPropio = combo && combo.kind === "pack_fijo" && combo.fixedPrice != null;
       // Sin precio no se puede repartir nada, y adivinar sería peor: la
       // clienta cobraría cualquier cosa al cancelar (spec §5).
       //
@@ -410,10 +429,10 @@ async function lineasDeUnPaquete(
       // que dejar pasar un `fixed_price` en 0 acá significaba que la venta
       // aceptaba algo que la cotización ya había rechazado — la parte entraba
       // al paquete pesando $0 y se llevaba una parte proporcional de $0.
-      const precio = p?.precio == null ? null : Number(p.precio);
+      const precio = conPrecioPropio ? combo!.precioFinal : null;
       if (precio == null || precio <= 0) {
         throw new Error(
-          `"${p?.nombre ?? "Un pack de depilación"}" del paquete no tiene precio cargado: no se puede vender`,
+          `"${combo?.name ?? "Un pack de depilación"}" del paquete no tiene precio cargado: no se puede vender`,
         );
       }
       partes.push({

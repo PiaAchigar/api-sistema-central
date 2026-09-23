@@ -113,7 +113,11 @@ comprasRouter.post(
       const promo = await obtenerPromoVendible(db, body.promotionId);
       if (!promo) throw badRequest(await motivoPromoNoVendible(db, body.promotionId));
       try {
-        const q = cotizarPaquete(promo, await preciosDeListaDe(db, promo.destinos), new Date());
+        // Sólo depilación cobra distinto según a quién se le vende (ver el
+        // camino suelto, más abajo): se resuelve acá para que el pack de
+        // depilación adentro del paquete pese lo que ESA clienta paga.
+        const sexo = await sexoDeLaClienta(db, body.customerId);
+        const q = cotizarPaquete(promo, await preciosDeListaDe(db, promo.destinos, sexo), new Date());
         return c.json({
           ...q,
           expiresAt: null,
@@ -232,6 +236,12 @@ comprasRouter.post(
     const db = createDb(c.env);
     const b = c.req.valid("json");
 
+    // Sólo depilación cobra distinto según a quién se le vende, pero se
+    // resuelve UNA vez acá, para los dos caminos: si el pack de depilación va
+    // suelto o adentro de un paquete, la venta tiene que pesarlo igual que lo
+    // vio Laura al cotizar.
+    const sexo = await sexoDeLaClienta(db, b.customerId);
+
     if (b.esPaquete) {
       const promo = await obtenerPromoVendible(db, b.promotionId!);
       if (!promo) throw badRequest(await motivoPromoNoVendible(db, b.promotionId!));
@@ -244,6 +254,7 @@ comprasRouter.post(
       try {
         const compra = await createCompra(db, {
           ...b,
+          sexo,
           promotionName: promo.name ?? null,
           expiresAt: b.expiresAt ? new Date(b.expiresAt) : null,
         });
@@ -280,6 +291,7 @@ comprasRouter.post(
     try {
       const compra = await createCompra(db, {
         ...b,
+        sexo,
         promotionName: promo?.name ?? null,
         expiresAt: b.expiresAt ? new Date(b.expiresAt) : null,
       });
