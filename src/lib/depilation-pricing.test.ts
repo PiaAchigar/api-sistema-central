@@ -262,12 +262,11 @@ describe("zonasBloqueadas", () => {
 });
 
 // `describe`/`expect`/`it`/`calcularDuracionTurno`/`calcularPrecioCombo`/
-// `DepilationConfig`/`ZonaParaCotizar` ya están importados arriba; un bloque
-// acá abajo evita que este `CONFIG` (por sexo) choque de nombre con el
-// `CONFIG` (unisex) de los tests viejos más arriba en el mismo archivo.
-{
+// `DepilationConfig`/`ZonaParaCotizar` ya están importados arriba. Esta
+// config se llama distinto del `CONFIG` (unisex) de los tests viejos de
+// arriba porque comparten el mismo scope de módulo.
 /** Los valores reales de producción al 2026-09-23. */
-const CONFIG: DepilationConfig = {
+const CONFIG_POR_SEXO: DepilationConfig = {
   precioLista: {
     mujer:  { grande: 19000, mediana: 17000, chica: 12000 },
     hombre: { grande: 23000, mediana: 22000, chica: 19000 },
@@ -298,8 +297,8 @@ const zona = (id: string, categoria: ZonaParaCotizar["categoria"]): ZonaParaCoti
 describe("calcularPrecioCombo — se bifurca por sexo (1.56.0)", () => {
   it("una zona sola sale al precio de lista de SU sexo", () => {
     const unaZona = [zona("medio-brazo", "mediana")];
-    expect(calcularPrecioCombo(unaZona, "mujer", CONFIG).total).toBe(17000);
-    expect(calcularPrecioCombo(unaZona, "hombre", CONFIG).total).toBe(22000);
+    expect(calcularPrecioCombo(unaZona, "mujer", CONFIG_POR_SEXO).total).toBe(17000);
+    expect(calcularPrecioCombo(unaZona, "hombre", CONFIG_POR_SEXO).total).toBe(22000);
   });
 
   /**
@@ -310,22 +309,22 @@ describe("calcularPrecioCombo — se bifurca por sexo (1.56.0)", () => {
   it("el escalonado usa los minutos de precio de SU sexo", () => {
     const dos = [zona("pierna", "grande"), zona("axila", "chica")];
     // mujer:  19000 (lista) + 5 min × 1200 = 25000
-    expect(calcularPrecioCombo(dos, "mujer", CONFIG).total).toBe(25000);
+    expect(calcularPrecioCombo(dos, "mujer", CONFIG_POR_SEXO).total).toBe(25000);
     // hombre: 23000 (lista) + 8 min × 1200 = 32600
-    expect(calcularPrecioCombo(dos, "hombre", CONFIG).total).toBe(32600);
+    expect(calcularPrecioCombo(dos, "hombre", CONFIG_POR_SEXO).total).toBe(32600);
   });
 
   it("la tercera zona en adelante usa el escalón 2, también por sexo", () => {
     const tres = [zona("pierna", "grande"), zona("espalda", "grande"), zona("axila", "chica")];
     // mujer:  19000 + 10×1200 + 5×1000 = 36000
-    expect(calcularPrecioCombo(tres, "mujer", CONFIG).total).toBe(36000);
+    expect(calcularPrecioCombo(tres, "mujer", CONFIG_POR_SEXO).total).toBe(36000);
     // hombre: 23000 + 11×1200 + 8×1000 = 44200
-    expect(calcularPrecioCombo(tres, "hombre", CONFIG).total).toBe(44200);
+    expect(calcularPrecioCombo(tres, "hombre", CONFIG_POR_SEXO).total).toBe(44200);
   });
 
   it("sigue ordenando de la zona más cara a la más barata", () => {
     const desordenadas = [zona("axila", "chica"), zona("pierna", "grande")];
-    const q = calcularPrecioCombo(desordenadas, "mujer", CONFIG);
+    const q = calcularPrecioCombo(desordenadas, "mujer", CONFIG_POR_SEXO);
     expect(q.lineas[0]!.nombre).toBe("pierna");
     expect(q.lineas[0]!.motivo).toBe("lista");
     expect(q.lineas[1]!.nombre).toBe("axila");
@@ -333,7 +332,7 @@ describe("calcularPrecioCombo — se bifurca por sexo (1.56.0)", () => {
   });
 
   it("sin zonas no cobra nada", () => {
-    expect(calcularPrecioCombo([], "hombre", CONFIG).total).toBe(0);
+    expect(calcularPrecioCombo([], "hombre", CONFIG_POR_SEXO).total).toBe(0);
   });
 });
 
@@ -343,8 +342,7 @@ describe("calcularDuracionTurno — no cambió, pero se verifica junto", () => {
       ...Array.from({ length: 5 }, (_, i) => zona(`g${i}`, "grande")),
       ...Array.from({ length: 5 }, (_, i) => zona(`c${i}`, "chica")),
     ];
-    expect(calcularDuracionTurno(cuerpoFull, "mujer", CONFIG)).toBe(60);
-    expect(calcularDuracionTurno(cuerpoFull, "hombre", CONFIG)).toBe(75);
+    expect(calcularDuracionTurno(cuerpoFull, "mujer", CONFIG_POR_SEXO)).toBe(60);
+    expect(calcularDuracionTurno(cuerpoFull, "hombre", CONFIG_POR_SEXO)).toBe(75);
   });
 });
-}

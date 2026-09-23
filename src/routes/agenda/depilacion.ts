@@ -544,7 +544,9 @@ depilacionRouter.post(
     }
 
     const config = await leerConfig(db);
-    const { total: totalFormula, lineas } = calcularPrecioCombo(zonas, config);
+    // Fijo en "mujer" hasta que la Task 4 le pase el sexo real: es lo que el
+    // sistema hacía antes de la 1.56.0, así que el comportamiento no cambia.
+    const { total: totalFormula, lineas } = calcularPrecioCombo(zonas, "mujer", config);
     const packs = await listarPacksFijos(db);
     const packFijo = buscarPackFijo(zonaIds, packs);
 

@@ -508,7 +508,9 @@ export function precioFormulaDeCombo(
     nombre: "Zona a elección",
     categoria: CATEGORIA_ELECCION,
   }));
-  return calcularPrecioCombo([...zonasFijas, ...fantasmas], config).total;
+  // Fijo en "mujer" hasta que la Task 4 le pase el sexo real: es lo que el
+  // sistema hacía antes de la 1.56.0, así que el comportamiento no cambia.
+  return calcularPrecioCombo([...zonasFijas, ...fantasmas], "mujer", config).total;
 }
 
 export type DepilationComboRow = {

@@ -203,10 +203,13 @@ export function primeraViolacionNoInversion(
     for (let nM = 0; nM <= maxPorCategoria; nM++) {
       for (let nC = 0; nC <= maxPorCategoria; nC++) {
         const antes: Record<Categoria, number> = { grande: nG, mediana: nM, chica: nC };
-        const totalAntes = calcularPrecioCombo(armar(antes), config).total;
+        // Fijo en "mujer" hasta que la Task 4 le pase el sexo real: es lo que
+        // el sistema hacía antes de la 1.56.0, así que el comportamiento no
+        // cambia.
+        const totalAntes = calcularPrecioCombo(armar(antes), "mujer", config).total;
         for (const categoriaAgregada of ["grande", "mediana", "chica"] as const) {
           const despues = { ...antes, [categoriaAgregada]: antes[categoriaAgregada] + 1 };
-          const totalDespues = calcularPrecioCombo(armar(despues), config).total;
+          const totalDespues = calcularPrecioCombo(armar(despues), "mujer", config).total;
           if (totalDespues <= totalAntes) {
             return { categoriaAgregada, antes, totalAntes, totalDespues };
           }
