@@ -2,6 +2,8 @@ import { and, asc, desc, eq, gt, gte, inArray, isNotNull, lt, not, or, sql } fro
 import type { Db } from "../db/client";
 import {
   activities,
+  appointmentBodyZone,
+  bodyZone,
   customerPurchaseService,
   appointments,
   contacts,
@@ -112,6 +114,37 @@ export async function getOverlappingAppointments(
     .where(and(...conditions));
 }
 
+/**
+ * Las zonas de depilación de varios turnos, en un `select` aparte indexado
+ * por `appointment_id` — no un JOIN sobre la consulta principal, que
+ * multiplicaría cada fila de turno por cada zona que tenga.
+ */
+export async function getBodyZonesForAppointments(
+  db: Db,
+  appointmentIds: string[],
+): Promise<Map<string, { bodyZoneId: string; nombre: string; minutos: number }[]>> {
+  const mapa = new Map<string, { bodyZoneId: string; nombre: string; minutos: number }[]>();
+  if (appointmentIds.length === 0) return mapa;
+
+  const filas = await db
+    .select({
+      appointmentId: appointmentBodyZone.appointmentId,
+      bodyZoneId: appointmentBodyZone.bodyZoneId,
+      minutos: appointmentBodyZone.minutos,
+      nombre: bodyZone.name,
+    })
+    .from(appointmentBodyZone)
+    .innerJoin(bodyZone, eq(bodyZone.id, appointmentBodyZone.bodyZoneId))
+    .where(inArray(appointmentBodyZone.appointmentId, appointmentIds));
+
+  for (const f of filas) {
+    const lista = mapa.get(f.appointmentId) ?? [];
+    lista.push({ bodyZoneId: f.bodyZoneId, nombre: f.nombre, minutos: f.minutos });
+    mapa.set(f.appointmentId, lista);
+  }
+  return mapa;
+}
+
 export async function listAppointmentsByRange(
   db: Db,
   range: { start: Date; end: Date },
@@ -132,7 +165,7 @@ export async function listAppointmentsByRange(
     );
   }
 
-  return db
+  const rows = await db
     .select({
       id: appointments.id,
       appointmentStart: appointments.appointmentStart,
@@ -177,6 +210,11 @@ export async function listAppointmentsByRange(
     .leftJoin(activities, eq(activities.id, appointments.activityId))
     .where(and(...conditions))
     .orderBy(asc(appointments.appointmentStart));
+
+  // Las zonas de depilación, para que la agenda pueda mostrar "Depilación ·
+  // pierna, axila". Turno sin zonas (el caso normal) queda con [].
+  const zonasPorTurno = await getBodyZonesForAppointments(db, rows.map((r) => r.id));
+  return rows.map((r) => ({ ...r, zonas: zonasPorTurno.get(r.id) ?? [] }));
 }
 
 export async function getAppointmentById(db: Db, id: string) {

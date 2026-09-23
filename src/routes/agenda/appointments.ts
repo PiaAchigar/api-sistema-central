@@ -116,11 +116,16 @@ export const createBody = z.object({
   priceMode: z.enum(["list", "cash"]).optional(),
   notes: z.string().max(1000).optional(),
   status: z.enum(["scheduled", "reserved"]).optional(),
-  expiryMinutes: z.number().int().min(5).max(480).optional(),
+  // Hasta 24 h: una reserva de depilación se guarda un día entero mientras la
+  // clienta consigue la plata. El tope viejo era 480 (8 h).
+  expiryMinutes: z.number().int().min(5).max(1440).optional(),
   /** El servicio comprado (sin fecha todavía) que este turno descuenta (V3b).
    *  Sin esto, no descuenta nada y el turno se cobra aparte, que es el caso
    *  más común. */
   customerPurchaseServiceId: z.string().uuid().optional(),
+  /** Las zonas elegidas para un turno de depilación (1.56.0). Ver
+   *  `CreateAppointmentInput.zonas`. */
+  zonas: z.array(z.string().uuid()).optional(),
   deposit: z
     .object({
       amount: z.number().positive(),

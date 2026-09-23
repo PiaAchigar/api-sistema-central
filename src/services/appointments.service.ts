@@ -1,7 +1,9 @@
-import { sql } from "drizzle-orm";
+import { and, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
+import { appointmentBodyZone, customerPurchaseService, appointments } from "../db/schema";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { subtractAll, type Interval } from "../lib/intervals";
+import { minutosElegidos } from "../lib/menu-de-zonas";
 import {
   filaDeReagendado,
   huboMovimiento,
@@ -16,14 +18,20 @@ import {
   updateAppointment,
 } from "../repositories/appointments.repo";
 import { recordReschedule } from "../repositories/appointment-reschedule.repo";
+import { anclaDeDepilacion } from "../repositories/ancla-de-depilacion.repo";
 import { creditCustomer, getCustomerById } from "../repositories/customers.repo";
 import { cancelDeal, getDealByAppointmentId } from "../repositories/deals.repo";
 import { getActiveAgreement } from "../repositories/providers.repo";
 import { getServiceById } from "../repositories/services.repo";
+import { datosParaAgendar } from "../repositories/turno-de-depilacion.repo";
 import { gananciaDelTurno } from "./pago-de-promo";
 import { loadAvailabilityContext } from "./availability.service";
 import { consumirInsumos } from "./consumo.service";
-import { consumirServicioDelTurno, tomarServicio } from "../repositories/consumo.repo";
+import {
+  consumirServicioDelTurno,
+  lineasDeDepilacionLibres,
+  tomarServicio,
+} from "../repositories/consumo.repo";
 import { registerDeposit, type DepositInput } from "./deposits.service";
 import type { ArcaConfig } from "../arca/factory";
 
@@ -49,6 +57,15 @@ export type CreateAppointmentInput = {
    * una sesión — recién ahí tiene fecha y hora.
    */
   customerPurchaseServiceId?: string;
+  /**
+   * Las zonas que se hacen en este turno de depilación (1.56.0).
+   *
+   * Sólo tiene sentido con `serviceId` = el servicio ancla. La duración del
+   * turno sale de acá y NO del presupuesto del pack: si la clienta se hace 39
+   * de sus 60 minutos, la agenda bloquea 39 y los otros 21 quedan libres para
+   * otra persona. El sobrante no se guarda a favor: la sesión se gastó.
+   */
+  zonas?: string[];
 };
 
 export async function createAppointment(
@@ -60,6 +77,20 @@ export async function createAppointment(
   const startDate = new Date(input.start);
   if (Number.isNaN(startDate.getTime())) throw badRequest("Fecha de inicio inválida");
   if (startDate.getTime() < Date.now()) throw badRequest("El turno no puede ser en el pasado");
+
+  const ancla = await anclaDeDepilacion(db);
+  const esDepilacion = input.serviceId === ancla;
+
+  if (esDepilacion) {
+    if (!input.customerPurchaseServiceId) {
+      throw badRequest("Un turno de depilación sale de una sesión comprada: falta cuál");
+    }
+    if (!input.zonas?.length) {
+      throw badRequest("Hay que elegir al menos una zona para el turno");
+    }
+  } else if (input.zonas?.length) {
+    throw badRequest("Sólo un turno de depilación lleva zonas");
+  }
 
   const customer = await getCustomerById(db, input.customerId);
   if (!customer) throw notFound("Customer");
@@ -73,9 +104,37 @@ export async function createAppointment(
     throw conflict("La proveedora no está disponible para este servicio en esa fecha");
   }
 
+  // Para depilación, la duración sale de las zonas ELEGIDAS y no de
+  // `service.estimated_duration_minutes` (que es lo que usa cualquier otro
+  // servicio, sin tocar). Se valida contra `datosParaAgendar` — la MISMA
+  // cuenta que ya usó la pantalla para armar el menú — para que servidor y
+  // pantalla nunca calculen distinto.
+  let durationMinutes = ctx.durationMinutes;
+  let zonasParaGuardar: { bodyZoneId: string; minutos: number }[] = [];
+  if (esDepilacion) {
+    const datos = await datosParaAgendar(db, input.customerPurchaseServiceId!);
+    const menuPorId = new Map(datos.zonas.map((z) => [z.id, z]));
+    for (const zonaId of input.zonas!) {
+      const zonaMenu = menuPorId.get(zonaId);
+      if (!zonaMenu || !zonaMenu.disponible) {
+        throw badRequest("Esa zona no está disponible para este pack");
+      }
+    }
+    durationMinutes = minutosElegidos(datos.zonas, input.zonas!);
+    if (durationMinutes > datos.presupuestoMinutos) {
+      throw badRequest("Las zonas elegidas no entran en el presupuesto del pack");
+    }
+    zonasParaGuardar = input.zonas!.map((id) => ({
+      bodyZoneId: id,
+      // Congelado: si mañana Laura cambia la config, este turno no cambia de
+      // duración solo.
+      minutos: menuPorId.get(id)!.minutos,
+    }));
+  }
+
   const startMin = utcToLocalMinutes(startDate);
-  const requested: Interval = { start: startMin, end: startMin + ctx.durationMinutes };
-  const endDate = new Date(startDate.getTime() + ctx.durationMinutes * 60 * 1000);
+  const requested: Interval = { start: startMin, end: startMin + durationMinutes };
+  const endDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);
 
   const freeWindows = ctx.freeWindowsByProvider.get(input.providerId) ?? [];
   const fitsProvider = freeWindows.some(
@@ -147,12 +206,24 @@ export async function createAppointment(
       machineId,
       appointmentStart: startDate,
       appointmentEnd: endDate,
-      durationMinutes: ctx.durationMinutes,
+      durationMinutes,
       servicePrice,
       status: apptStatus,
       reservationExpiresAt,
       notes: input.notes ?? null,
     });
+
+    // Las zonas elegidas, para el detalle del recibo y la trazabilidad de qué
+    // se depiló. Sólo existe con el servicio ancla (validado arriba).
+    if (esDepilacion) {
+      await tx.insert(appointmentBodyZone).values(
+        zonasParaGuardar.map((z) => ({
+          appointmentId: appointment.id,
+          bodyZoneId: z.bodyZoneId,
+          minutos: z.minutos,
+        })),
+      );
+    }
 
     // Descontar el servicio comprado, si el turno viene atado a una compra.
     //
@@ -161,12 +232,25 @@ export async function createAppointment(
     // haber agendado ese mismo servicio comprado. Sin el chequeo, la segunda
     // pisaría a la primera y el pack quedaría con una sesión de más.
     if (input.customerPurchaseServiceId) {
-      await tomarServicio(tx, input.customerPurchaseServiceId, {
-        appointmentId: appointment.id,
-        customerId: input.customerId,
-        serviceId: input.serviceId,
-        ahora: new Date(),
-      });
+      if (esDepilacion) {
+        // No usa `tomarServicio`: esa guarda busca por `service_id`, y una
+        // línea de depilación lo tiene en NULL (su identidad vive en
+        // `depilation_combo_id`, ver `consumo.repo.ts`). Misma seguridad ante
+        // carreras — id + sin consumir + sin turno activo dentro del WHERE
+        // del UPDATE — pero mirando la línea, no el servicio.
+        await tomarLineaDeDepilacion(tx, input.customerPurchaseServiceId, {
+          appointmentId: appointment.id,
+          customerId: input.customerId,
+          ahora: new Date(),
+        });
+      } else {
+        await tomarServicio(tx, input.customerPurchaseServiceId, {
+          appointmentId: appointment.id,
+          customerId: input.customerId,
+          serviceId: input.serviceId,
+          ahora: new Date(),
+        });
+      }
     }
 
     if (input.deposit && arca) {
@@ -184,6 +268,55 @@ export async function createAppointment(
 
     return appointment;
   });
+}
+
+/**
+ * Ata una línea de depilación comprada al turno recién creado.
+ *
+ * Análoga a `tomarServicio` (`consumo.repo.ts`), pero para líneas de
+ * depilación: esas filas tienen `service_id` en NULL (una línea de
+ * depilación se identifica por `depilation_combo_id`, no por servicio — ver
+ * `condicionDeLineaDeDepilacionLibre`), así que la guarda de `tomarServicio`
+ * —que busca por `service_id`— nunca las encuentra. `consumo.repo.test.ts`
+ * lo dice explícito: "ese camino de escritura es de otra tarea". Ésta.
+ *
+ * Misma seguridad ante carreras que `tomarServicio`: el UPDATE sólo pisa la
+ * fila si sigue sin consumir y sin un turno activo enganchado (uno
+ * `cancelled` no cuenta — se avisó, se reagenda).
+ */
+async function tomarLineaDeDepilacion(
+  db: Db,
+  purchaseServiceId: string,
+  ctx: { appointmentId: string; customerId: string; ahora: Date },
+): Promise<void> {
+  const libres = await lineasDeDepilacionLibres(db, ctx.customerId, ctx.ahora);
+  if (!libres.some((l) => l.purchaseServiceId === purchaseServiceId)) {
+    throw conflict("Esa sesión ya no está disponible para descontar");
+  }
+
+  const tomadas = await db
+    .update(customerPurchaseService)
+    .set({ appointmentId: ctx.appointmentId, updatedAt: new Date() })
+    .where(
+      and(
+        eq(customerPurchaseService.id, purchaseServiceId),
+        isNull(customerPurchaseService.consumedAt),
+        // Sin turno, o con uno cancelado que ya no lo reserva.
+        or(
+          isNull(customerPurchaseService.appointmentId),
+          sql`EXISTS (
+            SELECT 1 FROM ${appointments} a
+             WHERE a.id = ${customerPurchaseService.appointmentId}
+               AND a.status = 'cancelled'
+          )`,
+        ),
+      ),
+    )
+    .returning({ id: customerPurchaseService.id });
+
+  if (tomadas.length === 0) {
+    throw conflict("Esa sesión acaba de ser tomada por otro turno");
+  }
 }
 
 export async function listAppointmentsByDay(
