@@ -9,6 +9,12 @@ import {
   training,
 } from "../db/schema";
 import { precioDeServicio } from "../lib/combo-pricing";
+import {
+  type FilaDeDesglose,
+  desgloseDeCombo,
+  desgloseDeDepilacion,
+} from "../lib/desglose-de-catalogo";
+import { comboDelQueSalenLosServicios } from "../lib/servicios-comprados";
 import { todayLocal } from "../lib/time";
 import type { ItemVendible, PromoVendible } from "../lib/cotizacion";
 import type { CatalogoDelPaquete } from "../lib/cotizacion-de-paquete";
@@ -36,6 +42,7 @@ type ComboArmado = {
   finalAmount: number;
   kind: string;
   packSessions: number | null;
+  lines: { serviceName: string | null; sessionsIncluded: number | null }[];
 } & Record<string, unknown>;
 
 function comboVendible(c: ComboArmado): ItemVendible {
@@ -61,12 +68,38 @@ export type ItemDeCatalogo = ItemVendible & {
   packDescuentoPct: number | null;
   /** Precio de lista de la venta más común, para ordenar y mostrar. */
   precioDesde: number;
+  /** La descripción cargada en el catálogo. `null` si está vacía. */
+  descripcion: string | null;
+  /**
+   * Qué trae este item, para poder decirlo antes de cobrar.
+   *
+   * Vacío en servicios y capacitaciones, que son una cosa sola y no tienen
+   * qué desglosar. Viaja en el catálogo y no en una llamada aparte por clic:
+   * el backend ya arma las líneas de cada combo y las zonas de cada pack para
+   * calcular el precio, así que exponerlas no cuesta ninguna consulta nueva.
+   */
+  desglose: FilaDeDesglose[];
 };
 
-function aItemDeCatalogo(item: ItemVendible): ItemDeCatalogo {
+/** Lo que `aItemDeCatalogo` no puede sacar del `ItemVendible`. */
+type ParaMostrar = { descripcion?: string | null; desglose?: FilaDeDesglose[] };
+
+/** Una descripción vacía o en blanco es lo mismo que no tenerla: que el front
+ *  no tenga que decidir si `""` se muestra. */
+const texto = (v: unknown) => {
+  const s = typeof v === "string" ? v.trim() : "";
+  return s === "" ? null : s;
+};
+
+function aItemDeCatalogo(item: ItemVendible, mostrar: ParaMostrar = {}): ItemDeCatalogo {
+  const comun = {
+    descripcion: mostrar.descripcion ?? null,
+    desglose: mostrar.desglose ?? [],
+  };
   return item.origen === "combo"
     ? {
         ...item,
+        ...comun,
         // Un pack de catálogo SÍ tiene sesiones; un combo común, no.
         packSesiones: item.packSesiones ?? null,
         // El descuento del pack ya está adentro de `conDescuento`, y volver a
@@ -76,6 +109,7 @@ function aItemDeCatalogo(item: ItemVendible): ItemDeCatalogo {
       }
     : {
         ...item,
+        ...comun,
         packSesiones: item.politica.sesiones,
         packDescuentoPct: item.politica.descuentoPct,
         precioDesde: item.unitario,
@@ -84,7 +118,11 @@ function aItemDeCatalogo(item: ItemVendible): ItemDeCatalogo {
 
 export async function listCatalogoVendible(db: Db) {
   const [genericos, depilacion, servicios, capacitaciones, config] = await Promise.all([
-    listCombos(db),
+    // `includeInactive` para poder RESOLVER, no para mostrar: un pack que
+    // repite un combo no tiene renglones propios, y si ese combo está
+    // archivado no estaría en la lista y el pack se mostraría sin desglose.
+    // Los inactivos se filtran igual antes de devolverlos (ver abajo).
+    listCombos(db, { includeInactive: true }),
     listarCombos(db),
     db
       .select({
@@ -116,20 +154,48 @@ export async function listCatalogoVendible(db: Db) {
     redondeo: config.packRedondeo,
   };
 
+  // De dónde saca sus renglones cada combo, ya resuelto: un pack que repite
+  // otro combo los tiene en el combo repetido, no en sí mismo.
+  const lineasPorCombo = new Map<string, ComboArmado["lines"]>();
+  for (const c of genericos) {
+    const a = c as ComboArmado;
+    lineasPorCombo.set(a.id as string, a.lines ?? []);
+  }
+
   return {
     combos: genericos
       .filter((c) => (c as ComboArmado).isActive !== false)
-      .map((c) => aItemDeCatalogo(comboVendible(c as ComboArmado))),
+      .map((c) => {
+        const a = c as ComboArmado;
+        const deDonde = comboDelQueSalenLosServicios(
+          a.kind ?? null,
+          (a.packOfComboId as string | null) ?? null,
+          a.id as string,
+        );
+        return aItemDeCatalogo(comboVendible(a), {
+          descripcion: texto(a.description),
+          desglose: desgloseDeCombo(
+            lineasPorCombo.get(deDonde) ?? [],
+            a.kind === "pack" ? ((a.packSessions as number | null) ?? null) : null,
+          ),
+        });
+      }),
     depilacion: depilacion
       .filter((c) => c.isActive)
       .map((c) =>
-        aItemDeCatalogo({
-          origen: "depilacion",
-          id: c.id,
-          nombre: c.name,
-          unitario: c.precioFinal,
-          politica: { sesiones: c.pack.sesiones, descuentoPct: c.pack.descuentoPct, redondeo: c.pack.redondeo },
-        }),
+        aItemDeCatalogo(
+          {
+            origen: "depilacion",
+            id: c.id,
+            nombre: c.name,
+            unitario: c.precioFinal,
+            politica: { sesiones: c.pack.sesiones, descuentoPct: c.pack.descuentoPct, redondeo: c.pack.redondeo },
+          },
+          {
+            descripcion: texto(c.description),
+            desglose: desgloseDeDepilacion(c.zonas, c.choiceZoneCount),
+          },
+        ),
       ),
     servicios: servicios.map((s) =>
       aItemDeCatalogo({

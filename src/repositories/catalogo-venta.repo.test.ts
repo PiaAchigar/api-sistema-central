@@ -1,13 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq, like, notLike } from "drizzle-orm";
+import { and, eq, isNull, like, notLike } from "drizzle-orm";
 import * as schema from "../db/schema";
-import { bodyZone, depilationCombo, promotions } from "../db/schema";
+import { bodyZone, categories, combos, depilationCombo, promotions, service } from "../db/schema";
 import type { Db } from "../db/client";
-import { obtenerPromoVendible, preciosDeListaDe } from "./catalogo-venta.repo";
+import { listCatalogoVendible, obtenerPromoVendible, preciosDeListaDe } from "./catalogo-venta.repo";
 import { cotizarPaquete } from "../lib/cotizacion-de-paquete";
 import { crearCombo, hardDeleteCombo } from "./depilacion.repo";
+import { createCombo, deleteComboPermanently } from "./combos.repo";
 import { createPromotion, deletePromotionPermanently } from "./promotions.repo";
 
 /**
@@ -33,6 +34,12 @@ let packFijoId: string;
 let packGuardadoId: string;
 let promoPackFijoId: string;
 let promoPackGuardadoId: string;
+let packConEleccionId: string;
+let comboPackId: string;
+let servicioId: string;
+let servicioNombre: string;
+let zonaNombre: string;
+let zonaBisNombre: string;
 
 async function limpiar() {
   const promos = await db.select({ id: promotions.id }).from(promotions).where(like(promotions.name, `${QA}%`));
@@ -43,6 +50,12 @@ async function limpiar() {
     .from(depilationCombo)
     .where(like(depilationCombo.name, `${QA}%`));
   for (const c of combosQa) await hardDeleteCombo(db, c.id);
+
+  const genericosQa = await db
+    .select({ id: combos.id })
+    .from(combos)
+    .where(like(combos.name, `${QA}%`));
+  for (const c of genericosQa) await deleteComboPermanently(db, c.id);
 }
 
 beforeAll(async () => {
@@ -93,6 +106,62 @@ beforeAll(async () => {
     [],
   );
   promoPackGuardadoId = promoPackGuardado!.id;
+
+  // Dos zonas reales distintas: el desglose tiene que listarlas a las DOS,
+  // más la "a elección", que se SUMA (no sale de adentro de las cargadas).
+  const zonasReales = await db
+    .select({ id: bodyZone.id, name: bodyZone.name })
+    .from(bodyZone)
+    .where(notLike(bodyZone.name, "ZZ_QA%"))
+    .orderBy(bodyZone.name)
+    .limit(2);
+  zonaNombre = zonasReales[0]!.name;
+  zonaBisNombre = zonasReales[1]!.name;
+
+  const conEleccion = await crearCombo(db, {
+    name: `${QA}_PACK_CON_ELECCION`,
+    kind: "pack_fijo",
+    fixedPrice: 80000,
+    choiceZoneCount: 1,
+    zonaIds: zonasReales.map((z) => z.id),
+  });
+  packConEleccionId = conEleccion!.id;
+
+  // Un servicio real CON precio: `createCombo` congela el precio de cada
+  // renglón, y uno sin precio dejaría el combo en $0 y sin nada que desglosar.
+  const [s1] = await db
+    .select({ id: service.id, name: service.name })
+    .from(service)
+    .where(and(eq(service.isActive, true), notLike(service.name, "ZZ_QA%")))
+    .orderBy(service.name)
+    .limit(1);
+  servicioId = s1!.id;
+  servicioNombre = s1!.name ?? "";
+
+  // `area_category_id` es NOT NULL en `combos`: hace falta un área real.
+  const [area] = await db
+    .select({ id: categories.id })
+    .from(categories)
+    .where(isNull(categories.parentCategoryId))
+    .orderBy(categories.name)
+    .limit(1);
+
+  // Un PACK de 3 con un renglón de 1: el caso exacto de "Pack 1 - Prueba" en
+  // producción, que es el que a Laura le salía con un cartel rojo.
+  const comboPack = await createCombo(
+    db,
+    {
+      name: `${QA}_COMBO_PACK`,
+      priceType: "percentage",
+      discountPercentage: 10,
+      validityMonths: 12,
+      areaCategoryId: area!.id,
+      kind: "pack",
+      packSessions: 3,
+    },
+    [{ serviceId: servicioId, sessionsIncluded: 1 }],
+  );
+  comboPackId = comboPack!.id;
 });
 
 afterAll(async () => {
@@ -130,5 +199,44 @@ describe("preciosDeListaDe — depilación pesa igual que la venta", () => {
     }
     expect(mensaje).toContain(`${QA}_PACK_GUARDADO`);
     expect(mensaje).not.toContain(packGuardadoId);
+  });
+});
+
+/**
+ * Que el desglose EXISTA no alcanza: tiene que llegar al front por el
+ * catálogo. La revisión de V3b enseñó esto por las malas — una función pura
+ * puede estar impecablemente testeada mientras nadie la llama, y la suite
+ * queda verde con la funcionalidad apagada.
+ */
+describe("listCatalogoVendible — el desglose llega al front", () => {
+  it("un pack de depilación viaja con sus zonas y su zona a elección", async () => {
+    const catalogo = await listCatalogoVendible(db);
+    const pack = catalogo.depilacion.find((i) => i.id === packConEleccionId);
+
+    expect(pack, "el pack de QA tiene que estar en el catálogo").toBeDefined();
+    expect(pack!.desglose.map((f) => f.nombre)).toEqual([
+      zonaNombre,
+      zonaBisNombre,
+      "Zona a elección",
+    ]);
+    // Tres renglones y tres zonas: la "a elección" se suma a las dos cargadas.
+    expect(pack!.desglose.reduce((t, f) => t + f.cantidad, 0)).toBe(3);
+  });
+
+  it("un pack de 3 dice '3 × servicio', que es lo que la clienta va a poder agendar", async () => {
+    const catalogo = await listCatalogoVendible(db);
+    const pack = catalogo.combos.find((i) => i.id === comboPackId);
+
+    expect(pack, "el combo pack de QA tiene que estar en el catálogo").toBeDefined();
+    expect(pack!.desglose).toEqual([{ nombre: servicioNombre, cantidad: 3 }]);
+    expect(pack!.packSesiones).toBe(3);
+  });
+
+  it("un servicio suelto no inventa desglose: es una cosa sola", async () => {
+    const catalogo = await listCatalogoVendible(db);
+    const suelto = catalogo.servicios.find((i) => i.id === servicioId);
+
+    expect(suelto, "el servicio real tiene que estar en el catálogo").toBeDefined();
+    expect(suelto!.desglose).toEqual([]);
   });
 });
