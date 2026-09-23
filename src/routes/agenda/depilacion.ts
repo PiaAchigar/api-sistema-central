@@ -45,6 +45,7 @@ import {
   type Categoria,
   type ZonaParaCotizar,
 } from "../../lib/depilation-pricing";
+import { datosParaAgendar } from "../../repositories/turno-de-depilacion.repo";
 import type { AppBindings, Variables } from "../../env";
 
 const depilacionRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
@@ -337,6 +338,32 @@ depilacionRouter.get("/packs-publicos", async (c) => {
   const db = createDb(c.env);
   return c.json(await listarPacksPublicos(db));
 });
+
+// ── Turno nuevo: menú de zonas y presupuesto ────────────────────────────────
+
+/**
+ * Lo que la pantalla de turno nuevo necesita para agendar una sesión de
+ * depilación: el pack, en qué sesión va, el menú de zonas para elegir y el
+ * presupuesto de minutos.
+ *
+ * Va ANTES de cualquier `/:id` de este router: Hono resuelve por orden de
+ * registro y, al revés, esta URL entraría por el comodín con
+ * id="para-agendar" y devolvería un 404. Mismo caso que `/consumible` en
+ * `appointments.ts`.
+ */
+depilacionRouter.get(
+  "/para-agendar/:purchaseServiceId",
+  auth,
+  requireAuth,
+  requirePermission("agenda", "view"),
+  zv("query", z.object({ sexo: z.enum(["mujer", "hombre"]).optional() })),
+  async (c) => {
+    const db = createDb(c.env);
+    const { sexo } = c.req.valid("query");
+    const datos = await datosParaAgendar(db, c.req.param("purchaseServiceId"), sexo);
+    return c.json(datos);
+  },
+);
 
 // ── Zonas ────────────────────────────────────────────────────────────────
 

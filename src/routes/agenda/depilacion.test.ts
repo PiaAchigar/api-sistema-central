@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { Hono } from "hono";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq, ilike, inArray, or } from "drizzle-orm";
+import { and, eq, ilike, inArray, like, or } from "drizzle-orm";
 import * as permissions from "../../lib/permissions";
 import {
   depilacionRouter,
@@ -24,6 +24,7 @@ import {
   conflictoEnSeleccion,
   precioFormulaDeCombo,
   assembleDepilationCombo,
+  crearCombo,
   getZonaDeleteImpact,
   getComboDeleteImpact,
   hardDeleteZona,
@@ -31,6 +32,8 @@ import {
   obtenerZona,
   obtenerCombo,
 } from "../../repositories/depilacion.repo";
+import { createCompra } from "../../repositories/compras.repo";
+import { createPromotion, deletePromotionPermanently } from "../../repositories/promotions.repo";
 import * as schema from "../../db/schema";
 import {
   bodyZone,
@@ -38,6 +41,9 @@ import {
   depilationCombo,
   depilationComboZone,
   depilationPricingConfig,
+  customerPurchase,
+  customerPurchaseService,
+  promotions,
 } from "../../db/schema";
 import type { Db } from "../../db/client";
 import type { AppBindings } from "../../env";
@@ -2144,5 +2150,253 @@ describe("packs públicos", () => {
     const conParam = paths.findIndex((p) => p.includes(":"));
     expect(fija).toBeGreaterThanOrEqual(0);
     if (conParam >= 0) expect(fija).toBeLessThan(conParam);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Task 11: GET /para-agendar/:purchaseServiceId — menú de zonas y presupuesto
+// ══════════════════════════════════════════════════════════════════════════
+
+describe("el orden de las rutas de /para-agendar", () => {
+  // No hay un GET `/:id` a secas en este router (los `:id` de zonas/combos
+  // son PATCH/DELETE, otro método, así que nunca compiten por el mismo
+  // request) — la prueba real de que el registro está bien es que la
+  // integración de abajo responde 200 y no 404. Esto documenta además que
+  // quedó registrada temprano, antes de /zonas y /combos, como pide el
+  // criterio de "fijas antes que cualquier ruta con parámetro".
+  it("se registra como GET, antes de /zonas y /combos", () => {
+    const gets = depilacionRouter.routes.filter((r) => r.method === "GET").map((r) => r.path);
+    const paraAgendar = gets.indexOf("/para-agendar/:purchaseServiceId");
+    const zonas = gets.indexOf("/zonas");
+    const combos = gets.indexOf("/combos");
+
+    expect(paraAgendar).toBeGreaterThanOrEqual(0);
+    expect(zonas).toBeGreaterThanOrEqual(0);
+    expect(combos).toBeGreaterThanOrEqual(0);
+    expect(paraAgendar).toBeLessThan(zonas);
+    expect(paraAgendar).toBeLessThan(combos);
+  });
+});
+
+/**
+ * Fixtures reales: un pack (`ZZ_QA_DEPILACION_TEST_PARA_AGENDAR_PACK`) con
+ * una zona real activa ("Espalda") y una zona QA archivada — la clienta la
+ * pagó, pero ya no está en el catálogo. Dos compras:
+ *
+ *   - `compraSueltaId`   — 2 sesiones sueltas del pack, sin promo. El caso
+ *     base: `sessions_total` de la cabecera coincide con las líneas reales.
+ *   - `compraPaqueteId`  — el pack vendido 3 VECES adentro de un paquete de
+ *     promo. La cabecera sale con `sessions_total: 1` (todo paquete se vende
+ *     "una vez", `compras.repo.ts`), pero trae 3 líneas de este pack — el
+ *     caso exacto que justifica `sesionesTotalesDelPack` en
+ *     `turno-de-depilacion.repo.ts`.
+ */
+describe("GET /para-agendar/:purchaseServiceId (integración real)", () => {
+  const PREFIJO = `${QA_PREFIX}PARA_AGENDAR`;
+
+  let clienteId = "";
+  let comboId = "";
+  let zonaArchivadaId = "";
+  let compraSueltaId = "";
+  let compraPaqueteId = "";
+  let promoId = "";
+  let purchaseServiceLibreId = "";
+
+  async function limpiar() {
+    // Las compras primero: una fila viva referencia el pack QA, y el DELETE
+    // de la promo/el combo más abajo revienta por FK si no se limpia antes
+    // (mismo criterio que consumo.repo.test.ts).
+    const compras = await testDb
+      .select({ id: customerPurchase.id })
+      .from(customerPurchase)
+      .where(like(customerPurchase.description, `${PREFIJO}%`));
+    for (const c of compras) {
+      await testDb
+        .delete(customerPurchaseService)
+        .where(eq(customerPurchaseService.customerPurchaseId, c.id));
+      await testDb.delete(customerPurchase).where(eq(customerPurchase.id, c.id));
+    }
+
+    const promos = await testDb
+      .select({ id: promotions.id })
+      .from(promotions)
+      .where(like(promotions.name, `${PREFIJO}%`));
+    for (const p of promos) await deletePromotionPermanently(testDb, p.id);
+
+    const combos = await testDb
+      .select({ id: depilationCombo.id })
+      .from(depilationCombo)
+      .where(like(depilationCombo.name, `${PREFIJO}%`));
+    for (const c of combos) await hardDeleteCombo(testDb, c.id);
+
+    await testDb.delete(bodyZone).where(like(bodyZone.name, `${PREFIJO}%`));
+  }
+
+  beforeAll(async () => {
+    await limpiar();
+
+    // Sin filtro ZZ_QA a propósito: ningún archivo de la suite crea
+    // clientes, así que no hay fixture QA ajeno que un `limit 1` sin ORDER
+    // BY pueda agarrar acá (mismo criterio que consumo.repo.test.ts).
+    const [cli] = await testDb.execute<{ id: string }>("select id from customers limit 1" as never);
+    clienteId = cli!.id;
+
+    const espaldaId = await idDeZonaReal("Espalda");
+    const zonaArchivada = await crearZonaQA("PARA_AGENDAR_ARCHIVADA", false);
+    zonaArchivadaId = zonaArchivada.id;
+
+    const combo = await crearCombo(testDb, {
+      name: `${PREFIJO}_PACK`,
+      kind: "pack_fijo",
+      fixedPrice: 50000,
+      choiceZoneCount: 0,
+      zonaIds: [espaldaId, zonaArchivadaId],
+    });
+    comboId = combo!.id;
+
+    const compraSuelta = await createCompra(testDb, {
+      customerId: clienteId,
+      depilationComboId: comboId,
+      description: `${PREFIJO}_SUELTA`,
+      sessionsTotal: 2,
+      baseAmount: 100000,
+      discountedAmount: 100000,
+      finalAmount: 100000,
+    });
+    compraSueltaId = compraSuelta.id;
+
+    const [linea1] = await testDb
+      .select({ id: customerPurchaseService.id })
+      .from(customerPurchaseService)
+      .where(
+        and(
+          eq(customerPurchaseService.customerPurchaseId, compraSueltaId),
+          eq(customerPurchaseService.repeticion, 1),
+        ),
+      );
+    purchaseServiceLibreId = linea1!.id;
+
+    // El pack vendido 3 veces adentro de un paquete de promo — la cabecera
+    // dirá `sessionsTotal: 1` igual, porque un paquete se vende una sola vez.
+    const promo = await createPromotion(
+      testDb,
+      { name: `${PREFIJO}_PROMO`, promotionType: "paquete", precioDelPaquete: 130000 },
+      [{ tipo: "depilacion", id: comboId, cantidad: 3 }],
+      [],
+    );
+    promoId = promo!.id;
+
+    const compraPaquete = await createCompra(testDb, {
+      customerId: clienteId,
+      esPaquete: true,
+      promotionId: promoId,
+      promotionName: `${PREFIJO}_PROMO`,
+      description: `${PREFIJO}_PAQUETE`,
+      sessionsTotal: 1,
+      baseAmount: 150000,
+      discountedAmount: 130000,
+      finalAmount: 130000,
+    });
+    compraPaqueteId = compraPaquete.id;
+  }, 30000);
+
+  afterAll(async () => {
+    await limpiar();
+  });
+
+  it("devuelve el menú y el presupuesto para una sesión libre", async () => {
+    const res = await testApp.request(
+      `/para-agendar/${purchaseServiceLibreId}`,
+      { headers: ADMIN_HEADERS },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      nombreDelPack: string;
+      sesion: number;
+      sesionesTotales: number;
+      presupuestoMinutos: number;
+      sexo: string;
+      zonas: unknown[];
+    };
+    expect(body.nombreDelPack).toBe(`${PREFIJO}_PACK`);
+    expect(body.presupuestoMinutos).toBeGreaterThan(0);
+    expect(body.zonas.length).toBeGreaterThan(0);
+    // Compra suelta, sin promo: acá `sessions_total` de la cabecera SÍ
+    // coincide con las líneas reales — el caso que no estaba roto.
+    expect(body.sesionesTotales).toBe(2);
+  });
+
+  it("con sexo=hombre devuelve más presupuesto por las mismas zonas", async () => {
+    const pedir = async (sexo: string) => {
+      const r = await testApp.request(
+        `/para-agendar/${purchaseServiceLibreId}?sexo=${sexo}`,
+        { headers: ADMIN_HEADERS },
+        ADMIN_ENV,
+      );
+      expect(r.status).toBe(200);
+      return (await r.json()) as { presupuestoMinutos: number };
+    };
+    const hombre = await pedir("hombre");
+    const mujer = await pedir("mujer");
+    expect(hombre.presupuestoMinutos).toBeGreaterThan(mujer.presupuestoMinutos);
+  });
+
+  it("la zona archivada del pack aparece en el menú, deshabilitada y con motivo", async () => {
+    const res = await testApp.request(
+      `/para-agendar/${purchaseServiceLibreId}`,
+      { headers: ADMIN_HEADERS },
+      ADMIN_ENV,
+    );
+    const body = (await res.json()) as {
+      zonas: { id: string; disponible: boolean; motivo: string | null }[];
+    };
+    const archivada = body.zonas.find((z) => z.id === zonaArchivadaId);
+    expect(archivada).toBeDefined();
+    expect(archivada!.disponible).toBe(false);
+    expect(archivada!.motivo).toMatch(/ya no está/i);
+  });
+
+  it("sexo inválido en el query -> 400, no 500", async () => {
+    const res = await testApp.request(
+      `/para-agendar/${purchaseServiceLibreId}?sexo=otro`,
+      { headers: ADMIN_HEADERS },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("un purchaseServiceId que no existe -> 404", async () => {
+    const inexistente = "00000000-0000-0000-0000-000000000000";
+    const res = await testApp.request(
+      `/para-agendar/${inexistente}`,
+      { headers: ADMIN_HEADERS },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  /**
+   * Review Focus (Task 11). `LineaDeDepilacion.sesionesTotales` sale de
+   * `customer_purchase.sessions_total`, que en un paquete de promo es SIEMPRE
+   * 1 — aunque el pack haya entrado 3 veces adentro del paquete. Sin
+   * `sesionesTotalesDelPack` contando las líneas reales, la pantalla diría
+   * "sesión 1 de 1" con 3 sesiones compradas.
+   */
+  it("en un paquete de promo, sesionesTotales cuenta las líneas reales del pack — no el sessions_total de la cabecera", async () => {
+    const lineasDelPaquete = await testDb
+      .select({ id: customerPurchaseService.id })
+      .from(customerPurchaseService)
+      .where(eq(customerPurchaseService.customerPurchaseId, compraPaqueteId));
+    expect(lineasDelPaquete).toHaveLength(3);
+
+    const res = await testApp.request(
+      `/para-agendar/${lineasDelPaquete[0]!.id}`,
+      { headers: ADMIN_HEADERS },
+      ADMIN_ENV,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sesionesTotales: number };
+    expect(body.sesionesTotales).toBe(3);
   });
 });
