@@ -435,22 +435,24 @@ describe("nombreDeZonaEnUso", () => {
 });
 
 describe("leerConfig", () => {
-  // 19 valores CENTINELA, todos distintos entre sí (101..119, uno por
+  // 25 valores CENTINELA, todos distintos entre sí (101..125, uno por
   // columna, en el mismo orden en que aparecen en el schema/brief). No son
   // realistas a propósito: si el mapeo cruzara dos columnas — el riesgo real
-  // que marca el spec, ej. confundir `minutosPrecio` (unisex) con
-  // `minutosTurno.hombre` — con valores realistas como 10/10 o 5/5 el
-  // `toEqual` de abajo podría pasar igual por coincidencia. Con valores
-  // únicos, cualquier cruce mueve un número a la casilla equivocada y el
-  // test lo detecta.
+  // que marca el spec, ej. confundir `pricingMinutesFemale*` con
+  // `slotMinutesMale*`, o `female`→`hombre` en vez de `female`→`mujer` — con
+  // valores realistas el `toEqual` de abajo podría pasar igual por
+  // coincidencia. Con valores únicos, cualquier cruce mueve un número a la
+  // casilla equivocada y el test lo detecta.
   const filaCompleta = {
-    priceGrande: 101, priceMediana: 102, priceChica: 103,
-    pricingMinutesGrande: 104, pricingMinutesMediana: 105, pricingMinutesChica: 106,
-    tier1RatePerMinute: 107, tier2RatePerMinute: 108,
-    slotMinutesFemaleGrande: 109, slotMinutesFemaleMediana: 110, slotMinutesFemaleChica: 111,
-    slotMinutesMaleGrande: 112, slotMinutesMaleMediana: 113, slotMinutesMaleChica: 114,
-    slotRoundingStep: 115, slotMinimumMinutes: 116,
-    packSessions: 117, packDiscountPercentage: 118, packRoundingBase: 119,
+    priceFemaleGrande: 101, priceFemaleMediana: 102, priceFemaleChica: 103,
+    priceMaleGrande: 104, priceMaleMediana: 105, priceMaleChica: 106,
+    pricingMinutesFemaleGrande: 107, pricingMinutesFemaleMediana: 108, pricingMinutesFemaleChica: 109,
+    pricingMinutesMaleGrande: 110, pricingMinutesMaleMediana: 111, pricingMinutesMaleChica: 112,
+    tier1RatePerMinute: 113, tier2RatePerMinute: 114,
+    slotMinutesFemaleGrande: 115, slotMinutesFemaleMediana: 116, slotMinutesFemaleChica: 117,
+    slotMinutesMaleGrande: 118, slotMinutesMaleMediana: 119, slotMinutesMaleChica: 120,
+    slotRoundingStep: 121, slotMinimumMinutes: 122,
+    packSessions: 123, packDiscountPercentage: 124, packRoundingBase: 125,
   };
 
   function dbConFila(fila: typeof filaCompleta | undefined) {
@@ -463,26 +465,32 @@ describe("leerConfig", () => {
     };
   }
 
-  it("mapea las 19 columnas planas al objeto anidado DepilationConfig", async () => {
+  it("mapea las 25 columnas planas al objeto anidado DepilationConfig, female→mujer y male→hombre", async () => {
     const config = await leerConfig(dbConFila(filaCompleta) as never);
     const esperado: DepilationConfig = {
-      precioLista: { grande: 101, mediana: 102, chica: 103 },
-      minutosPrecio: { grande: 104, mediana: 105, chica: 106 },
-      tarifaEscalon1: 107,
-      tarifaEscalon2: 108,
-      minutosTurno: {
-        mujer: { grande: 109, mediana: 110, chica: 111 },
-        hombre: { grande: 112, mediana: 113, chica: 114 },
+      precioLista: {
+        mujer: { grande: 101, mediana: 102, chica: 103 },
+        hombre: { grande: 104, mediana: 105, chica: 106 },
       },
-      redondeoTurno: 115,
-      turnoMinimo: 116,
-      packSesiones: 117,
-      packDescuentoPct: 118,
-      packRedondeo: 119,
+      minutosPrecio: {
+        mujer: { grande: 107, mediana: 108, chica: 109 },
+        hombre: { grande: 110, mediana: 111, chica: 112 },
+      },
+      tarifaEscalon1: 113,
+      tarifaEscalon2: 114,
+      minutosTurno: {
+        mujer: { grande: 115, mediana: 116, chica: 117 },
+        hombre: { grande: 118, mediana: 119, chica: 120 },
+      },
+      redondeoTurno: 121,
+      turnoMinimo: 122,
+      packSesiones: 123,
+      packDescuentoPct: 124,
+      packRedondeo: 125,
     };
     expect(config).toEqual(esperado);
 
-    // Chequeo extra, explícito: los 19 valores del objeto plano de entrada
+    // Chequeo extra, explícito: los 25 valores del objeto plano de entrada
     // son todos distintos entre sí. Si alguna vez alguien "simplifica" el
     // fixture y sin querer repite un valor entre familias de columnas, este
     // assert avisa ANTES de que el toEqual de arriba deje de ser confiable.
@@ -562,8 +570,10 @@ describe("exclusionesBody", () => {
 
 describe("configBody", () => {
   const valido = {
-    priceGrande: 19000, priceMediana: 17000, priceChica: 12000,
-    pricingMinutesGrande: 10, pricingMinutesMediana: 7, pricingMinutesChica: 5,
+    priceFemaleGrande: 19000, priceFemaleMediana: 17000, priceFemaleChica: 12000,
+    priceMaleGrande: 19000, priceMaleMediana: 17000, priceMaleChica: 12000,
+    pricingMinutesFemaleGrande: 10, pricingMinutesFemaleMediana: 7, pricingMinutesFemaleChica: 5,
+    pricingMinutesMaleGrande: 10, pricingMinutesMaleMediana: 7, pricingMinutesMaleChica: 5,
     tier1RatePerMinute: 1200, tier2RatePerMinute: 1000,
     slotMinutesFemaleGrande: 9, slotMinutesFemaleMediana: 6, slotMinutesFemaleChica: 3,
     slotMinutesMaleGrande: 10, slotMinutesMaleMediana: 8, slotMinutesMaleChica: 5,
@@ -598,12 +608,12 @@ describe("configBody", () => {
   });
 
   it("rechaza un entero no positivo en cualquier otro campo de precio/minutos", () => {
-    const r = configBody.safeParse({ ...valido, priceGrande: 0 });
+    const r = configBody.safeParse({ ...valido, priceFemaleGrande: 0 });
     expect(r.success).toBe(false);
   });
 
   it("rechaza un valor no entero, con mensaje en castellano", () => {
-    const r = configBody.safeParse({ ...valido, priceGrande: 19000.5 });
+    const r = configBody.safeParse({ ...valido, priceFemaleGrande: 19000.5 });
     expect(r.success).toBe(false);
     if (!r.success) {
       expect(r.error.issues[0]?.message).toMatch(/entero/i);
@@ -614,12 +624,13 @@ describe("configBody", () => {
   // ── Ronda de fixes 2, punto 1 (Important): no-inversión sobre la config REAL ──
   // Antes, la garantía "agregar una zona nunca baja el precio" solo se probaba
   // contra la config CONGELADA de depilation-pricing.test.ts — nunca contra lo
-  // que este schema deja guardar. El caso del revisor: priceGrande: 1000 pasa
-  // "entero y positivo" pero rompe el negocio (2 chicas + 1 grande baja de
-  // $18.000 a $12.000).
+  // que este schema deja guardar. El caso del revisor: priceFemaleGrande: 1000
+  // pasa "entero y positivo" pero rompe el negocio (2 chicas + 1 grande baja de
+  // $18.000 a $12.000). 1.56.0: esta capa corre sobre la curva de MUJER — ver
+  // el comentario en el superRefine de `configBody` sobre por qué.
   describe("no-inversión", () => {
-    it("rechaza priceGrande: 1000 — el caso concreto del revisor", () => {
-      const r = configBody.safeParse({ ...valido, priceGrande: 1000 });
+    it("rechaza priceFemaleGrande: 1000 — el caso concreto del revisor", () => {
+      const r = configBody.safeParse({ ...valido, priceFemaleGrande: 1000 });
       expect(r.success).toBe(false);
       if (!r.success) {
         // Mensaje en términos de negocio (zonas y precios), no en jerga
@@ -629,25 +640,25 @@ describe("configBody", () => {
       }
     });
 
-    it("rechaza priceMediana mayor que priceGrande, con mensaje sobre el orden", () => {
-      const r = configBody.safeParse({ ...valido, priceGrande: 15000, priceMediana: 17000 });
+    it("rechaza priceFemaleMediana mayor que priceFemaleGrande, con mensaje sobre el orden", () => {
+      const r = configBody.safeParse({ ...valido, priceFemaleGrande: 15000, priceFemaleMediana: 17000 });
       expect(r.success).toBe(false);
       if (!r.success) {
         expect(r.error.issues[0]?.message).toMatch(/zona grande.*mayor o igual.*zona mediana/i);
       }
     });
 
-    it("rechaza priceChica mayor que priceMediana, con mensaje sobre el orden", () => {
-      const r = configBody.safeParse({ ...valido, priceMediana: 10000, priceChica: 12000 });
+    it("rechaza priceFemaleChica mayor que priceFemaleMediana, con mensaje sobre el orden", () => {
+      const r = configBody.safeParse({ ...valido, priceFemaleMediana: 10000, priceFemaleChica: 12000 });
       expect(r.success).toBe(false);
     });
 
-    it("acepta priceGrande === priceMediana === priceChica (el orden permite empate)", () => {
+    it("acepta priceFemaleGrande === priceFemaleMediana === priceFemaleChica (el orden permite empate)", () => {
       const r = configBody.safeParse({
         ...valido,
-        priceGrande: 15000,
-        priceMediana: 15000,
-        priceChica: 15000,
+        priceFemaleGrande: 15000,
+        priceFemaleMediana: 15000,
+        priceFemaleChica: 15000,
       });
       expect(r.success).toBe(true);
     });
@@ -657,17 +668,17 @@ describe("configBody", () => {
     // `precioLista`, así que la capa 1 (el chequeo de orden) no lo agarra —
     // demuestra que la capa 2 (la verificación exhaustiva con el motor real)
     // hace trabajo de verdad y no es redundante con la capa 1.
-    it("rechaza una config con precioLista bien ordenado pero pricingMinutes invertido (capa 2)", () => {
+    it("rechaza una config con precioLista (mujer) bien ordenado pero pricingMinutes (mujer) invertido (capa 2)", () => {
       const conMinutosInvertidos = {
         ...valido,
-        priceGrande: 17000, priceMediana: 17000, priceChica: 12000,
-        pricingMinutesGrande: 10, pricingMinutesMediana: 1, pricingMinutesChica: 20,
+        priceFemaleGrande: 17000, priceFemaleMediana: 17000, priceFemaleChica: 12000,
+        pricingMinutesFemaleGrande: 10, pricingMinutesFemaleMediana: 1, pricingMinutesFemaleChica: 20,
         tier1RatePerMinute: 1000, tier2RatePerMinute: 1,
       };
       // El orden de precioLista por sí solo pasaría la capa 1.
       expect(
-        conMinutosInvertidos.priceGrande >= conMinutosInvertidos.priceMediana &&
-          conMinutosInvertidos.priceMediana >= conMinutosInvertidos.priceChica,
+        conMinutosInvertidos.priceFemaleGrande >= conMinutosInvertidos.priceFemaleMediana &&
+          conMinutosInvertidos.priceFemaleMediana >= conMinutosInvertidos.priceFemaleChica,
       ).toBe(true);
 
       const r = configBody.safeParse(conMinutosInvertidos);
@@ -690,13 +701,13 @@ describe("GET /config sin token", () => {
 
 // ── Ronda de fixes 2, punto 1 (Important) — integración real ─────────────────
 // Confirma que el rechazo llega hasta la punta: `PUT /config` con
-// `priceGrande: 1000` (lo que la pantalla dejaba tipear) tiene que dar 400,
-// no 200. A propósito NUNCA se manda una config VÁLIDA distinta de la
+// `priceFemaleGrande: 1000` (lo que la pantalla dejaba tipear) tiene que dar
+// 400, no 200. A propósito NUNCA se manda una config VÁLIDA distinta de la
 // sembrada por acá: `depilation_pricing_config` es singleton y de este mismo
 // archivo dependen otros tests (cotización, packs fijos) que asumen los
 // valores reales de la migración 1.35.0 — un PUT exitoso los rompería.
 describe("PUT /config — no-inversión (integración real, sin tocar la config real)", () => {
-  it("priceGrande: 1000 -> 400, la config real queda intacta", async () => {
+  it("priceFemaleGrande: 1000 -> 400, la config real queda intacta", async () => {
     // Fila completa (no solo el `DepilationConfig` anidado) para poder
     // restaurarla en el `finally` con un UPDATE directo, columna por
     // columna — así, si el fix de esta ronda tuviera una regresión y el PUT
@@ -715,8 +726,10 @@ describe("PUT /config — no-inversión (integración real, sin tocar la config 
           method: "PUT",
           headers: ADMIN_HEADERS,
           body: JSON.stringify({
-            priceGrande: 1000, priceMediana: 17000, priceChica: 12000,
-            pricingMinutesGrande: 10, pricingMinutesMediana: 7, pricingMinutesChica: 5,
+            priceFemaleGrande: 1000, priceFemaleMediana: 17000, priceFemaleChica: 12000,
+            priceMaleGrande: 19000, priceMaleMediana: 17000, priceMaleChica: 12000,
+            pricingMinutesFemaleGrande: 10, pricingMinutesFemaleMediana: 7, pricingMinutesFemaleChica: 5,
+            pricingMinutesMaleGrande: 10, pricingMinutesMaleMediana: 7, pricingMinutesMaleChica: 5,
             tier1RatePerMinute: 1200, tier2RatePerMinute: 1000,
             slotMinutesFemaleGrande: 9, slotMinutesFemaleMediana: 6, slotMinutesFemaleChica: 3,
             slotMinutesMaleGrande: 10, slotMinutesMaleMediana: 8, slotMinutesMaleChica: 5,
@@ -928,12 +941,20 @@ describe("conflictoEnSeleccion", () => {
 });
 
 describe("precioFormulaDeCombo", () => {
-  // Config real del seed 1.35.0: price_grande=19000, pricing_minutes_chica=5,
-  // tier1=1200, tier2=1000. Con esta config, agregar 1 zona fantasma "chica"
-  // siempre cae en escalón 2 (5×1000=$5.000) si ya hay 2+ zonas cargadas.
+  // Config real del seed 1.35.0, envuelta por sexo (Task 2/1.56.0) con los
+  // MISMOS números en las dos ramas: price_grande=19000,
+  // pricing_minutes_chica=5, tier1=1200, tier2=1000. Con esta config, agregar
+  // 1 zona fantasma "chica" siempre cae en escalón 2 (5×1000=$5.000) si ya
+  // hay 2+ zonas cargadas.
   const config: DepilationConfig = {
-    precioLista: { grande: 19000, mediana: 17000, chica: 12000 },
-    minutosPrecio: { grande: 10, mediana: 7, chica: 5 },
+    precioLista: {
+      mujer: { grande: 19000, mediana: 17000, chica: 12000 },
+      hombre: { grande: 19000, mediana: 17000, chica: 12000 },
+    },
+    minutosPrecio: {
+      mujer: { grande: 10, mediana: 7, chica: 5 },
+      hombre: { grande: 10, mediana: 7, chica: 5 },
+    },
     tarifaEscalon1: 1200,
     tarifaEscalon2: 1000,
     minutosTurno: { mujer: { grande: 9, mediana: 6, chica: 3 }, hombre: { grande: 10, mediana: 8, chica: 5 } },
@@ -955,7 +976,7 @@ describe("precioFormulaDeCombo", () => {
       ...Array.from({ length: 5 }, (_, i) => zona(`g${i}`, "grande" as const)),
       ...Array.from({ length: 5 }, (_, i) => zona(`c${i}`, "chica" as const)),
     ];
-    expect(precioFormulaDeCombo(zonas, 0, config)).toBe(86000);
+    expect(precioFormulaDeCombo(zonas, 0, "mujer", config)).toBe(86000);
   });
 
   it("con 1 zona a elección, suma una zona chica extra (Cuerpo Completo: $61.000)", () => {
@@ -963,7 +984,7 @@ describe("precioFormulaDeCombo", () => {
       ...Array.from({ length: 3 }, (_, i) => zona(`g${i}`, "grande" as const)),
       ...Array.from({ length: 3 }, (_, i) => zona(`c${i}`, "chica" as const)),
     ];
-    expect(precioFormulaDeCombo(zonas, 1, config)).toBe(61000);
+    expect(precioFormulaDeCombo(zonas, 1, "mujer", config)).toBe(61000);
   });
 
   it("con 1 zona a elección, suma una zona chica extra (Esenciales: $51.000)", () => {
@@ -971,7 +992,7 @@ describe("precioFormulaDeCombo", () => {
       ...Array.from({ length: 2 }, (_, i) => zona(`g${i}`, "grande" as const)),
       ...Array.from({ length: 3 }, (_, i) => zona(`c${i}`, "chica" as const)),
     ];
-    expect(precioFormulaDeCombo(zonas, 1, config)).toBe(51000);
+    expect(precioFormulaDeCombo(zonas, 1, "mujer", config)).toBe(51000);
   });
 });
 
@@ -990,8 +1011,14 @@ describe("precioFormulaDeCombo", () => {
 // ejercitar esa línea de defensa en profundidad.
 describe("assembleDepilationCombo — invariante central: un guardado nunca muestra un precio pegado", () => {
   const config: DepilationConfig = {
-    precioLista: { grande: 19000, mediana: 17000, chica: 12000 },
-    minutosPrecio: { grande: 10, mediana: 7, chica: 5 },
+    precioLista: {
+      mujer: { grande: 19000, mediana: 17000, chica: 12000 },
+      hombre: { grande: 19000, mediana: 17000, chica: 12000 },
+    },
+    minutosPrecio: {
+      mujer: { grande: 10, mediana: 7, chica: 5 },
+      hombre: { grande: 10, mediana: 7, chica: 5 },
+    },
     tarifaEscalon1: 1200,
     tarifaEscalon2: 1000,
     minutosTurno: { mujer: { grande: 9, mediana: 6, chica: 3 }, hombre: { grande: 10, mediana: 8, chica: 5 } },

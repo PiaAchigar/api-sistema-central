@@ -102,12 +102,18 @@ const enteroPositivo = (etiqueta: string) =>
     .positive(`${etiqueta} tiene que ser mayor a cero`);
 
 export const configBody = z.object({
-  priceGrande: enteroPositivo("El precio de zona grande"),
-  priceMediana: enteroPositivo("El precio de zona mediana"),
-  priceChica: enteroPositivo("El precio de zona chica"),
-  pricingMinutesGrande: enteroPositivo("Los minutos de precio de zona grande"),
-  pricingMinutesMediana: enteroPositivo("Los minutos de precio de zona mediana"),
-  pricingMinutesChica: enteroPositivo("Los minutos de precio de zona chica"),
+  priceFemaleGrande: enteroPositivo("El precio de zona grande (mujer)"),
+  priceFemaleMediana: enteroPositivo("El precio de zona mediana (mujer)"),
+  priceFemaleChica: enteroPositivo("El precio de zona chica (mujer)"),
+  priceMaleGrande: enteroPositivo("El precio de zona grande (hombre)"),
+  priceMaleMediana: enteroPositivo("El precio de zona mediana (hombre)"),
+  priceMaleChica: enteroPositivo("El precio de zona chica (hombre)"),
+  pricingMinutesFemaleGrande: enteroPositivo("Los minutos de precio de zona grande (mujer)"),
+  pricingMinutesFemaleMediana: enteroPositivo("Los minutos de precio de zona mediana (mujer)"),
+  pricingMinutesFemaleChica: enteroPositivo("Los minutos de precio de zona chica (mujer)"),
+  pricingMinutesMaleGrande: enteroPositivo("Los minutos de precio de zona grande (hombre)"),
+  pricingMinutesMaleMediana: enteroPositivo("Los minutos de precio de zona mediana (hombre)"),
+  pricingMinutesMaleChica: enteroPositivo("Los minutos de precio de zona chica (hombre)"),
   tier1RatePerMinute: enteroPositivo("La tarifa del primer escalón"),
   tier2RatePerMinute: enteroPositivo("La tarifa del segundo escalón"),
   slotMinutesFemaleGrande: enteroPositivo("Los minutos de turno (mujer, grande)"),
@@ -131,8 +137,8 @@ export const configBody = z.object({
     // bajar el precio" es la promesa central del negocio (PDF §1), y el test
     // que la protege en depilation-pricing.test.ts corre contra una config
     // CONGELADA en el archivo — no contra la que la dueña del negocio guarda
-    // acá. Sin esto, un dígito de menos (ej. priceGrande: 1000 en vez de
-    // 19000) se guardaba sin aviso y rompía la garantía en silencio.
+    // acá. Sin esto, un dígito de menos (ej. priceFemaleGrande: 1000 en vez
+    // de 19000) se guardaba sin aviso y rompía la garantía en silencio.
     //
     // Capa 1, rápida: el orden grande >= mediana >= chica es una condición
     // necesaria (si una categoría "grande" vale menos que una "chica", cobrar
@@ -140,15 +146,21 @@ export const configBody = z.object({
     // campo mirar. No es suficiente por sí sola —la Capa 2 abajo cubre el
     // resto del espacio (tarifas de escalón demasiado altas, etc.)— así que
     // si el orden está bien igual se corre la Capa 2.
-    if (v.priceGrande < v.priceMediana || v.priceMediana < v.priceChica) {
+    //
+    // 1.56.0: las dos capas corren sobre la curva de MUJER nada más —
+    // `primeraViolacionNoInversion` (depilation-pricing.ts) no recibe sexo,
+    // ver el comentario ahí sobre por qué. Es un hueco conocido, no resuelto
+    // en esta tarea: una config con `priceMaleChica` mayor que
+    // `priceMaleGrande` pasa este validador sin avisar.
+    if (v.priceFemaleGrande < v.priceFemaleMediana || v.priceFemaleMediana < v.priceFemaleChica) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["priceGrande"],
+        path: ["priceFemaleGrande"],
         message:
-          "El precio de zona grande tiene que ser mayor o igual al de zona mediana, y el de zona " +
-          "mediana mayor o igual al de zona chica. Si no, agregar una zona más grande a una " +
-          "selección puede terminar costando MENOS que las zonas más chicas que ya estaban — y eso " +
-          "nunca puede pasar.",
+          "El precio de zona grande (mujer) tiene que ser mayor o igual al de zona mediana (mujer), " +
+          "y el de zona mediana (mujer) mayor o igual al de zona chica (mujer). Si no, agregar una " +
+          "zona más grande a una selección puede terminar costando MENOS que las zonas más chicas " +
+          "que ya estaban — y eso nunca puede pasar.",
       });
       return;
     }
@@ -544,9 +556,7 @@ depilacionRouter.post(
     }
 
     const config = await leerConfig(db);
-    // Fijo en "mujer" hasta que la Task 4 le pase el sexo real: es lo que el
-    // sistema hacía antes de la 1.56.0, así que el comportamiento no cambia.
-    const { total: totalFormula, lineas } = calcularPrecioCombo(zonas, "mujer", config);
+    const { total: totalFormula, lineas } = calcularPrecioCombo(zonas, sexo, config);
     const packs = await listarPacksFijos(db);
     const packFijo = buscarPackFijo(zonaIds, packs);
 

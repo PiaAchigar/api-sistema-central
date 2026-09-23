@@ -20,6 +20,7 @@ import {
   type Sexo,
   type ZonaParaCotizar,
 } from "../lib/depilation-pricing";
+import { precioDePackFijo } from "../lib/precio-de-pack-fijo";
 
 // ── Zonas ────────────────────────────────────────────────────────────────
 
@@ -262,12 +263,18 @@ export async function guardarExclusiones(db: Db, zonaId: string, otras: string[]
 // ── Config ───────────────────────────────────────────────────────────────
 
 export type ConfigInput = {
-  priceGrande: number;
-  priceMediana: number;
-  priceChica: number;
-  pricingMinutesGrande: number;
-  pricingMinutesMediana: number;
-  pricingMinutesChica: number;
+  priceFemaleGrande: number;
+  priceFemaleMediana: number;
+  priceFemaleChica: number;
+  priceMaleGrande: number;
+  priceMaleMediana: number;
+  priceMaleChica: number;
+  pricingMinutesFemaleGrande: number;
+  pricingMinutesFemaleMediana: number;
+  pricingMinutesFemaleChica: number;
+  pricingMinutesMaleGrande: number;
+  pricingMinutesMaleMediana: number;
+  pricingMinutesMaleChica: number;
   tier1RatePerMinute: number;
   tier2RatePerMinute: number;
   slotMinutesFemaleGrande: number;
@@ -284,9 +291,13 @@ export type ConfigInput = {
 };
 
 /**
- * Mapea las 19 columnas planas (mismo shape en la fila de la base y en el
+ * Mapea las 25 columnas planas (mismo shape en la fila de la base y en el
  * body de `PUT /config`, ver `ConfigInput` arriba) al `DepilationConfig`
  * anidado que espera `depilation-pricing.ts` (Task 2).
+ *
+ * `female` → `mujer`, `male` → `hombre` (1.56.0): las columnas de la base
+ * hablan en inglés, el tipo de negocio habla en castellano. Este es el único
+ * lugar del sistema donde se cruza ese puente.
  *
  * Un solo mapeo para los dos casos: `leerConfig` lo usa sobre la fila ya
  * guardada, y la validación de no-inversión de `configBody` (ronda de fixes
@@ -297,11 +308,29 @@ export type ConfigInput = {
  */
 export function aConfigAnidada(input: ConfigInput): DepilationConfig {
   return {
-    precioLista: { grande: input.priceGrande, mediana: input.priceMediana, chica: input.priceChica },
+    precioLista: {
+      mujer: {
+        grande: input.priceFemaleGrande,
+        mediana: input.priceFemaleMediana,
+        chica: input.priceFemaleChica,
+      },
+      hombre: {
+        grande: input.priceMaleGrande,
+        mediana: input.priceMaleMediana,
+        chica: input.priceMaleChica,
+      },
+    },
     minutosPrecio: {
-      grande: input.pricingMinutesGrande,
-      mediana: input.pricingMinutesMediana,
-      chica: input.pricingMinutesChica,
+      mujer: {
+        grande: input.pricingMinutesFemaleGrande,
+        mediana: input.pricingMinutesFemaleMediana,
+        chica: input.pricingMinutesFemaleChica,
+      },
+      hombre: {
+        grande: input.pricingMinutesMaleGrande,
+        mediana: input.pricingMinutesMaleMediana,
+        chica: input.pricingMinutesMaleChica,
+      },
     },
     tarifaEscalon1: input.tier1RatePerMinute,
     tarifaEscalon2: input.tier2RatePerMinute,
@@ -486,21 +515,19 @@ export async function listarPacksPublicos(db: Db): Promise<PackPublico[]> {
 const CATEGORIA_ELECCION: Categoria = "chica";
 
 /**
- * Sexo usado para mostrar `duracionMinutos` en el catálogo de combos (GET
- * /combos), donde no hay una clienta concreta todavía. Es solo para
- * referencia en la pantalla de administración — la duración que de verdad se
- * bloquea en la agenda siempre sale de `/cotizar` con el sexo real.
- */
-const SEXO_DURACION_CATALOGO: Sexo = "mujer";
-
-/**
  * Precio de referencia de un combo para el catálogo (PDF §6 / diseño §4.7):
  * la fórmula sobre sus zonas fijas más `zonasAEleccion` zonas fantasma de la
  * categoría más barata. Función pura, testeable sin base.
+ *
+ * Recibe `sexo` de quien la llama (1.56.0, Task 4) — antes lo tenía fijo en
+ * "mujer" como puente hasta que esta tarea conectara el sexo real; ya no hay
+ * puente, `assembleDepilationCombo` le pasa el sexo con el que se está
+ * armando el combo.
  */
 export function precioFormulaDeCombo(
   zonasFijas: ZonaParaCotizar[],
   zonasAEleccion: number,
+  sexo: Sexo,
   config: DepilationConfig,
 ): number {
   const fantasmas: ZonaParaCotizar[] = Array.from({ length: zonasAEleccion }, (_, i) => ({
@@ -508,9 +535,7 @@ export function precioFormulaDeCombo(
     nombre: "Zona a elección",
     categoria: CATEGORIA_ELECCION,
   }));
-  // Fijo en "mujer" hasta que la Task 4 le pase el sexo real: es lo que el
-  // sistema hacía antes de la 1.56.0, así que el comportamiento no cambia.
-  return calcularPrecioCombo([...zonasFijas, ...fantasmas], "mujer", config).total;
+  return calcularPrecioCombo([...zonasFijas, ...fantasmas], sexo, config).total;
 }
 
 export type DepilationComboRow = {
@@ -565,6 +590,9 @@ export type DepilationComboAssembled = {
    *  para un `guardado`: esa es toda la razón de ser del diseño. */
   precioFinal: number;
   duracionMinutos: number;
+  /** El sexo con el que se armó este combo (1.56.0): determina qué tarifa de
+   *  `precioLista`/`minutosPrecio` y qué `minutosTurno` se usaron. */
+  sexo: Sexo;
   /** El pack ya resuelto y calculado. Se manda armado desde acá para que ni el
    *  dashboard ni la web tengan que rehacer la cuenta por su cuenta. */
   pack: PackDeCombo;
@@ -574,21 +602,51 @@ export type DepilationComboAssembled = {
  * Arma la vista completa de un combo: precioCalculado (fórmula, siempre),
  * precioFinal (el fijo solo si es pack_fijo) y duracionMinutos. Función pura:
  * recibe las zonas reales ya resueltas y la config, no toca la base.
+ *
+ * `sexo` (1.56.0, Task 4) default `"mujer"`: mantiene a todos los llamadores
+ * viejos (catálogo, `/combos` sin clienta concreta) compilando y
+ * comportándose exactamente igual que antes de esta migración.
  */
 export function assembleDepilationCombo(
   combo: DepilationComboRow,
   zonasReales: ZonaParaCotizar[],
   config: DepilationConfig,
+  sexo: Sexo = "mujer",
 ): DepilationComboAssembled {
   const fixedPrice = combo.fixedPrice == null ? null : Number(combo.fixedPrice);
-  const precioCalculado = precioFormulaDeCombo(zonasReales, combo.choiceZoneCount, config);
+
+  // Las zonas a elección son un REGALO: no suman precio (el pack_fijo tiene
+  // `fixed_price` obligatorio por `ck_dc_precio_pack`, y ese precio gana),
+  // pero SÍ ocupan agenda. Antes la duración las ignoraba y "Combo de
+  // Esenciales" reservaba 25 minutos para una sesión de 6 zonas: esos
+  // minutos se los comía el turno siguiente (§10-A).
+  const conRegalo = [
+    ...zonasReales,
+    ...Array.from({ length: combo.choiceZoneCount }, (_, i) => ({
+      id: `eleccion-${i}`,
+      nombre: "Zona a elección",
+      categoria: CATEGORIA_ELECCION,
+    })),
+  ];
+
+  const precioCalculado = precioFormulaDeCombo(zonasReales, combo.choiceZoneCount, sexo, config);
   // Nunca leer `fixedPrice` para un `guardado`: el CHECK de la base ya lo
   // garantiza NULL, pero este `combo.kind === "pack_fijo"` es la barrera en
   // código — aunque `fixedPrice` viniera cargado por error, un `guardado`
   // jamás lo usaría como precio.
-  const precioFinal = combo.kind === "pack_fijo" ? (fixedPrice ?? precioCalculado) : precioCalculado;
+  const precioFinal =
+    combo.kind === "pack_fijo" && fixedPrice != null
+      ? precioDePackFijo(
+          fixedPrice,
+          zonasReales,
+          combo.choiceZoneCount,
+          combo.fixedDurationMinutes,
+          sexo,
+          config,
+        )
+      : precioCalculado;
   const duracionMinutos =
-    combo.fixedDurationMinutes ?? calcularDuracionTurno(zonasReales, SEXO_DURACION_CATALOGO, config);
+    combo.fixedDurationMinutes ?? calcularDuracionTurno(conRegalo, sexo, config);
 
   // Las tres columnas van juntas (`ck_dc_pack_completo`), pero acá se exige
   // que estén las tres igual: si por lo que fuera llegara media política, es
@@ -626,6 +684,7 @@ export function assembleDepilationCombo(
     precioCalculado,
     precioFinal,
     duracionMinutos,
+    sexo,
     pack: {
       ...politica,
       propio: propia !== null,
@@ -660,7 +719,10 @@ async function zonasDelCombo(db: Db, comboId: string): Promise<ZonaParaCotizar[]
   return rows.map((r) => ({ id: r.id, nombre: r.name, categoria: r.category as Categoria }));
 }
 
-export async function listarCombos(db: Db): Promise<DepilationComboAssembled[]> {
+export async function listarCombos(
+  db: Db,
+  sexo: Sexo = "mujer",
+): Promise<DepilationComboAssembled[]> {
   const [combos, config] = await Promise.all([
     db
       .select(comboFields)
@@ -669,15 +731,21 @@ export async function listarCombos(db: Db): Promise<DepilationComboAssembled[]> 
     leerConfig(db),
   ]);
   const out: DepilationComboAssembled[] = [];
-  for (const c of combos) out.push(assembleDepilationCombo(c, await zonasDelCombo(db, c.id), config));
+  for (const c of combos) {
+    out.push(assembleDepilationCombo(c, await zonasDelCombo(db, c.id), config, sexo));
+  }
   return out;
 }
 
-export async function obtenerCombo(db: Db, id: string): Promise<DepilationComboAssembled | null> {
+export async function obtenerCombo(
+  db: Db,
+  id: string,
+  sexo: Sexo = "mujer",
+): Promise<DepilationComboAssembled | null> {
   const [c] = await db.select(comboFields).from(depilationCombo).where(eq(depilationCombo.id, id)).limit(1);
   if (!c) return null;
   const config = await leerConfig(db);
-  return assembleDepilationCombo(c, await zonasDelCombo(db, id), config);
+  return assembleDepilationCombo(c, await zonasDelCombo(db, id), config, sexo);
 }
 
 export type DepilationComboInput = {

@@ -203,9 +203,23 @@ export function primeraViolacionNoInversion(
     for (let nM = 0; nM <= maxPorCategoria; nM++) {
       for (let nC = 0; nC <= maxPorCategoria; nC++) {
         const antes: Record<Categoria, number> = { grande: nG, mediana: nM, chica: nC };
-        // Fijo en "mujer" hasta que la Task 4 le pase el sexo real: es lo que
-        // el sistema hacía antes de la 1.56.0, así que el comportamiento no
-        // cambia.
+        // Corre sobre la curva "mujer" nada más, a propósito — no es un
+        // pendiente de la 1.56.0. La propiedad que se verifica (orden
+        // posicional lista/escalón 1/escalón 2, PDF §1) tiene la MISMA
+        // estructura para los dos sexos: lo único que cambia entre
+        // `precioLista.mujer` y `precioLista.hombre` son los números que se
+        // le pasan a esa estructura, no la fórmula en sí. Esta función no
+        // recibe un `sexo` porque no cotiza nada real — barre TODO el espacio
+        // de selecciones para una config candidata, y `configBody` (Task 4)
+        // ya obliga a que `priceFemaleGrande >= priceFemaleMediana >=
+        // priceFemaleChica` antes de llegar acá.
+        // Ojo: esto es una cobertura parcial, no una garantía completa. Si
+        // Laura carga una curva de HOMBRE invertida (ej.
+        // `priceMaleChica` > `priceMaleGrande`) con la de mujer bien, nada acá
+        // lo frena — recorrer también "hombre" sería la protección entera,
+        // pero es un cambio de firma de una función pura con su propio test
+        // (`depilation-pricing.test.ts`, Task 2), fuera del alcance de la
+        // Task 4. Queda anotado como hueco conocido, no resuelto acá.
         const totalAntes = calcularPrecioCombo(armar(antes), "mujer", config).total;
         for (const categoriaAgregada of ["grande", "mediana", "chica"] as const) {
           const despues = { ...antes, [categoriaAgregada]: antes[categoriaAgregada] + 1 };
