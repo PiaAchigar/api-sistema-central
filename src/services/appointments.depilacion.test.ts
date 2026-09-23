@@ -21,6 +21,7 @@ import { anclaDeDepilacion } from "../repositories/ancla-de-depilacion.repo";
 import { lineasDeDepilacionLibres } from "../repositories/consumo.repo";
 import { createCompra } from "../repositories/compras.repo";
 import { crearCombo, hardDeleteCombo } from "../repositories/depilacion.repo";
+import { getAppointmentDetail } from "../repositories/appointments.repo";
 import { createAppointment, rescheduleAppointment, updateAppointmentStatus } from "./appointments.service";
 
 /**
@@ -264,6 +265,18 @@ describe("crear un turno de depilación", () => {
     expect(zonas.map((z) => z.bodyZoneId).sort()).toEqual([axilaId, piernaId].sort());
     expect(zonas.find((z) => z.bodyZoneId === piernaId)!.minutos).toBe(9);
     expect(zonas.find((z) => z.bodyZoneId === axilaId)!.minutos).toBe(3);
+  });
+
+  /**
+   * Ronda de arreglos 1: el detalle de UN turno (`GET /:id`, lo que alimenta
+   * el recibo) también tiene que traer las zonas — sin esto, abrir un turno
+   * de depilación no dice qué se depiló.
+   */
+  it("el detalle del turno trae las zonas elegidas", async () => {
+    const detalle = await getAppointmentDetail(db, turno1Id);
+    expect(detalle).not.toBeNull();
+    expect(detalle!.zonas.map((z) => z.bodyZoneId).sort()).toEqual([axilaId, piernaId].sort());
+    expect(detalle!.zonas.find((z) => z.bodyZoneId === piernaId)!.minutos).toBe(9);
   });
 
   it("consume la línea comprada: esa sesión deja de estar libre", async () => {

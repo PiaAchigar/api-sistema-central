@@ -1,6 +1,6 @@
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { appointmentBodyZone, customerPurchaseService, appointments } from "../db/schema";
+import { appointmentBodyZone } from "../db/schema";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { subtractAll, type Interval } from "../lib/intervals";
 import { minutosElegidos } from "../lib/menu-de-zonas";
@@ -29,7 +29,7 @@ import { loadAvailabilityContext } from "./availability.service";
 import { consumirInsumos } from "./consumo.service";
 import {
   consumirServicioDelTurno,
-  lineasDeDepilacionLibres,
+  tomarLineaDeDepilacion,
   tomarServicio,
 } from "../repositories/consumo.repo";
 import { registerDeposit, type DepositInput } from "./deposits.service";
@@ -235,9 +235,10 @@ export async function createAppointment(
       if (esDepilacion) {
         // No usa `tomarServicio`: esa guarda busca por `service_id`, y una
         // línea de depilación lo tiene en NULL (su identidad vive en
-        // `depilation_combo_id`, ver `consumo.repo.ts`). Misma seguridad ante
-        // carreras — id + sin consumir + sin turno activo dentro del WHERE
-        // del UPDATE — pero mirando la línea, no el servicio.
+        // `depilation_combo_id`, ver `consumo.repo.ts`). Comparte con
+        // `tomarServicio` la misma guarda atómica ante carreras
+        // (`tomarFilaSiLibre`, privada de `consumo.repo.ts`) — sólo cambia de
+        // dónde sale la lista de "libres" para el error temprano.
         await tomarLineaDeDepilacion(tx, input.customerPurchaseServiceId, {
           appointmentId: appointment.id,
           customerId: input.customerId,
@@ -268,55 +269,6 @@ export async function createAppointment(
 
     return appointment;
   });
-}
-
-/**
- * Ata una línea de depilación comprada al turno recién creado.
- *
- * Análoga a `tomarServicio` (`consumo.repo.ts`), pero para líneas de
- * depilación: esas filas tienen `service_id` en NULL (una línea de
- * depilación se identifica por `depilation_combo_id`, no por servicio — ver
- * `condicionDeLineaDeDepilacionLibre`), así que la guarda de `tomarServicio`
- * —que busca por `service_id`— nunca las encuentra. `consumo.repo.test.ts`
- * lo dice explícito: "ese camino de escritura es de otra tarea". Ésta.
- *
- * Misma seguridad ante carreras que `tomarServicio`: el UPDATE sólo pisa la
- * fila si sigue sin consumir y sin un turno activo enganchado (uno
- * `cancelled` no cuenta — se avisó, se reagenda).
- */
-async function tomarLineaDeDepilacion(
-  db: Db,
-  purchaseServiceId: string,
-  ctx: { appointmentId: string; customerId: string; ahora: Date },
-): Promise<void> {
-  const libres = await lineasDeDepilacionLibres(db, ctx.customerId, ctx.ahora);
-  if (!libres.some((l) => l.purchaseServiceId === purchaseServiceId)) {
-    throw conflict("Esa sesión ya no está disponible para descontar");
-  }
-
-  const tomadas = await db
-    .update(customerPurchaseService)
-    .set({ appointmentId: ctx.appointmentId, updatedAt: new Date() })
-    .where(
-      and(
-        eq(customerPurchaseService.id, purchaseServiceId),
-        isNull(customerPurchaseService.consumedAt),
-        // Sin turno, o con uno cancelado que ya no lo reserva.
-        or(
-          isNull(customerPurchaseService.appointmentId),
-          sql`EXISTS (
-            SELECT 1 FROM ${appointments} a
-             WHERE a.id = ${customerPurchaseService.appointmentId}
-               AND a.status = 'cancelled'
-          )`,
-        ),
-      ),
-    )
-    .returning({ id: customerPurchaseService.id });
-
-  if (tomadas.length === 0) {
-    throw conflict("Esa sesión acaba de ser tomada por otro turno");
-  }
 }
 
 export async function listAppointmentsByDay(

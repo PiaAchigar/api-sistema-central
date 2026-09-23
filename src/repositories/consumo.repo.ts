@@ -98,31 +98,31 @@ export async function queSeDescuenta(
 }
 
 /**
- * Ata el servicio comprado al turno recién creado. Falla si ya no está libre.
+ * El UPDATE atómico que decide si una fila de `customer_purchase_service`
+ * queda tomada por este turno: la trae DENTRO del WHERE y no en un SELECT
+ * previo, y eso es lo que lo hace seguro ante carreras — si dos personas
+ * agendan la misma fila al mismo tiempo, la segunda actualiza cero filas y se
+ * entera. Con un SELECT y después un UPDATE, las dos verían la fila libre y
+ * la segunda pisaría a la primera.
  *
- * El UPDATE trae la condición de "libre" adentro del WHERE y no en un SELECT
- * previo, y eso es lo que lo hace seguro: si dos personas agendan el mismo
- * servicio al mismo tiempo, la segunda actualiza cero filas y se entera. Con
- * un SELECT y después un UPDATE, las dos verían el servicio libre y la
- * segunda pisaría a la primera — el pack quedaría con un servicio de más y
- * nadie se enteraría hasta que la clienta reclame.
+ * Única guarda para `tomarServicio` (identidad por `service_id`) y
+ * `tomarLineaDeDepilacion` (identidad por `depilation_combo_id`, que tiene el
+ * `service_id` en NULL): las dos deciden lo mismo — "esta fila comprada está
+ * libre y la tomo" —, y dos copias de esa condición divergen tarde o
+ * temprano. La que se olvide de actualizar deja una sesión agendada dos veces
+ * o una perdida, así que vive acá una sola vez.
  *
- * También valida que el servicio sea de ESTA clienta: un id ajeno, mandado
- * por error o a propósito, descontaría el pack de otra persona.
+ * Devuelve si se tomó (`true`) o si otro turno se la llevó primero (`false`);
+ * quién llama decide el mensaje de error, que sí es específico de cada caso.
  */
-export async function tomarServicio(
+async function tomarFilaSiLibre(
   db: Db,
   purchaseServiceId: string,
-  ctx: { appointmentId: string; customerId: string; serviceId: string; ahora: Date },
-): Promise<void> {
-  const libres = await serviciosDisponiblesPara(db, ctx.customerId, ctx.serviceId, ctx.ahora);
-  if (!libres.some((s) => s.purchaseServiceId === purchaseServiceId)) {
-    throw conflict("Ese servicio ya no está disponible para descontar");
-  }
-
+  appointmentId: string,
+): Promise<boolean> {
   const tomadas = await db
     .update(customerPurchaseService)
-    .set({ appointmentId: ctx.appointmentId, updatedAt: new Date() })
+    .set({ appointmentId, updatedAt: new Date() })
     .where(
       and(
         eq(customerPurchaseService.id, purchaseServiceId),
@@ -140,7 +140,30 @@ export async function tomarServicio(
     )
     .returning({ id: customerPurchaseService.id });
 
-  if (tomadas.length === 0) {
+  return tomadas.length > 0;
+}
+
+/**
+ * Ata el servicio comprado al turno recién creado. Falla si ya no está libre.
+ *
+ * También valida que el servicio sea de ESTA clienta: un id ajeno, mandado
+ * por error o a propósito, descontaría el pack de otra persona. Ese chequeo
+ * de identidad es previo al UPDATE (no puede vivir en `tomarFilaSiLibre`,
+ * que no sabe de `service_id`); la seguridad ante carreras la sigue dando el
+ * UPDATE, no este SELECT.
+ */
+export async function tomarServicio(
+  db: Db,
+  purchaseServiceId: string,
+  ctx: { appointmentId: string; customerId: string; serviceId: string; ahora: Date },
+): Promise<void> {
+  const libres = await serviciosDisponiblesPara(db, ctx.customerId, ctx.serviceId, ctx.ahora);
+  if (!libres.some((s) => s.purchaseServiceId === purchaseServiceId)) {
+    throw conflict("Ese servicio ya no está disponible para descontar");
+  }
+
+  const tomada = await tomarFilaSiLibre(db, purchaseServiceId, ctx.appointmentId);
+  if (!tomada) {
     throw conflict("Ese servicio acaba de ser tomado por otro turno");
   }
 }
@@ -268,4 +291,30 @@ export async function lineasDeDepilacionLibres(
     venceEl: f.venceEl,
     esPaquete: f.esPaquete === true,
   }));
+}
+
+/**
+ * Ata una línea de depilación comprada al turno recién creado. Análoga a
+ * `tomarServicio`, pero para líneas de depilación: esas filas tienen
+ * `service_id` en NULL (su identidad vive en `depilation_combo_id`, ver
+ * `condicionDeLineaDeDepilacionLibre`), así que la identidad de
+ * `tomarServicio` —que busca por `service_id`— nunca las encuentra. Comparte
+ * con ella la MISMA guarda ante carreras (`tomarFilaSiLibre`); lo único que
+ * cambia es de dónde sale la lista de "libres" para el mensaje de error
+ * temprano.
+ */
+export async function tomarLineaDeDepilacion(
+  db: Db,
+  purchaseServiceId: string,
+  ctx: { appointmentId: string; customerId: string; ahora: Date },
+): Promise<void> {
+  const libres = await lineasDeDepilacionLibres(db, ctx.customerId, ctx.ahora);
+  if (!libres.some((l) => l.purchaseServiceId === purchaseServiceId)) {
+    throw conflict("Esa sesión ya no está disponible para descontar");
+  }
+
+  const tomada = await tomarFilaSiLibre(db, purchaseServiceId, ctx.appointmentId);
+  if (!tomada) {
+    throw conflict("Esa sesión acaba de ser tomada por otro turno");
+  }
 }

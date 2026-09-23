@@ -269,7 +269,16 @@ export async function getAppointmentDetail(db: Db, id: string) {
     .leftJoin(activities, eq(activities.id, appointments.activityId))
     .where(eq(appointments.id, id))
     .limit(1);
-  return rows[0] ?? null;
+  const row = rows[0];
+  if (!row) return null;
+
+  // Mismo criterio que `listAppointmentsByRange`: un `select` aparte, no un
+  // join sobre la consulta principal (que multiplicaría esta única fila por
+  // cada zona). Sin esto, abrir el detalle de un turno de depilación no dice
+  // qué se depiló — ni el recibo ni la trazabilidad, las dos razones por las
+  // que existe `appointment_body_zone`, tendrían de dónde salir acá.
+  const zonasPorTurno = await getBodyZonesForAppointments(db, [row.id]);
+  return { ...row, zonas: zonasPorTurno.get(row.id) ?? [] };
 }
 
 export async function insertAppointment(
