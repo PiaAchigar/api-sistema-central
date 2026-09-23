@@ -4,8 +4,17 @@ export type Sexo = "mujer" | "hombre";
 export type ZonaParaCotizar = { id: string; nombre: string; categoria: Categoria };
 
 export type DepilationConfig = {
-  precioLista: Record<Categoria, number>;
-  minutosPrecio: Record<Categoria, number>;
+  /**
+   * Precio de lista de la PRIMERA zona, por sexo (1.56.0).
+   *
+   * Antes era uno solo para los dos. El tiempo siempre se bifurcó
+   * (`minutosTurno`) y el precio no, así que un hombre ocupaba 8 minutos de
+   * máquina pagando los 6 de una mujer — 25% menos de rendimiento por
+   * minuto.
+   */
+  precioLista: Record<Sexo, Record<Categoria, number>>;
+  /** Base del escalonado (2ª zona en adelante), por sexo (1.56.0). */
+  minutosPrecio: Record<Sexo, Record<Categoria, number>>;
   tarifaEscalon1: number;
   tarifaEscalon2: number;
   minutosTurno: Record<Sexo, Record<Categoria, number>>;
@@ -60,16 +69,22 @@ export type Exclusion = { zonaId: string; excluyeA: string };
 const RANGO: Record<Categoria, number> = { grande: 3, mediana: 2, chica: 1 };
 
 /**
- * Precio de un combo de zonas (PDF §4).
+ * Precio de un combo de zonas (PDF §4), por sexo.
  *
- * OJO — usa `minutosPrecio`, que es unisex (10/7/5). Los minutos que van a la
- * agenda son OTROS y dependen del sexo; están en `calcularDuracionTurno`. El
- * PDF los separa a propósito y confundirlos es un error de plata.
+ * Las DOS familias de minutos siguen separadas y siguen siendo cosas
+ * distintas: `minutosPrecio` es cuántos minutos "vale" una zona a efectos de
+ * tarifa, y `minutosTurno` es cuánto tiempo de agenda ocupa. Desde la 1.56.0
+ * las dos se bifurcan por sexo, pero confundirlas sigue siendo un error de
+ * plata.
  */
 export function calcularPrecioCombo(
-  zonas: ZonaParaCotizar[],
+  zonas: readonly ZonaParaCotizar[],
+  sexo: Sexo,
   config: DepilationConfig,
 ): Cotizacion {
+  const lista = config.precioLista[sexo];
+  const minutosDe = config.minutosPrecio[sexo];
+
   // Orden estable: a igual categoría se respeta el orden de entrada, así el
   // desglose que ve la clienta es siempre el mismo para la misma selección.
   const ordenadas = zonas
@@ -80,9 +95,9 @@ export function calcularPrecioCombo(
     .map((x) => x.zona);
 
   const lineas = ordenadas.map((zona, i): LineaCotizacion => {
-    const minutos = config.minutosPrecio[zona.categoria];
+    const minutos = minutosDe[zona.categoria];
     const [importe, motivo]: [number, MotivoPrecio] =
-      i === 0 ? [config.precioLista[zona.categoria], "lista"]
+      i === 0 ? [lista[zona.categoria], "lista"]
       : i === 1 ? [minutos * config.tarifaEscalon1, "escalon_1"]
       : [minutos * config.tarifaEscalon2, "escalon_2"];
     return {
