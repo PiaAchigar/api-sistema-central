@@ -1,4 +1,4 @@
-import { and, asc, count, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   customerPurchase,
@@ -156,7 +156,10 @@ export async function listCatalogoVendible(db: Db) {
         unitPriceCash: service.unitPriceCash,
       })
       .from(service)
-      .where(eq(service.isActive, true))
+      // El ancla de depilación (Task 9) no es un servicio vendible: filtrar
+      // con `ne(..., true)` y no `eq(..., false)` porque una fila con
+      // `no_vendible` en NULL tiene que seguir apareciendo.
+      .where(and(eq(service.isActive, true), ne(service.noVendible, true)))
       .orderBy(asc(service.name)),
     db
       .select({

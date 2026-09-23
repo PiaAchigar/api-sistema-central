@@ -1,4 +1,4 @@
-import { and, asc, eq, ilike, inArray, type SQL } from "drizzle-orm";
+import { and, asc, eq, ilike, inArray, ne, type SQL } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   appointments,
@@ -39,6 +39,16 @@ export async function listServices(
   filters: { categoryId?: string; q?: string; featured?: boolean; includeInactive?: boolean },
 ) {
   const conditions: SQL[] = [];
+  // El servicio ancla de depilación queda afuera: no es un servicio que Laura
+  // cargue, edite o borre, es plomería de la agenda. Mostrarlo la invitaría a
+  // tocarle el precio o a archivarlo, y con eso la agenda de depilación deja
+  // de tener disponibilidad. Esta misma función alimenta tanto el admin del
+  // dashboard como el listado público que consume piubella_web (GET
+  // /api/agenda/services sin auth) — el ancla tiene `unit_price_list = 0`, y
+  // publicada en la web sería un servicio gratis.
+  // `ne(..., true)` y no `eq(..., false)`: una fila con `no_vendible` en NULL
+  // tiene que seguir apareciendo.
+  conditions.push(ne(service.noVendible, true));
   if (!filters.includeInactive) conditions.push(eq(service.isActive, true));
   if (filters.q) conditions.push(ilike(service.name, `%${filters.q}%`));
   if (filters.featured) conditions.push(eq(service.isFeatured, true));
