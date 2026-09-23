@@ -32,6 +32,10 @@ export const contactInput = z.object({
   postalCode: z.string().optional(),
   country: z.string().optional(),
   isArchived: z.boolean().optional(),
+  // El tramo de tarifa y tiempo de depilación definitiva (1.56.0). Admite
+  // null explícito para poder volver a "sin cargar" desde la ficha; NULL
+  // sigue significando mujer, lo resuelve el backend (sexoDeLaClienta).
+  sexo: z.enum(["mujer", "hombre"]).nullish(),
 });
 
 export const listQuery = z.object({

@@ -67,6 +67,24 @@ describe("contactInput", () => {
     expect(contactInput.partial().safeParse({ isArchived: true }).success).toBe(true);
   });
 
+  it("acepta sexo mujer u hombre", () => {
+    expect(contactInput.safeParse({ name: "Ana", sexo: "mujer" }).success).toBe(true);
+    expect(contactInput.safeParse({ name: "Ana", sexo: "hombre" }).success).toBe(true);
+  });
+
+  it("rechaza un sexo que no sea mujer u hombre", () => {
+    expect(contactInput.safeParse({ name: "Ana", sexo: "otro" }).success).toBe(false);
+  });
+
+  it("acepta que sexo venga null o ausente: NULL sigue significando mujer", () => {
+    expect(contactInput.safeParse({ name: "Ana", sexo: null }).success).toBe(true);
+    expect(contactInput.safeParse({ name: "Ana" }).success).toBe(true);
+  });
+
+  it("partial() acepta null en sexo, para poder volver a 'sin cargar' desde la ficha", () => {
+    expect(contactInput.partial().safeParse({ sexo: null }).success).toBe(true);
+  });
+
   it("partial() NO afloja la guarda de fecha futura", () => {
     // El PATCH de contactos valida con `contactInput.partial()`. Si `.partial()`
     // descartara el refine, la guarda solo cubriría el alta y se podría meter
