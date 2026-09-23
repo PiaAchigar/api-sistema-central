@@ -1,11 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq, like, notLike } from "drizzle-orm";
+import { like, notLike } from "drizzle-orm";
 import * as schema from "../db/schema";
-import { bodyZone, depilationPricingConfig } from "../db/schema";
+import { bodyZone } from "../db/schema";
 import type { Db } from "../db/client";
-import { crearCombo, hardDeleteCombo, obtenerCombo } from "./depilacion.repo";
+import {
+  assembleDepilationCombo,
+  crearCombo,
+  hardDeleteCombo,
+  obtenerCombo,
+  type DepilationComboRow,
+} from "./depilacion.repo";
+import type { DepilationConfig, ZonaParaCotizar } from "../lib/depilation-pricing";
 
 /**
  * Task 4 (1.56.0): `obtenerCombo`/`assembleDepilationCombo` conectados con la
@@ -13,6 +20,9 @@ import { crearCombo, hardDeleteCombo, obtenerCombo } from "./depilacion.repo";
  * `aConfigAnidada` (columnas `female`/`male` de la base → `mujer`/`hombre`
  * del tipo) es justamente lo que un doble de `Db` no puede probar: hay que
  * leer la fila real.
+ *
+ * Excepción: el test de "cotiza con la fórmula del sexo que corresponde" NO
+ * lee la config real — ver el comentario ahí sobre por qué.
  */
 const pgClient = postgres("postgresql://piubella:piubella@localhost:5499/piubella", {
   max: 1,
@@ -35,9 +45,6 @@ async function zonasRealesPorNombre(): Promise<Map<string, string>> {
 }
 
 let esencialesId = "";
-let guardadoId = "";
-// Fila completa de antes, para restaurar exactamente en el afterAll.
-let filaConfigAntes: typeof depilationPricingConfig.$inferSelect | undefined;
 
 async function limpiarCombosQA() {
   const combos = await db
@@ -61,8 +68,6 @@ beforeAll(async () => {
   const chicaA = idDeZonaReal("Antebrazo");
   const chicaB = idDeZonaReal("Axila");
   const chicaC = idDeZonaReal("Barba");
-  const medianaA = idDeZonaReal("Media pierna");
-  const medianaB = idDeZonaReal("Medio brazo");
 
   // §10-A: pack_fijo de 2 grandes + 3 chicas, con 1 zona a elección — el caso
   // exacto de "Combo de Esenciales" que el spec usa de ejemplo.
@@ -74,48 +79,9 @@ beforeAll(async () => {
     zonaIds: [grandeA, grandeB, chicaA, chicaB, chicaC],
   });
   esencialesId = esenciales!.id;
-
-  // Un `guardado` de 2 zonas "mediana": sin `fixed_price`, cotiza con la
-  // fórmula — el caso que prueba que el sexo llega hasta `calcularPrecioCombo`.
-  const guardado = await crearCombo(db, {
-    name: `${QA}_GUARDADO`,
-    kind: "guardado",
-    zonaIds: [medianaA, medianaB],
-  });
-  guardadoId = guardado!.id;
-
-  // La config real de hoy tiene `price_male_*` == `price_female_*`: la
-  // migración 1.56.0 copió los valores de mujer a las dos familias de
-  // columnas y nadie ajustó todavía los de hombre (ver el comentario de
-  // `DepilationConfig.precioLista` en depilation-pricing.ts). Sin
-  // diferenciarlos, un `guardado` cotizaría EXACTAMENTE igual para los dos
-  // sexos — no porque el mapeo `female`→`mujer`/`male`→`hombre` esté mal,
-  // sino porque no hay ningún número distinto que leer, y el test de abajo
-  // ("cotiza con la fórmula del sexo que corresponde") no podría probar nada.
-  //
-  // Se diferencia acá SOLO la columna "mediana" (la única categoría que usa
-  // `guardadoId`) y SOLO por la duración de este archivo: se restaura en el
-  // afterAll. "Grande"/"chica" quedan intactas — otras suites (`GET /combos`,
-  // `POST /cotizar` con zonas grande/chica) siguen leyendo los valores reales
-  // de la migración 1.35.0 sin verse afectadas.
-  [filaConfigAntes] = await db.select().from(depilationPricingConfig).limit(1);
-  if (!filaConfigAntes) throw new Error("falta la fila de depilation_pricing_config");
-  await db
-    .update(depilationPricingConfig)
-    .set({ priceMaleMediana: 19000, pricingMinutesMaleMediana: 9 })
-    .where(eq(depilationPricingConfig.singleton, true));
 });
 
 afterAll(async () => {
-  if (filaConfigAntes) {
-    await db
-      .update(depilationPricingConfig)
-      .set({
-        priceMaleMediana: filaConfigAntes.priceMaleMediana,
-        pricingMinutesMaleMediana: filaConfigAntes.pricingMinutesMaleMediana,
-      })
-      .where(eq(depilationPricingConfig.singleton, true));
-  }
   await limpiarCombosQA();
   await pgClient.end();
 });
@@ -146,10 +112,68 @@ describe("assembleDepilationCombo — por sexo (1.56.0)", () => {
     expect(hombre!.precioFinal).toBe(65000);
   });
 
-  it("un combo `guardado` cotiza con la fórmula del sexo que corresponde", async () => {
-    const mujer = await obtenerCombo(db, guardadoId, "mujer");
-    const hombre = await obtenerCombo(db, guardadoId, "hombre");
-    expect(hombre!.precioFinal).toBeGreaterThan(mujer!.precioFinal);
+  /**
+   * `depilation_pricing_config` es la configuración de precios del salón,
+   * fila única: escribirla desde un test y restaurarla en el `afterAll` es
+   * un riesgo real, no teórico — el reporte de la Task 2 documenta tests de
+   * esta misma rama crasheando a mitad de camino y salteándose su propio
+   * cleanup. Un crash en el momento equivocado dejaría a la dueña con la
+   * tarifa de hombre cambiada en la base de verdad. Además, hoy
+   * `price_male_*` == `price_female_*` en la base local (nadie ajustó
+   * todavía los de hombre, la migración 1.56.0 los copió iguales), así que
+   * sin diferenciarlos ARTIFICIALMENTE este caso no se puede ejercitar leyendo
+   * la config real. Por eso acá NO se toca la base: se arma un
+   * `DepilationConfig` a mano, con hombre distinto de mujer, y se llama
+   * `assembleDepilationCombo` directo — es una función pura, no necesita la
+   * base para nada. Los demás tests de este describe sí van por
+   * `obtenerCombo`, porque ésos SÍ tienen que probar el camino completo
+   * (leer la fila real, mapearla) con la config que hay hoy.
+   */
+  it("un combo `guardado` cotiza con la fórmula del sexo que corresponde", () => {
+    const config: DepilationConfig = {
+      precioLista: {
+        mujer: { grande: 19000, mediana: 17000, chica: 12000 },
+        hombre: { grande: 23000, mediana: 19500, chica: 15000 },
+      },
+      minutosPrecio: {
+        mujer: { grande: 10, mediana: 7, chica: 5 },
+        hombre: { grande: 11, mediana: 9, chica: 8 },
+      },
+      tarifaEscalon1: 1200,
+      tarifaEscalon2: 1000,
+      minutosTurno: {
+        mujer: { grande: 9, mediana: 6, chica: 3 },
+        hombre: { grande: 10, mediana: 8, chica: 5 },
+      },
+      redondeoTurno: 5,
+      turnoMinimo: 10,
+      packSesiones: 3,
+      packDescuentoPct: 15,
+      packRedondeo: 1000,
+    };
+    const comboGuardado: DepilationComboRow = {
+      id: "guardado-de-prueba",
+      name: "Guardado de prueba",
+      description: null,
+      kind: "guardado",
+      fixedPrice: null,
+      fixedDurationMinutes: null,
+      choiceZoneCount: 0,
+      packSessions: null,
+      packDiscountPercentage: null,
+      packRoundingBase: null,
+      isPublishedWeb: false,
+      displayOrder: 0,
+      isActive: true,
+    };
+    const zonas: ZonaParaCotizar[] = [
+      { id: "z1", nombre: "Media pierna", categoria: "mediana" },
+      { id: "z2", nombre: "Medio brazo", categoria: "mediana" },
+    ];
+
+    const mujer = assembleDepilationCombo(comboGuardado, zonas, config, "mujer");
+    const hombre = assembleDepilationCombo(comboGuardado, zonas, config, "hombre");
+    expect(hombre.precioFinal).toBeGreaterThan(mujer.precioFinal);
   });
 
   it("sin sexo se comporta como mujer, que es lo de siempre", async () => {
