@@ -83,6 +83,23 @@ export const depilationPricingConfig = pgTable("depilation_pricing_config", {
   packSessions: integer("pack_sessions").notNull(),
   packDiscountPercentage: integer("pack_discount_percentage").notNull(),
   packRoundingBase: integer("pack_rounding_base").notNull(),
+  // 1.56.0 — El precio se bifurca por sexo, igual que ya lo hacían los
+  // minutos de turno. Las columnas viejas (priceGrande, pricingMinutes*)
+  // quedan arriba sin uso hasta que una migración posterior las borre.
+  priceFemaleGrande: integer("price_female_grande").notNull(),
+  priceFemaleMediana: integer("price_female_mediana").notNull(),
+  priceFemaleChica: integer("price_female_chica").notNull(),
+  priceMaleGrande: integer("price_male_grande").notNull(),
+  priceMaleMediana: integer("price_male_mediana").notNull(),
+  priceMaleChica: integer("price_male_chica").notNull(),
+  pricingMinutesFemaleGrande: integer("pricing_minutes_female_grande").notNull(),
+  pricingMinutesFemaleMediana: integer("pricing_minutes_female_mediana").notNull(),
+  pricingMinutesFemaleChica: integer("pricing_minutes_female_chica").notNull(),
+  pricingMinutesMaleGrande: integer("pricing_minutes_male_grande").notNull(),
+  pricingMinutesMaleMediana: integer("pricing_minutes_male_mediana").notNull(),
+  pricingMinutesMaleChica: integer("pricing_minutes_male_chica").notNull(),
+  /** El `service` ancla que sostiene la agenda de depilación (§4). */
+  anchorServiceId: uuid("anchor_service_id"),
   updatedAt: updatedAt().notNull(),
 });
 
@@ -119,6 +136,8 @@ export const depilationCombo = pgTable("depilation_combo", {
   packSessions: integer("pack_sessions"),
   packDiscountPercentage: integer("pack_discount_percentage"),
   packRoundingBase: integer("pack_rounding_base"),
+  /** 1.56.0 — Meses de vigencia del pack. NULL = no vence. */
+  validityMonths: integer("validity_months"),
   isPublishedWeb: boolean("is_published_web").notNull(),
   displayOrder: integer("display_order").notNull(),
   isActive: boolean("is_active").notNull(),
@@ -132,4 +151,18 @@ export const depilationComboZone = pgTable("depilation_combo_zone", {
   id: id(),
   comboId: uuid("combo_id").notNull(),
   zoneId: uuid("zone_id").notNull(),
+});
+
+/**
+ * Qué zonas se hicieron en un turno de depilación (1.56.0).
+ *
+ * `minutos` va congelado, igual que `customer_purchase_service.price`: si
+ * mañana cambia la config, un turno viejo no puede cambiar de duración solo.
+ */
+export const appointmentBodyZone = pgTable("appointment_body_zone", {
+  id: id(),
+  appointmentId: uuid("appointment_id").notNull(),
+  bodyZoneId: uuid("body_zone_id").notNull(),
+  minutos: integer("minutos").notNull(),
+  createdAt: createdAt().notNull(),
 });

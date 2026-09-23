@@ -133,6 +133,7 @@ services:
       # "42-" es seguro contra el bug de colación documentado arriba: difiere
       # de "41-" en el primer dígito, antes de llegar a ningún guion.
       - ./src/db/migrations/1.55.0/01-promo-paquete.sql:/docker-entrypoint-initdb.d/42-promo-paquete.sql:ro
+      - ./src/db/migrations/1.56.0/01-depilacion-agendable.sql:/docker-entrypoint-initdb.d/43-depilacion-agendable.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]

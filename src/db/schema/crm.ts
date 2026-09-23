@@ -41,6 +41,8 @@ export const contacts = pgTable("contacts", {
   lastVisitDate: date("last_visit_date"),
   preferredService: varchar("preferred_service", { length: 255 }),
   notes: text("notes"),
+  /** 1.56.0 — El tramo de tarifa y tiempo de depilación. NULL = mujer. */
+  sexo: varchar("sexo", { length: 10 }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

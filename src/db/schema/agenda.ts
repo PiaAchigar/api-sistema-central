@@ -69,6 +69,10 @@ export const service = pgTable("service", {
   benefits: text("benefits"),
   contraindications: text("contraindications"),
   specialAttentionNotes: text("special_attention_notes"),
+  /** 1.56.0 — No se ofrece en ningún catálogo de venta. El servicio ancla de
+   *  depilación es la única fila con `true`. Distinto de `isVisible`, que
+   *  habla de la web. */
+  noVendible: boolean("no_vendible"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
