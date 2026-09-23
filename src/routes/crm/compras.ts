@@ -28,6 +28,7 @@ import {
   obtenerPromoVendible,
   preciosDeListaDe,
 } from "../../repositories/catalogo-venta.repo";
+import { sexoDeLaClienta } from "../../repositories/clientes-sexo.repo";
 import { cotizar } from "../../lib/cotizacion";
 import { cotizarPaquete, razonParaNoVenderElPaquete } from "../../lib/cotizacion-de-paquete";
 import { razonParaNoAplicarPromoSuelta } from "../../lib/promo-aplica";
@@ -94,11 +95,13 @@ comprasRouter.post(
         id: z.string().uuid(),
         sessions: z.number().int().positive(),
         promotionId: z.string().uuid().nullish(),
+        customerId: z.string().uuid(),
       }),
       // Un paquete no tiene "origen": lo que lleva sale de la promo.
       z.object({
         origen: z.literal("paquete"),
         promotionId: z.string().uuid(),
+        customerId: z.string().uuid(),
       }),
     ]),
   ),
@@ -127,9 +130,13 @@ comprasRouter.post(
       }
     }
 
-    const { origen, id, sessions, promotionId } = body;
+    const { origen, id, sessions, promotionId, customerId } = body;
 
-    const item = await obtenerItemVendible(db, origen, id);
+    // Sólo depilación cobra distinto según a quién se le vende; se resuelve
+    // una vez acá y se le pasa a quien resuelve el item, en vez de que cada
+    // origen tenga que saber de dónde sale.
+    const sexo = await sexoDeLaClienta(db, customerId);
+    const item = await obtenerItemVendible(db, origen, id, sexo);
     if (!item) {
       throw notFound(
         origen === "servicio" ? "Servicio" : origen === "capacitacion" ? "Capacitación" : "Combo",

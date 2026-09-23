@@ -14,6 +14,7 @@ import {
   desgloseDeCombo,
   desgloseDeDepilacion,
 } from "../lib/desglose-de-catalogo";
+import type { Sexo } from "../lib/depilation-pricing";
 import { comboDelQueSalenLosServicios } from "../lib/servicios-comprados";
 import { todayLocal } from "../lib/time";
 import type { ItemVendible, PromoVendible } from "../lib/cotizacion";
@@ -248,11 +249,17 @@ export async function listCatalogoVendible(db: Db) {
  * Un solo item, para cotizar sin traerse el catálogo entero.
  *
  * Devuelve `null` si no existe: el que llama decide si eso es un 404.
+ *
+ * `sexo` sólo lo usa depilación —es lo único que cobra distinto según a quién
+ * se le vende—; los demás orígenes valen lo mismo para cualquiera, así que
+ * `preciosDeListaDe` (que nunca llega a llamar esto para depilación) puede
+ * seguir sin pasarlo y usar el default.
  */
 export async function obtenerItemVendible(
   db: Db,
   origen: ItemVendible["origen"],
   id: string,
+  sexo: Sexo = "mujer",
 ): Promise<ItemVendible | null> {
   if (origen === "combo") {
     const c = await getComboById(db, id);
@@ -261,7 +268,7 @@ export async function obtenerItemVendible(
   }
 
   if (origen === "depilacion") {
-    const c = await obtenerCombo(db, id);
+    const c = await obtenerCombo(db, id, sexo);
     if (!c) return null;
     return {
       origen: "depilacion",
