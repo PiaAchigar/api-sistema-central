@@ -1,9 +1,10 @@
-import { and, eq, gte, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   appointments,
   customerPurchase,
   customerPurchaseService,
+  depilationCombo,
 } from "../db/schema";
 import { conflict } from "../lib/errors";
 import { type ServicioDisponible, elegirServicio } from "../lib/eleccion-de-servicio";
@@ -170,4 +171,101 @@ export async function consumirServicioDelTurno(
         isNull(customerPurchaseService.consumedAt),
       ),
     );
+}
+
+/** Una sesión de depilación comprada y todavía libre para agendar. */
+export type LineaDeDepilacion = {
+  purchaseServiceId: string;
+  purchaseId: string;
+  depilationComboId: string;
+  nombreDelPack: string;
+  descripcion: string;
+  repeticion: number;
+  sesionesTotales: number;
+  venceEl: Date | null;
+  esPaquete: boolean;
+};
+
+/**
+ * La condición de "esta línea de depilación está libre", como WHERE.
+ *
+ * Espeja `condicionDeServicioLibre` —misma definición de "libre"— salvo por
+ * el último tramo: en vez de `eq(serviceId, ...)` para elegir la fila, acá la
+ * identidad de depilación sale del `innerJoin` con `depilation_combo` sobre
+ * `customer_purchase_service.depilation_combo_id` —la LÍNEA, no la cabecera de
+ * la compra—. Desde la 1.55.0 la cabecera de un paquete de promo tiene los
+ * cuatro orígenes en NULL: buscar ahí dejaría afuera toda la depilación
+ * vendida dentro de un paquete, y Laura la vería en la ficha sin poder
+ * agendarla.
+ *
+ * Se exporta por el mismo motivo que `condicionDeServicioLibre`: así un test
+ * la puede armar y revisarle los parámetros sin tocar la base. Ver
+ * `lib/parametros-de-consulta.ts` — un `Date` acá adentro, metido por un
+ * fragmento `sql` crudo, hace fallar la consulta recién contra Postgres.
+ */
+export function condicionDeLineaDeDepilacionLibre(customerId: string, ahora: Date) {
+  return and(
+    eq(customerPurchase.customerId, customerId),
+    // La compra tiene que estar viva.
+    isNull(customerPurchase.cancelledAt),
+    // `gte` y no un fragmento `sql` crudo: el operador pasa la fecha por el
+    // mapper de la columna. Un `Date` metido a mano en un `sql` llega vivo al
+    // driver y la consulta muere al bindear — era el 500 de
+    // /appointments/consumible.
+    or(isNull(customerPurchase.expiresAt), gte(customerPurchase.expiresAt, ahora)),
+    // La sesión, libre: sin consumir y sin un turno que la reserve. Un turno
+    // CANCELADO no reserva —se avisó, se reagenda— pero un `no_show` sí la
+    // deja tomada: la clienta la perdió (reglas §3.8).
+    isNull(customerPurchaseService.consumedAt),
+    or(isNull(customerPurchaseService.appointmentId), eq(appointments.status, "cancelled")),
+  );
+}
+
+/**
+ * Las sesiones de depilación que esta clienta tiene compradas y sin agendar.
+ *
+ * Espeja `condicionDeServicioLibre` —misma definición de "libre"— pero busca
+ * por `depilation_combo_id` en vez de por `service_id`, porque una línea de
+ * depilación tiene el `service_id` en NULL. Ver
+ * `condicionDeLineaDeDepilacionLibre` para el detalle de por qué la identidad
+ * sale del `innerJoin`, sobre la LÍNEA, y no de la cabecera de la compra.
+ */
+export async function lineasDeDepilacionLibres(
+  db: Db,
+  customerId: string,
+  ahora: Date,
+): Promise<LineaDeDepilacion[]> {
+  const filas = await db
+    .select({
+      purchaseServiceId: customerPurchaseService.id,
+      purchaseId: customerPurchase.id,
+      depilationComboId: customerPurchaseService.depilationComboId,
+      nombreDelPack: depilationCombo.name,
+      descripcion: customerPurchase.description,
+      repeticion: customerPurchaseService.repeticion,
+      sesionesTotales: customerPurchase.sessionsTotal,
+      venceEl: customerPurchase.expiresAt,
+      esPaquete: customerPurchase.esPaqueteDePromo,
+    })
+    .from(customerPurchaseService)
+    .innerJoin(
+      customerPurchase,
+      eq(customerPurchase.id, customerPurchaseService.customerPurchaseId),
+    )
+    .innerJoin(depilationCombo, eq(depilationCombo.id, customerPurchaseService.depilationComboId))
+    .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
+    .where(condicionDeLineaDeDepilacionLibre(customerId, ahora))
+    .orderBy(asc(customerPurchase.purchasedAt), asc(customerPurchaseService.repeticion));
+
+  return filas.map((f) => ({
+    purchaseServiceId: f.purchaseServiceId,
+    purchaseId: f.purchaseId,
+    depilationComboId: f.depilationComboId!,
+    nombreDelPack: f.nombreDelPack ?? "Pack sin nombre",
+    descripcion: f.descripcion ?? "Compra sin descripción",
+    repeticion: f.repeticion ?? 1,
+    sesionesTotales: f.sesionesTotales ?? 1,
+    venceEl: f.venceEl,
+    esPaquete: f.esPaquete === true,
+  }));
 }
