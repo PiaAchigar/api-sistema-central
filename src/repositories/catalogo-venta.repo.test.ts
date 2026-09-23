@@ -1,9 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { and, eq, isNull, like, notLike } from "drizzle-orm";
+import { and, eq, like, notLike } from "drizzle-orm";
 import * as schema from "../db/schema";
-import { bodyZone, categories, combos, depilationCombo, promotions, service } from "../db/schema";
+import {
+  areaPackPolicy,
+  bodyZone,
+  categories,
+  combos,
+  depilationCombo,
+  promotions,
+  service,
+} from "../db/schema";
 import type { Db } from "../db/client";
 import { listCatalogoVendible, obtenerPromoVendible, preciosDeListaDe } from "./catalogo-venta.repo";
 import { cotizarPaquete } from "../lib/cotizacion-de-paquete";
@@ -56,6 +64,19 @@ async function limpiar() {
     .from(combos)
     .where(like(combos.name, `${QA}%`));
   for (const c of genericosQa) await deleteComboPermanently(db, c.id);
+
+  // El área de QA y su tarifario. Se crea propia y no se le pega un tarifario
+  // a un área real: `conPrecioDePack` mira `area_pack_policy` para TODOS los
+  // packs, así que insertar una fila sobre un área de verdad le cambiaría el
+  // precio a los packs de las otras suites.
+  const areasQa = await db
+    .select({ id: categories.id })
+    .from(categories)
+    .where(like(categories.name, `${QA}%`));
+  for (const a of areasQa) {
+    await db.delete(areaPackPolicy).where(eq(areaPackPolicy.areaCategoryId, a.id));
+    await db.delete(categories).where(eq(categories.id, a.id));
+  }
 }
 
 beforeAll(async () => {
@@ -138,13 +159,20 @@ beforeAll(async () => {
   servicioId = s1!.id;
   servicioNombre = s1!.name ?? "";
 
-  // `area_category_id` es NOT NULL en `combos`: hace falta un área real.
+  // Un área propia CON tarifario de packs: sin fila en `area_pack_policy`,
+  // `conPrecioDePack` se va sin tocar el precio y el pack cotiza como una
+  // vuelta sola — el camino que este test justamente quiere ejercitar.
   const [area] = await db
-    .select({ id: categories.id })
-    .from(categories)
-    .where(isNull(categories.parentCategoryId))
-    .orderBy(categories.name)
-    .limit(1);
+    .insert(categories)
+    .values({ name: `${QA}_AREA`, kind: "area", isActive: true, displayOrder: 0 })
+    .returning({ id: categories.id });
+
+  await db.insert(areaPackPolicy).values({
+    areaCategoryId: area!.id,
+    packSessions: 3,
+    packDiscountPercentage: 20,
+    packRoundingBase: 1,
+  });
 
   // Un PACK de 3 con un renglón de 1: el caso exacto de "Pack 1 - Prueba" en
   // producción, que es el que a Laura le salía con un cartel rojo.
@@ -230,6 +258,25 @@ describe("listCatalogoVendible — el desglose llega al front", () => {
     expect(pack, "el combo pack de QA tiene que estar en el catálogo").toBeDefined();
     expect(pack!.desglose).toEqual([{ nombre: servicioNombre, cantidad: 3 }]);
     expect(pack!.packSesiones).toBe(3);
+  });
+
+  /**
+   * El precio de lista de un pack tiene que ser lo que costarían sus N
+   * sesiones SUELTAS. Si es el de una sola vuelta, la pantalla de venta
+   * muestra una "lista" más barata que el total: ni tacha el precio, ni
+   * dibuja la fila del descuento, ni dice cuánto se ahorra — le esconde a
+   * Laura el argumento de venta del pack.
+   */
+  it("un pack cotiza contra lo que costarían sus 3 sesiones sueltas, no una", async () => {
+    const catalogo = await listCatalogoVendible(db);
+    const pack = catalogo.combos.find((i) => i.id === comboPackId)!;
+    const suelto = catalogo.servicios.find((i) => i.id === servicioId)!;
+
+    expect(pack.precioDesde).toBeGreaterThan(0);
+    // `base` es lo que la cotización devuelve como `baseAmount`.
+    expect(pack.base).toBe(suelto.unitario * 3);
+    // Y el pack tiene que salir MENOS que las tres sueltas: si no, no hay pack.
+    expect(pack.conDescuento).toBeLessThan(pack.base);
   });
 
   it("un servicio suelto no inventa desglose: es una cosa sola", async () => {

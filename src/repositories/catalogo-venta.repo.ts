@@ -45,12 +45,35 @@ type ComboArmado = {
   lines: { serviceName: string | null; sessionsIncluded: number | null }[];
 } & Record<string, unknown>;
 
+/**
+ * El precio de LISTA de un combo: lo que costaría sin el descuento.
+ *
+ * En un combo común es el subtotal de sus renglones. En un **pack** no: su
+ * `finalAmount` es N vueltas con descuento, mientras que `servicesSubtotal`
+ * es UNA sola vuelta. Comparar los dos daba una "lista" más barata que el
+ * total, así que la pantalla de venta mostraba "Precio de lista $249.000" al
+ * lado de "Total $598.000" —sin tachar, sin fila de descuento y sin ahorro—,
+ * que es exactamente lo contrario de lo que pasa: el pack es más BARATO que
+ * comprar las 3 sesiones sueltas.
+ *
+ * `packEffectiveSessions` y no `packSessions`: son las vueltas por las que
+ * `conPrecioDePack` multiplicó de verdad. Cuando el área no tiene tarifario
+ * esa función se va sin tocar el precio, y contar las declaradas inventaría
+ * un ahorro que no existe.
+ */
+function precioDeListaDeCombo(c: ComboArmado): number {
+  if (c.kind !== "pack") return c.servicesSubtotal;
+  const vueltas = (c.packEffectiveSessions as number | null) ?? 1;
+  const porVuelta = (c.packUnitAmount as number | null) ?? c.servicesSubtotal;
+  return porVuelta * vueltas;
+}
+
 function comboVendible(c: ComboArmado): ItemVendible {
   return {
     origen: "combo",
     id: c.id as string,
     nombre: (c.name as string | null) ?? "Sin nombre",
-    base: c.servicesSubtotal,
+    base: precioDeListaDeCombo(c),
     // En un pack esto ya viene con el descuento del pack aplicado
     // (`conPrecioDePack`), así que la cotización no vuelve a multiplicar.
     conDescuento: c.finalAmount,
