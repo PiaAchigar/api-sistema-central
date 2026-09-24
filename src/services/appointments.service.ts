@@ -408,9 +408,22 @@ export async function rescheduleAppointment(
   if (!ctx.open) throw conflict("El local está cerrado ese día");
   if (ctx.providers.length === 0) throw conflict("La proveedora no está disponible ese día");
 
+  // Reagendar mueve el CUÁNDO, no el QUÉ: para depilación, `ctx.durationMinutes`
+  // sale de `service.estimated_duration_minutes` del ancla, que es un valor de
+  // relleno (30, migración 1.56.0) sin relación con las zonas elegidas. La
+  // duración real del turno es la que ya tiene guardada — la que salió de
+  // `minutosElegidos` al crearlo — y esa no cambia porque cambie la hora. Un
+  // sólo `durationMinutes` de acá en adelante: el intervalo pedido, el
+  // `endDate`, la franja del historial y el UPDATE final tienen que ver el
+  // mismo número, o se valida disponibilidad contra una duración y se guarda
+  // otra.
+  const ancla = await anclaDeDepilacion(db);
+  const esDepilacion = appt.serviceId === ancla;
+  const durationMinutes = esDepilacion ? appt.durationMinutes ?? ctx.durationMinutes : ctx.durationMinutes;
+
   const startMin = utcToLocalMinutes(startDate);
-  const requested: Interval = { start: startMin, end: startMin + ctx.durationMinutes };
-  const endDate = new Date(startDate.getTime() + ctx.durationMinutes * 60_000);
+  const requested: Interval = { start: startMin, end: startMin + durationMinutes };
+  const endDate = new Date(startDate.getTime() + durationMinutes * 60_000);
 
   const freeWindows = ctx.freeWindowsByProvider.get(appt.serviceProviderId) ?? [];
   const fits = freeWindows.some((w) => requested.start >= w.start && requested.end <= w.end);
@@ -429,7 +442,7 @@ export async function rescheduleAppointment(
     // Antes del UPDATE, porque después la fecha vieja ya no existe en ningún
     // lado. Va en la misma transacción: o se mueve y queda registrado, o no
     // pasa ninguna de las dos cosas.
-    const franja = { start: startDate, end: endDate, durationMinutes: ctx.durationMinutes };
+    const franja = { start: startDate, end: endDate, durationMinutes };
     if (huboMovimiento(appt, franja)) {
       await recordReschedule(tx, filaDeReagendado(appt, franja, quien));
     }
@@ -437,7 +450,7 @@ export async function rescheduleAppointment(
     return updateAppointment(tx, id, {
       appointmentStart:      startDate,
       appointmentEnd:        endDate,
-      durationMinutes:       ctx.durationMinutes,
+      durationMinutes,
       status:                "scheduled",
       reservationExpiresAt:  null,
     });

@@ -57,12 +57,15 @@ let piernaId: string;
 let axilaId: string;
 let packAId: string; // presupuesta 30' — de sobra para pierna(9)+axila(3)=12
 let packBId: string; // presupuesta 10' — MENOS que pierna+axila, a propósito
+let packCId: string; // presupuesta 40' — para el turno de MÁS de 30'
+let zonasGrandesIds: string[]; // 4 zonas grande (9' c/u para "mujer") = 36'
 
 // Una línea libre por test, para que ninguno le coma la sesión al otro.
 let lineaTurno1Id: string;
 let lineaConsumeId: string;
 let lineaRechazoId: string;
 let lineaSinZonasId: string;
+let lineaGrandeId: string;
 
 let turno1Id: string;
 
@@ -175,6 +178,28 @@ beforeAll(async () => {
   });
   packBId = packB!.id;
 
+  // Pack C: 4 zonas "grande" (9' c/u para "mujer") = 36' — MÁS que el valor
+  // de relleno del ancla (30', `service.estimated_duration_minutes`,
+  // migración 1.56.0). Existe sólo para el caso que más plata cuesta: un
+  // turno de depilación reagendado no se puede "encoger" a ese relleno.
+  zonasGrandesIds = [];
+  for (let i = 1; i <= 4; i++) {
+    const [z] = await db
+      .insert(bodyZone)
+      .values({ name: `${QA}_GRANDE_${i}`, category: "grande", displayOrder: 910 + i, isActive: true })
+      .returning({ id: bodyZone.id });
+    zonasGrandesIds.push(z!.id);
+  }
+  const packC = await crearCombo(db, {
+    name: `${QA}_PACK_C`,
+    kind: "pack_fijo",
+    fixedPrice: 150000,
+    fixedDurationMinutes: 40,
+    choiceZoneCount: 0,
+    zonaIds: zonasGrandesIds,
+  });
+  packCId = packC!.id;
+
   // Máquina + proveedora habilitadas para el ancla: la base local no trae
   // ninguna (el ancla no se vende, así que nadie la cargó).
   const [maquina] = await db
@@ -232,12 +257,14 @@ beforeAll(async () => {
   const compraConsume = await comprar("CONSUME", packAId);
   const compraRechazo = await comprar("RECHAZO", packBId);
   const compraSinZonas = await comprar("SINZONAS", packAId);
+  const compraGrande = await comprar("GRANDE", packCId);
 
   const libres = await lineasDeDepilacionLibres(db, CUSTOMER_ID, new Date());
   lineaTurno1Id = libres.find((l) => l.purchaseId === compraTurno1.id)!.purchaseServiceId;
   lineaConsumeId = libres.find((l) => l.purchaseId === compraConsume.id)!.purchaseServiceId;
   lineaRechazoId = libres.find((l) => l.purchaseId === compraRechazo.id)!.purchaseServiceId;
   lineaSinZonasId = libres.find((l) => l.purchaseId === compraSinZonas.id)!.purchaseServiceId;
+  lineaGrandeId = libres.find((l) => l.purchaseId === compraGrande.id)!.purchaseServiceId;
 }, 30000);
 
 afterAll(async () => {
@@ -350,11 +377,49 @@ describe("crear un turno de depilación", () => {
    * hace, no cuándo. Si se perdieran, el recibo quedaría sin detalle y la
    * trazabilidad —que es la mitad de por qué existe esta tabla— se borraría
    * cada vez que una clienta cambia el día.
+   *
+   * Ronda de arreglos 2 (Critical): antes de este arreglo,
+   * `rescheduleAppointment` recalculaba la duración desde
+   * `service.estimated_duration_minutes` del ancla (30', un valor de
+   * relleno de la migración 1.56.0) en vez de conservar la que el turno ya
+   * tenía. Contar filas de zonas no lo agarraba —las filas sobrevivían
+   * igual, sólo quedaban desincronizadas con el bloque real—, así que ahora
+   * también se verifica `durationMinutes` (no cambia) y `appointmentEnd`
+   * (consistente con el nuevo inicio).
    */
-  it("reagendar conserva las zonas del turno", async () => {
-    await rescheduleAppointment(db, turno1Id, "2026-10-12T13:00:00.000Z");
+  it("reagendar conserva las zonas y la duración del turno", async () => {
+    const reagendado = await rescheduleAppointment(db, turno1Id, "2026-10-12T13:00:00.000Z");
+    expect(reagendado).not.toBeNull();
+    expect(reagendado!.durationMinutes).toBe(12);
+    expect(reagendado!.appointmentEnd).toEqual(new Date("2026-10-12T13:12:00.000Z"));
+
     const zonas = await zonasDelTurno(turno1Id);
     expect(zonas).toHaveLength(2);
+  });
+
+  /**
+   * Ronda de arreglos 2, el caso que más plata cuesta: un turno de MÁS de
+   * 30' (el valor de relleno del ancla). Si el bug siguiera vivo, reagendar
+   * lo encogería a 30' y liberaría 6' que la clienta pagó y va a ocupar —acá
+   * son 36', pero con un pack más grande la agenda dejaría entrar a otra
+   * persona encima de tiempo comprometido.
+   */
+  it("reagendar un turno de más de 30' no lo encoge al valor de relleno del ancla", async () => {
+    const turno = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-10-05T20:00:00.000Z",
+      customerPurchaseServiceId: lineaGrandeId,
+      zonas: zonasGrandesIds,
+      notes: QA,
+    });
+    expect(turno.durationMinutes).toBe(36);
+
+    const reagendado = await rescheduleAppointment(db, turno.id, "2026-10-12T20:00:00.000Z");
+    expect(reagendado).not.toBeNull();
+    expect(reagendado!.durationMinutes).toBe(36);
+    expect(reagendado!.appointmentEnd).toEqual(new Date("2026-10-12T20:36:00.000Z"));
   });
 
   /**
