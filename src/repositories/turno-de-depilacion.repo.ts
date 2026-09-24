@@ -4,6 +4,8 @@ import { bodyZone, customerPurchase, customerPurchaseService, depilationComboZon
 import type { Categoria, Sexo } from "../lib/depilation-pricing";
 import { notFound } from "../lib/errors";
 import { armarMenu, type ZonaDelMenu, type ZonaDelPack } from "../lib/menu-de-zonas";
+import { puertaDePago, type EstadoDePuerta } from "../lib/puerta-de-pago";
+import { getPagadoDeCompra } from "./compras.repo";
 import { sexoDeLaClienta } from "./clientes-sexo.repo";
 import { lineasDeDepilacionLibres } from "./consumo.repo";
 import { leerConfig, obtenerCombo } from "./depilacion.repo";
@@ -17,6 +19,8 @@ export type DatosParaAgendar = {
   presupuestoMinutos: number;
   sexo: Sexo;
   zonas: ZonaDelMenu[];
+  /** Si esta sesión se puede AGENDAR o sólo RESERVAR (Task 13). */
+  puerta: EstadoDePuerta;
 };
 
 /**
@@ -37,6 +41,16 @@ async function customerIdDePurchaseService(
     .where(eq(customerPurchaseService.id, purchaseServiceId))
     .limit(1);
   return fila?.customerId ?? null;
+}
+
+/** El `final_amount` de la compra, para la puerta de pago. */
+async function finalAmountDeCompra(db: Db, purchaseId: string): Promise<number> {
+  const [fila] = await db
+    .select({ finalAmount: customerPurchase.finalAmount })
+    .from(customerPurchase)
+    .where(eq(customerPurchase.id, purchaseId))
+    .limit(1);
+  return Number(fila?.finalAmount ?? 0);
 }
 
 /**
@@ -137,16 +151,34 @@ export async function datosParaAgendar(
 
   const sexo = sexoPedido ?? (await sexoDeLaClienta(db, customerId));
 
-  const [combo, config, pack, catalogo, sesionesTotales] = await Promise.all([
+  const [combo, config, pack, catalogo, sesionesTotales, finalAmount, pagado] = await Promise.all([
     obtenerCombo(db, linea.depilationComboId, sexo),
     leerConfig(db),
     zonasDelPack(db, linea.depilationComboId),
     zonasActivasDelCatalogo(db),
     sesionesTotalesDelPack(db, linea.purchaseId, linea.depilationComboId),
+    finalAmountDeCompra(db, linea.purchaseId),
+    // "Lo pagado" es la MISMA cuenta que usa la ficha de la compra
+    // (`getPagadoDeCompra`, "la única definición del saldo"): la suma de los
+    // `payments` CONFIRMADOS de esa compra. Inventar una consulta propia acá
+    // podría mostrarle a Laura dos números distintos para lo mismo.
+    getPagadoDeCompra(db, linea.purchaseId),
   ]);
   if (!combo) throw notFound("Pack de depilación");
 
   const zonas = armarMenu(pack, catalogo, combo.choiceZoneCount, sexo, config);
+
+  // Cuántas sesiones de ESTA MISMA compra siguen libres — incluida esta línea
+  // — para saber si es la última (puerta de pago, Task 13).
+  const sesionesLibres = libres.filter((l) => l.purchaseId === linea.purchaseId).length;
+
+  const puerta = puertaDePago({
+    finalAmount,
+    pagado,
+    esPaquete: linea.esPaquete,
+    sesionesTotales,
+    sesionesLibres,
+  });
 
   return {
     nombreDelPack: linea.nombreDelPack,
@@ -155,5 +187,6 @@ export async function datosParaAgendar(
     presupuestoMinutos: combo.duracionMinutos,
     sexo,
     zonas,
+    puerta,
   };
 }

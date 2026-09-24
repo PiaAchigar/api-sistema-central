@@ -10,6 +10,7 @@ import {
   customerPurchase,
   depilationCombo,
   machines,
+  payments,
   serviceMachine,
   serviceProviderAvailability,
   serviceProviderMachine,
@@ -37,6 +38,12 @@ import { createAppointment, rescheduleAppointment, updateAppointmentStatus } fro
  * La base local no trae ninguna proveedora habilitada para el servicio ancla
  * (no se vende de por sí, así que nadie la cargó) ni la máquina que exige
  * `requires_machine`: las dos se arman acá como fixture.
+ *
+ * Task 13 (puerta de pago): las compras de este archivo se registran con su
+ * pago CONFIRMADO completo (`payments`, ver `comprar`) para que los tests de
+ * Task 12 —que no son sobre plata— sigan agendando sin chocar con la puerta.
+ * La compra `IMPAGA`, sin pago, es la única a propósito: existe para probar
+ * que el servidor la rechaza.
  */
 
 const LOCAL_DB_URL = "postgresql://piubella:piubella@localhost:5499/piubella";
@@ -66,6 +73,7 @@ let lineaConsumeId: string;
 let lineaRechazoId: string;
 let lineaSinZonasId: string;
 let lineaGrandeId: string;
+let lineaImpagaId: string;
 
 let turno1Id: string;
 
@@ -91,9 +99,11 @@ async function limpiar() {
     .from(customerPurchase)
     .where(like(customerPurchase.description, `${QA}%`));
   if (compras.length > 0) {
-    await db.delete(customerPurchase).where(
-      inArray(customerPurchase.id, compras.map((c) => c.id)),
-    );
+    const compraIds = compras.map((c) => c.id);
+    // `payments.customer_purchase_id` NO cascadea (FK sin ON DELETE): borrar
+    // la compra con un pago colgando revienta la FK. Se borra antes.
+    await db.delete(payments).where(inArray(payments.customerPurchaseId, compraIds));
+    await db.delete(customerPurchase).where(inArray(customerPurchase.id, compraIds));
   }
 
   // Cascada a `appointment_body_zone` (ON DELETE CASCADE, migración 1.56.0).
@@ -240,10 +250,15 @@ beforeAll(async () => {
     isActive: true,
   });
 
-  // Cuatro compras, cada una con UNA sesión libre de su pack — así cada test
+  // Cinco compras, cada una con UNA sesión libre de su pack — así cada test
   // consume la suya sin pisarle la sesión a otro.
-  const comprar = (sufijo: string, comboId: string) =>
-    createCompra(db, {
+  //
+  // Task 13: se pagan ENTERAS y CONFIRMADAS al comprar. Estos tests son de
+  // Task 12 (zonas, duración, reagendado) y no de plata — sin el pago, la
+  // puerta de pago los rechazaría a todos con "se paga entero" (compra de
+  // UNA sola sesión).
+  const comprar = async (sufijo: string, comboId: string) => {
+    const compra = await createCompra(db, {
       customerId: CUSTOMER_ID,
       depilationComboId: comboId,
       description: `${QA}_COMPRA_${sufijo}`,
@@ -252,6 +267,19 @@ beforeAll(async () => {
       discountedAmount: 90000,
       finalAmount: 90000,
     });
+    const ahora = new Date();
+    await db.insert(payments).values({
+      customerId: CUSTOMER_ID,
+      customerPurchaseId: compra.id,
+      amount: "90000",
+      paymentMethod: "cash",
+      status: "confirmed",
+      paymentDate: ahora,
+      isDeclared: true,
+      confirmedAt: ahora,
+    });
+    return compra;
+  };
 
   const compraTurno1 = await comprar("TURNO1", packAId);
   const compraConsume = await comprar("CONSUME", packAId);
@@ -259,12 +287,24 @@ beforeAll(async () => {
   const compraSinZonas = await comprar("SINZONAS", packAId);
   const compraGrande = await comprar("GRANDE", packCId);
 
+  // La única compra A PROPÓSITO sin pago: existe para probar la puerta.
+  const compraImpaga = await createCompra(db, {
+    customerId: CUSTOMER_ID,
+    depilationComboId: packAId,
+    description: `${QA}_COMPRA_IMPAGA`,
+    sessionsTotal: 1,
+    baseAmount: 90000,
+    discountedAmount: 90000,
+    finalAmount: 90000,
+  });
+
   const libres = await lineasDeDepilacionLibres(db, CUSTOMER_ID, new Date());
   lineaTurno1Id = libres.find((l) => l.purchaseId === compraTurno1.id)!.purchaseServiceId;
   lineaConsumeId = libres.find((l) => l.purchaseId === compraConsume.id)!.purchaseServiceId;
   lineaRechazoId = libres.find((l) => l.purchaseId === compraRechazo.id)!.purchaseServiceId;
   lineaSinZonasId = libres.find((l) => l.purchaseId === compraSinZonas.id)!.purchaseServiceId;
   lineaGrandeId = libres.find((l) => l.purchaseId === compraGrande.id)!.purchaseServiceId;
+  lineaImpagaId = libres.find((l) => l.purchaseId === compraImpaga.id)!.purchaseServiceId;
 }, 30000);
 
 afterAll(async () => {
@@ -432,5 +472,45 @@ describe("crear un turno de depilación", () => {
     await updateAppointmentStatus(db, turno1Id, { status: "cancelled" });
     const libres = await lineasDeDepilacionLibres(db, CUSTOMER_ID, new Date());
     expect(libres.find((l) => l.purchaseServiceId === lineaTurno1Id)).toBeDefined();
+  });
+
+  /**
+   * Task 13 — la puerta de pago. `lineaImpagaId` es una compra de UNA sola
+   * sesión sin ningún pago: "se paga entero" por los dos caminos (es la
+   * primera Y la última). El servidor la vuelve a evaluar acá — no se confía
+   * en la pantalla: entre que Laura abrió el modal y apretó Vender, otra
+   * pestaña pudo haber devuelto plata.
+   */
+  it("el servidor no confía en la pantalla: sin pagar, rechaza el turno", async () => {
+    await expect(
+      createAppointment(db, {
+        customerId: CUSTOMER_ID,
+        serviceId: anclaId,
+        providerId: proveedoraId,
+        start: "2026-10-05T22:00:00.000Z",
+        customerPurchaseServiceId: lineaImpagaId,
+        zonas: [piernaId, axilaId],
+        status: "scheduled",
+        notes: QA,
+      }),
+    ).rejects.toThrow(/se paga entero/i);
+  });
+
+  // Reservar guarda el lugar 24 h y no cobra nada: la guarda de pago aplica
+  // a AGENDAR, no a reservar. Misma línea impaga del test anterior — el
+  // rechazo de arriba no llegó a tomarla.
+  it("pero la reserva de 24 h pasa igual", async () => {
+    const reserva = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-10-05T22:00:00.000Z",
+      customerPurchaseServiceId: lineaImpagaId,
+      zonas: [piernaId, axilaId],
+      status: "reserved",
+      expiryMinutes: 1440,
+      notes: QA,
+    });
+    expect(reserva.status).toBe("reserved");
   });
 });

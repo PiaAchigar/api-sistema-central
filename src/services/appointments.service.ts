@@ -124,6 +124,17 @@ export async function createAppointment(
     if (durationMinutes > datos.presupuestoMinutos) {
       throw badRequest("Las zonas elegidas no entran en el presupuesto del pack");
     }
+
+    // La puerta de pago (Task 13): reservar guarda el lugar sin cobrar nada,
+    // pero agendar exige estar al día. Se evalúa de nuevo acá y no se confía
+    // en la pantalla: entre que Laura abrió el modal y apretó el botón, otra
+    // pestaña pudo haber devuelto plata. `datos` ya salió de una lectura
+    // fresca de `datosParaAgendar` para ESTE request, así que no hace falta
+    // volver a consultarla.
+    if (input.status !== "reserved" && !datos.puerta.puedeAgendar) {
+      throw badRequest(`${datos.puerta.motivo} (falta $${datos.puerta.faltaCobrar})`);
+    }
+
     zonasParaGuardar = input.zonas!.map((id) => ({
       bodyZoneId: id,
       // Congelado: si mañana Laura cambia la config, este turno no cambia de
