@@ -549,6 +549,8 @@ export type DepilationComboRow = {
   packSessions: number | null;
   packDiscountPercentage: number | null;
   packRoundingBase: number | null;
+  /** 1.56.0 — Meses de vigencia del pack. NULL = no vence. */
+  validityMonths: number | null;
   isPublishedWeb: boolean;
   displayOrder: number;
   isActive: boolean;
@@ -580,6 +582,8 @@ export type DepilationComboAssembled = {
   packSessions: number | null;
   packDiscountPercentage: number | null;
   packRoundingBase: number | null;
+  /** 1.56.0 — Meses de vigencia del pack. NULL = no vence. */
+  validityMonths: number | null;
   isPublishedWeb: boolean;
   displayOrder: number;
   isActive: boolean;
@@ -677,6 +681,7 @@ export function assembleDepilationCombo(
     packSessions: combo.packSessions,
     packDiscountPercentage: combo.packDiscountPercentage,
     packRoundingBase: combo.packRoundingBase,
+    validityMonths: combo.validityMonths,
     isPublishedWeb: combo.isPublishedWeb,
     displayOrder: combo.displayOrder,
     isActive: combo.isActive,
@@ -705,6 +710,7 @@ const comboFields = {
   packSessions: depilationCombo.packSessions,
   packDiscountPercentage: depilationCombo.packDiscountPercentage,
   packRoundingBase: depilationCombo.packRoundingBase,
+  validityMonths: depilationCombo.validityMonths,
   isPublishedWeb: depilationCombo.isPublishedWeb,
   displayOrder: depilationCombo.displayOrder,
   isActive: depilationCombo.isActive,
@@ -764,6 +770,8 @@ export type DepilationComboInput = {
   packSessions?: number | null;
   packDiscountPercentage?: number | null;
   packRoundingBase?: number | null;
+  /** 1.56.0 — Meses de vigencia del pack. NULL/ausente = no vence. */
+  validityMonths?: number | null;
 };
 
 export type ComboKindYPrecio = { kind: string; fixedPrice: string | number | null };
@@ -840,6 +848,7 @@ export async function crearCombo(
         packSessions: input.packSessions ?? null,
         packDiscountPercentage: input.packDiscountPercentage ?? null,
         packRoundingBase: input.packRoundingBase ?? null,
+        validityMonths: input.validityMonths ?? null,
         isPublishedWeb: input.isPublishedWeb ?? false,
         displayOrder: input.displayOrder ?? 0,
         isActive: true,
@@ -872,6 +881,7 @@ export async function actualizarCombo(
         packSessions: input.packSessions ?? null,
         packDiscountPercentage: input.packDiscountPercentage ?? null,
         packRoundingBase: input.packRoundingBase ?? null,
+        validityMonths: input.validityMonths ?? null,
         isPublishedWeb: input.isPublishedWeb ?? false,
         displayOrder: input.displayOrder ?? 0,
         updatedAt: new Date(),

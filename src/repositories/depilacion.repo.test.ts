@@ -162,6 +162,7 @@ describe("assembleDepilationCombo — por sexo (1.56.0)", () => {
       packSessions: null,
       packDiscountPercentage: null,
       packRoundingBase: null,
+      validityMonths: null,
       isPublishedWeb: false,
       displayOrder: 0,
       isActive: true,

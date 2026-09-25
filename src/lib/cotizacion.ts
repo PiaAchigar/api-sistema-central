@@ -66,6 +66,15 @@ export type ItemVendible =
       /** Lo que sale UNA sesión, sin ningún descuento. */
       unitario: number;
       politica: PackPolitica;
+      /**
+       * Meses de vigencia del pack. NULL = no vence.
+       *
+       * Sólo depilación lo carga hoy (1.56.0, `depilation_combo.validity_months`);
+       * servicio y capacitación quedan sin plazo, como siempre. Opcional (no
+       * `null` a secas) para no obligar a todos los constructores viejos de
+       * esta variante a declararlo.
+       */
+      validityMonths?: number | null;
     };
 
 export type PromoVendible = {
@@ -159,9 +168,11 @@ export function cotizar(
     description: describir(item.nombre, sesiones, esPack),
     sessionsTotal: sesiones,
     promotionId: promo?.id ?? null,
-    // Ni depilación ni los servicios tienen vencimiento cargado hoy (§9 del
-    // spec). Va NULL, que es "no vence", y no una fecha inventada.
-    expiresAt: null,
+    // Depilación puede vencer desde la 1.56.0; los servicios sueltos siguen
+    // sin plazo. `validityMonths` NULL = no vence, que es lo que valía para
+    // todas las compras anteriores.
+    expiresAt:
+      item.validityMonths == null ? null : sumarMeses(compradoEl, item.validityMonths),
   };
 }
 

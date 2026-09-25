@@ -217,6 +217,7 @@ export async function listCatalogoVendible(db: Db) {
             nombre: c.name,
             unitario: c.precioFinal,
             politica: { sesiones: c.pack.sesiones, descuentoPct: c.pack.descuentoPct, redondeo: c.pack.redondeo },
+            validityMonths: c.validityMonths,
           },
           {
             descripcion: texto(c.description),
@@ -283,6 +284,7 @@ export async function obtenerItemVendible(
         descuentoPct: c.pack.descuentoPct,
         redondeo: c.pack.redondeo,
       },
+      validityMonths: c.validityMonths,
     };
   }
 

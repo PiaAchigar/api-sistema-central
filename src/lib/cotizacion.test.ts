@@ -224,3 +224,28 @@ describe("cotizar — un pack de catálogo", () => {
     expect(() => cotizar(pack, 2, null, COMPRA)).toThrow(/de a uno/i);
   });
 });
+
+// ── Vencimiento de la depilación (1.56.0) ───────────────────────────────────
+
+describe("cotizar — la depilación ahora puede vencer (1.56.0)", () => {
+  const pack = {
+    origen: "depilacion" as const, id: "d1", nombre: "Pierna entera",
+    unitario: 19000, validityMonths: 12,
+    politica: { sesiones: 3, descuentoPct: 15, redondeo: 1000 },
+  };
+
+  it("calcula el vencimiento desde la fecha de compra", () => {
+    const q = cotizar(pack, 3, null, new Date("2026-09-23T12:00:00Z"));
+    expect(q.expiresAt?.toISOString().slice(0, 10)).toBe("2027-09-23");
+  });
+
+  /**
+   * Las compras anteriores a la 1.56.0 no tienen plazo, y no se les inventa
+   * uno retroactivo: nadie le vendió a esa clienta un vencimiento que no
+   * existía cuando compró.
+   */
+  it("sin meses cargados no vence, como todas las compras anteriores", () => {
+    const q = cotizar({ ...pack, validityMonths: null }, 3, null, new Date());
+    expect(q.expiresAt).toBeNull();
+  });
+});
