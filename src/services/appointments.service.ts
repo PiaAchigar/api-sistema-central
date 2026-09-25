@@ -3,6 +3,7 @@ import type { Db } from "../db/client";
 import { appointmentBodyZone } from "../db/schema";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { subtractAll, type Interval } from "../lib/intervals";
+import type { Sexo } from "../lib/depilation-pricing";
 import { minutosElegidos } from "../lib/menu-de-zonas";
 import {
   filaDeReagendado,
@@ -115,7 +116,7 @@ export async function createAppointment(
   let durationMinutes = ctx.durationMinutes;
   let zonasParaGuardar: { bodyZoneId: string; minutos: number }[] = [];
   if (esDepilacion) {
-    const datos = await datosParaAgendar(db, input.customerPurchaseServiceId!);
+    const datos = await datosParaAgendar(db, input.customerPurchaseServiceId!, input.sexo);
     const menuPorId = new Map(datos.zonas.map((z) => [z.id, z]));
     for (const zonaId of input.zonas!) {
       const zonaMenu = menuPorId.get(zonaId);

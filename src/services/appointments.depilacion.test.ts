@@ -651,3 +651,87 @@ describe("puerta de pago al confirmar una reserva (Task 13, ronda 1)", () => {
     ).rejects.toThrow(/se paga entero.*falta \$90000/i);
   });
 });
+
+/**
+ * Ronda de arreglos 3 (Critical 2). `GET /para-agendar/:id?sexo=` respeta el
+ * override y la pantalla dibuja el menú con ESOS minutos, pero `POST
+ * /appointments` no aceptaba `sexo` y `createAppointment` volvía a llamar a
+ * `datosParaAgendar` sin él: el servidor recalculaba con el sexo de la ficha
+ * (o "mujer" si está en NULL, que es el caso normal — la columna es nueva y
+ * los contactos viejos están sin clasificar).
+ *
+ * Resultado: la pantalla decía 15 min y la base guardaba 12. La agenda dejaba
+ * entrar a la clienta siguiente sobre 3 minutos comprometidos y los minutos
+ * congelados —que existen para que un turno viejo no cambie— quedaban
+ * congelados mal. Es el problema de §3.2 que esta rama existe para arreglar,
+ * sólo que en silencio.
+ */
+describe("el sexo elegido al agendar (ronda 3)", () => {
+  /** Una compra paga con UNA sesión libre del pack A (presupuesta 30'). */
+  async function lineaLibrePaga(sufijo: string) {
+    const compra = await createCompra(db, {
+      customerId: CUSTOMER_ID,
+      depilationComboId: packAId,
+      description: `${QA}_COMPRA_${sufijo}`,
+      sessionsTotal: 1,
+      baseAmount: 90000,
+      discountedAmount: 90000,
+      finalAmount: 90000,
+    });
+    const ahora = new Date();
+    await db.insert(payments).values({
+      customerId: CUSTOMER_ID,
+      customerPurchaseId: compra.id,
+      amount: "90000",
+      paymentMethod: "cash",
+      status: "confirmed",
+      paymentDate: ahora,
+      isDeclared: true,
+      confirmedAt: ahora,
+    });
+    const libres = await lineasDeDepilacionLibres(db, CUSTOMER_ID, new Date());
+    return libres.find((l) => l.purchaseId === compra.id)!.purchaseServiceId;
+  }
+
+  /**
+   * La clienta del seed tiene el sexo en NULL, así que sin `sexo` el servidor
+   * la trata como mujer: pierna(9) + axila(3) = 12'. Con el selector en
+   * Hombre son pierna(10) + axila(5) = 15'. Los tres números que tienen que
+   * coincidir son el bloque de agenda, el fin del turno y los minutos
+   * congelados de cada zona.
+   */
+  it("un turno agendado en Hombre dura los minutos de hombre, y los congela así", async () => {
+    const lineaId = await lineaLibrePaga("SEXO_HOMBRE");
+    const turno = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-10-19T13:00:00.000Z",
+      customerPurchaseServiceId: lineaId,
+      zonas: [piernaId, axilaId],
+      sexo: "hombre",
+      notes: QA,
+    });
+
+    expect(turno.durationMinutes).toBe(15);
+    expect(turno.appointmentEnd).toEqual(new Date("2026-10-19T13:15:00.000Z"));
+
+    const zonas = await zonasDelTurno(turno.id);
+    expect(zonas.find((z) => z.bodyZoneId === piernaId)!.minutos).toBe(10);
+    expect(zonas.find((z) => z.bodyZoneId === axilaId)!.minutos).toBe(5);
+  });
+
+  it("sin mandar sexo sigue saliendo el de la ficha (NULL ⇒ mujer): 12'", async () => {
+    const lineaId = await lineaLibrePaga("SEXO_AUTO");
+    const turno = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-10-19T15:00:00.000Z",
+      customerPurchaseServiceId: lineaId,
+      zonas: [piernaId, axilaId],
+      notes: QA,
+    });
+    expect(turno.durationMinutes).toBe(12);
+  });
+});

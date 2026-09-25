@@ -126,6 +126,10 @@ export const createBody = z.object({
   /** Las zonas elegidas para un turno de depilación (1.56.0). Ver
    *  `CreateAppointmentInput.zonas`. */
   zonas: z.array(z.string().uuid()).optional(),
+  /** El selector de sexo del turno (1.56.0, §3.3a). Ver
+   *  `CreateAppointmentInput.sexo`: sin esto el servidor recalculaba la
+   *  duración con el sexo de la ficha aunque la pantalla mostrara el otro. */
+  sexo: z.enum(["mujer", "hombre"]).optional(),
   deposit: z
     .object({
       amount: z.number().positive(),
