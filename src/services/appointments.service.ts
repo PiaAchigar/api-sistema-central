@@ -18,7 +18,7 @@ import {
   updateAppointment,
 } from "../repositories/appointments.repo";
 import { recordReschedule } from "../repositories/appointment-reschedule.repo";
-import { anclaDeDepilacion } from "../repositories/ancla-de-depilacion.repo";
+import { anclaDeDepilacionOpcional } from "../repositories/ancla-de-depilacion.repo";
 import { creditCustomer, getCustomerById } from "../repositories/customers.repo";
 import { cancelDeal, getDealByAppointmentId } from "../repositories/deals.repo";
 import { getActiveAgreement } from "../repositories/providers.repo";
@@ -78,8 +78,11 @@ export async function createAppointment(
   if (Number.isNaN(startDate.getTime())) throw badRequest("Fecha de inicio inválida");
   if (startDate.getTime() < Date.now()) throw badRequest("El turno no puede ser en el pasado");
 
-  const ancla = await anclaDeDepilacion(db);
-  const esDepilacion = input.serviceId === ancla;
+  // `...Opcional` y no la que tira: si la 1.56.0 todavía no se aplicó, "no
+  // hay ancla" significa "ningún turno es de depilación" y el turnero del
+  // salón sigue andando. Ver `ancla-de-depilacion.repo.ts`.
+  const ancla = await anclaDeDepilacionOpcional(db);
+  const esDepilacion = ancla != null && input.serviceId === ancla;
 
   if (esDepilacion) {
     if (!input.customerPurchaseServiceId) {
@@ -338,8 +341,8 @@ export async function updateAppointmentStatus(
       changes.status !== "cancelled" &&
       changes.status !== "no_show";
     if (dejaLaReserva) {
-      const ancla = await anclaDeDepilacion(db);
-      if (appt.serviceId === ancla) {
+      const ancla = await anclaDeDepilacionOpcional(db);
+      if (ancla != null && appt.serviceId === ancla) {
         // `puertaDeLaReserva` y no `datosParaAgendar`: a esta altura la línea
         // ya está tomada por ESTE turno, así que `lineasDeDepilacionLibres`
         // ya no la ve libre — `datosParaAgendar` la busca ahí y tira
@@ -470,8 +473,8 @@ export async function rescheduleAppointment(
   // `endDate`, la franja del historial y el UPDATE final tienen que ver el
   // mismo número, o se valida disponibilidad contra una duración y se guarda
   // otra.
-  const ancla = await anclaDeDepilacion(db);
-  const esDepilacion = appt.serviceId === ancla;
+  const ancla = await anclaDeDepilacionOpcional(db);
+  const esDepilacion = ancla != null && appt.serviceId === ancla;
   const durationMinutes = esDepilacion ? appt.durationMinutes ?? ctx.durationMinutes : ctx.durationMinutes;
 
   const startMin = utcToLocalMinutes(startDate);

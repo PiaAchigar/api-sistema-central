@@ -5,7 +5,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import * as schema from "../db/schema";
 import { service, serviceProviders, serviceProviderService } from "../db/schema";
 import type { Db } from "../db/client";
-import { anclaDeDepilacion } from "./ancla-de-depilacion.repo";
+import { anclaDeDepilacion, anclaDeDepilacionOpcional } from "./ancla-de-depilacion.repo";
 import { listCatalogoVendible } from "./catalogo-venta.repo";
 import { listServices, listServicesForProvider } from "./services.repo";
 
@@ -62,6 +62,33 @@ describe("el servicio ancla", () => {
  * ninguna proveedora habilitada para el ancla: no se vende, así que nadie la
  * cargó.
  */
+/**
+ * Ronda de arreglos 3 (Important 1). Con la 1.56.0 sin aplicar
+ * (`anchor_service_id` en NULL) hay dos lecturas distintas y las dos son
+ * correctas: donde el ancla ES el trabajo, falta el ancla es un error; donde
+ * sólo se pregunta "¿este turno es de depilación?", la respuesta es "no" y la
+ * agenda del salón sigue andando.
+ *
+ * Se prueba con una base de mentira —tres métodos encadenados que devuelven
+ * una fila vacía— y no poniendo la columna en NULL: `anchor_service_id` es
+ * GLOBAL y dejarla en NULL aunque sea un instante rompería a cualquier otro
+ * archivo de la suite que corra en paralelo.
+ */
+describe("sin ancla cargada (migración 1.56.0 sin aplicar)", () => {
+  /** Una base que devuelve cero filas para el `select` del ancla. */
+  const dbVacia = {
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+  } as unknown as Db;
+
+  it("la versión que tira, tira: sin ancla no se puede armar un turno de depilación", async () => {
+    await expect(anclaDeDepilacion(dbVacia)).rejects.toThrow(/1\.56\.0/);
+  });
+
+  it("la opcional devuelve null en vez de tirar: la agenda general no depende del ancla", async () => {
+    await expect(anclaDeDepilacionOpcional(dbVacia)).resolves.toBeNull();
+  });
+});
+
 describe("el ancla tampoco se ofrece en los servicios de una proveedora", () => {
   const QA = "ZZ_QA_ANCLA_PROV";
   let proveedoraId: string;
