@@ -32,6 +32,7 @@ import {
   obtenerZona,
   obtenerCombo,
 } from "../../repositories/depilacion.repo";
+import { anclaDeDepilacion } from "../../repositories/ancla-de-depilacion.repo";
 import { createCompra } from "../../repositories/compras.repo";
 import { createPromotion, deletePromotionPermanently } from "../../repositories/promotions.repo";
 import * as schema from "../../db/schema";
@@ -2327,6 +2328,23 @@ describe("GET /para-agendar/:purchaseServiceId (integración real)", () => {
     // Compra suelta, sin promo: acá `sessions_total` de la cabecera SÍ
     // coincide con las líneas reales — el caso que no estaba roto.
     expect(body.sesionesTotales).toBe(2);
+  });
+
+  /**
+   * Task 15, ronda de arreglos 1: el `serviceId` que viaja acá tiene que ser
+   * el ancla DE VERDAD — comparado contra `anclaDeDepilacion(db)`, no contra
+   * un uuid escrito a mano, porque ese id se genera con `gen_random_uuid()`
+   * en la migración y cambia de una base a otra.
+   */
+  it("el serviceId que devuelve es el servicio ancla de depilación", async () => {
+    const res = await testApp.request(
+      `/para-agendar/${purchaseServiceLibreId}`,
+      { headers: ADMIN_HEADERS },
+      ADMIN_ENV,
+    );
+    const body = (await res.json()) as { serviceId: string };
+    const ancla = await anclaDeDepilacion(testDb);
+    expect(body.serviceId).toBe(ancla);
   });
 
   it("con sexo=hombre devuelve más presupuesto por las mismas zonas", async () => {

@@ -5,6 +5,7 @@ import type { Categoria, Sexo } from "../lib/depilation-pricing";
 import { notFound } from "../lib/errors";
 import { armarMenu, type ZonaDelMenu, type ZonaDelPack } from "../lib/menu-de-zonas";
 import { puertaDePago, type EstadoDePuerta } from "../lib/puerta-de-pago";
+import { anclaDeDepilacion } from "./ancla-de-depilacion.repo";
 import { getPagadoDeCompra } from "./compras.repo";
 import { sexoDeLaClienta } from "./clientes-sexo.repo";
 import { lineasDeDepilacionLibres, type LineaDeDepilacion } from "./consumo.repo";
@@ -21,6 +22,19 @@ export type DatosParaAgendar = {
   zonas: ZonaDelMenu[];
   /** Si esta sesión se puede AGENDAR o sólo RESERVAR (Task 13). */
   puerta: EstadoDePuerta;
+  /**
+   * El `service` ancla de depilación (Task 15, ronda de arreglos 1): el
+   * `serviceId` que la pantalla tiene que mandar en `POST /appointments` y
+   * el que necesita para pedir qué prestadoras ofrecen la sesión.
+   *
+   * El ancla NO vive en ningún catálogo que la pantalla pueda consultar por
+   * su cuenta — `listServices` la excluye a propósito (`services.repo.ts`:
+   * "no es un servicio que Laura cargue, edite o borre") porque no se
+   * vende, es plomería interna para colgarle proveedoras y máquina. Este
+   * endpoint es el único lugar donde la pantalla puede enterarse de qué
+   * UUID es: si no viaja acá, no hay forma de armar el turno.
+   */
+  serviceId: string;
 };
 
 /**
@@ -252,12 +266,13 @@ export async function datosParaAgendar(
 
   const sexo = sexoPedido ?? (await sexoDeLaClienta(db, customerId));
 
-  const [combo, config, pack, catalogo, sesionesTotales] = await Promise.all([
+  const [combo, config, pack, catalogo, sesionesTotales, serviceId] = await Promise.all([
     obtenerCombo(db, linea.depilationComboId, sexo),
     leerConfig(db),
     zonasDelPack(db, linea.depilationComboId),
     zonasActivasDelCatalogo(db),
     sesionesTotalesDelPack(db, linea.purchaseId, linea.depilationComboId),
+    anclaDeDepilacion(db),
   ]);
   if (!combo) throw notFound("Pack de depilación");
 
@@ -281,5 +296,6 @@ export async function datosParaAgendar(
     sexo,
     zonas,
     puerta,
+    serviceId,
   };
 }
