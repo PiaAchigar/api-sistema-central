@@ -57,9 +57,17 @@ describe("searchTreatments — el ancla de depilación no aparece en el buscador
   // similitud posible (1.0) contra la misma query.
   const EMBEDDING = Array(1536).fill(0.05);
   const VECTOR_LITERAL = `[${EMBEDDING.join(",")}]`;
+  // Ortogonal al de arriba (mitad +1, mitad -1: producto punto 0 contra un
+  // vector constante) ⇒ similitud 0.0 exacta. Ronda de arreglos 3, Minor 4:
+  // es el ÚNICO fixture que distingue `similarityThreshold: 0` del default
+  // 0.3 — con los dos de similitud 1.0, pasar mal el nombre de la opción no
+  // cambiaba ningún resultado y el test verde tapaba el error de `tsc`.
+  const ORTOGONAL = Array.from({ length: 1536 }, (_, i) => (i % 2 === 0 ? 1 : -1));
+  const VECTOR_ORTOGONAL = `[${ORTOGONAL.join(",")}]`;
 
   let anclaId: string;
   let normalId: string;
+  let lejanoId: string;
 
   async function limpiar() {
     // Cascada: borrar el `service` se lleva puesta su fila de
@@ -82,12 +90,20 @@ describe("searchTreatments — el ancla de depilación no aparece en el buscador
       .returning({ id: service.id });
     normalId = normal!.id;
 
+    const [lejano] = await db
+      .insert(service)
+      .values({ name: `${QA}_LEJANO`, isActive: true, noVendible: false })
+      .returning({ id: service.id });
+    lejanoId = lejano!.id;
+
     // Local NO dispara ningún trigger de sync (no existe en esta base;
     // `service_embeddings` arranca vacía): se inserta la fila a mano, sin
     // pasar por la API de embeddings.
     await db.execute(
       sql`INSERT INTO service_embeddings (service_id, embedding)
-          VALUES (${anclaId}, ${VECTOR_LITERAL}::vector), (${normalId}, ${VECTOR_LITERAL}::vector)`,
+          VALUES (${anclaId}, ${VECTOR_LITERAL}::vector),
+                 (${normalId}, ${VECTOR_LITERAL}::vector),
+                 (${lejanoId}, ${VECTOR_ORTOGONAL}::vector)`,
     );
   });
 
@@ -97,12 +113,27 @@ describe("searchTreatments — el ancla de depilación no aparece en el buscador
   });
 
   it("NO incluye al ancla (no_vendible = true) aunque matchee perfecto", async () => {
-    const { treatments } = await searchTreatments(db, EMBEDDING, { threshold: 0, limit: 100 });
+    const { treatments } = await searchTreatments(db, EMBEDDING, { similarityThreshold: 0, limit: 100 });
     expect(treatments.find((t) => t.id === anclaId)).toBeUndefined();
   });
 
   it("sí incluye a un servicio normal (no_vendible = false) con el mismo match", async () => {
-    const { treatments } = await searchTreatments(db, EMBEDDING, { threshold: 0, limit: 100 });
+    const { treatments } = await searchTreatments(db, EMBEDDING, { similarityThreshold: 0, limit: 100 });
     expect(treatments.find((t) => t.id === normalId)).toBeDefined();
+  });
+
+  /**
+   * Ronda de arreglos 3 (Minor 4). La opción se llama `similarityThreshold`;
+   * estos tests la pasaban como `threshold`, que no existe en la firma — un
+   * no-op que dejaba entrar el default 0.3 y, de paso, era el único error de
+   * `tsc` que introducía la rama. El fixture ortogonal mide similitud 0.0:
+   * con el nombre correcto entra, con el nombre viejo lo filtra el 0.3.
+   */
+  it("`similarityThreshold: 0` deja entrar un match flojo que el default 0.3 filtraría", async () => {
+    const conPiso = await searchTreatments(db, EMBEDDING, { similarityThreshold: 0, limit: 100 });
+    expect(conPiso.treatments.find((t) => t.id === lejanoId)).toBeDefined();
+
+    const porDefecto = await searchTreatments(db, EMBEDDING, { limit: 100 });
+    expect(porDefecto.treatments.find((t) => t.id === lejanoId)).toBeUndefined();
   });
 });
