@@ -211,8 +211,10 @@ export async function listAppointmentsByRange(
     .where(and(...conditions))
     .orderBy(asc(appointments.appointmentStart));
 
-  // Las zonas de depilación, para que la agenda pueda mostrar "Depilación ·
-  // pierna, axila". Turno sin zonas (el caso normal) queda con [].
+  // Las zonas de depilación de cada turno del día. Turno sin zonas (el caso
+  // normal) queda con []. Igual que en `getAppointmentDetail`: hoy ningún
+  // front lo lee — está para que la grilla pueda mostrar "Depilación ·
+  // pierna, axila" cuando se construya esa parte.
   const zonasPorTurno = await getBodyZonesForAppointments(db, rows.map((r) => r.id));
   return rows.map((r) => ({ ...r, zonas: zonasPorTurno.get(r.id) ?? [] }));
 }
@@ -274,9 +276,14 @@ export async function getAppointmentDetail(db: Db, id: string) {
 
   // Mismo criterio que `listAppointmentsByRange`: un `select` aparte, no un
   // join sobre la consulta principal (que multiplicaría esta única fila por
-  // cada zona). Sin esto, abrir el detalle de un turno de depilación no dice
-  // qué se depiló — ni el recibo ni la trazabilidad, las dos razones por las
-  // que existe `appointment_body_zone`, tendrían de dónde salir acá.
+  // cada zona).
+  //
+  // **Hoy NINGUNA pantalla lee este campo** (ronda de arreglos 3, Important
+  // 5): ni `front-agenda` —su tipo `Appointment` ni siquiera declara
+  // `zonas`— ni ningún otro front. El dato viaja para que el recibo y la
+  // trazabilidad de qué se depiló tengan de dónde salir cuando esa pantalla
+  // se construya; mientras tanto es payload sin consumir, y decirlo acá es
+  // preferible a un comentario que afirme una pantalla que no existe.
   const zonasPorTurno = await getBodyZonesForAppointments(db, [row.id]);
   return { ...row, zonas: zonasPorTurno.get(row.id) ?? [] };
 }

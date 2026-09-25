@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
-import { and, eq, inArray, like, ne } from "drizzle-orm";
+import { and, eq, inArray, like, ne, notLike } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import * as schema from "../db/schema";
 import { service, serviceProviders, serviceProviderService } from "../db/schema";
@@ -112,10 +112,18 @@ describe("el ancla tampoco se ofrece en los servicios de una proveedora", () => 
     await limpiar();
     anclaId = await anclaDeDepilacion(db);
 
+    // Sin `ZZ_QA%` otro archivo de la suite podría borrar este servicio a
+    // mitad de la corrida y dejar el acuerdo colgado.
     const [normal] = await db
       .select({ id: service.id })
       .from(service)
-      .where(and(eq(service.isActive, true), ne(service.id, anclaId)))
+      .where(
+        and(
+          eq(service.isActive, true),
+          ne(service.id, anclaId),
+          notLike(service.name, "ZZ_QA%"),
+        ),
+      )
       .limit(1);
     servicioNormalId = normal!.id;
 

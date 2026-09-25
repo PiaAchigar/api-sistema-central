@@ -499,6 +499,16 @@ async function lineasDeUnPaquete(
 export type ServicioLeido = {
   id: string;
   serviceId: string | null;
+  /**
+   * El pack de depilación de ESTA línea, si es una línea de depilación
+   * (1.55.0).
+   *
+   * Viaja a la ficha del CRM porque `serviceId` en NULL no alcanza para
+   * saber qué es: las líneas de CAPACITACIÓN también lo tienen en NULL. La
+   * pastilla "A agendar" decidía por esa ausencia y sobre un instructorado
+   * abría el modal en modo depilación, que respondía 404 y quedaba en blanco.
+   */
+  depilationComboId: string | null;
   serviceName: string | null;
   repeticion: number | null;
   orden: number | null;
@@ -681,6 +691,7 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
           return {
             id: s.id,
             serviceId: s.serviceId,
+            depilationComboId: s.depilationComboId,
             serviceName: nombreDeLaLinea(s.serviceName, respaldo, s.packName ?? s.trainingName ?? null),
             repeticion: s.repeticion,
             orden: s.orden,

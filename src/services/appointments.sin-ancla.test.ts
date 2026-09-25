@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { and, eq, inArray, like, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, like, ne, notLike, sql } from "drizzle-orm";
 import * as schema from "../db/schema";
 import {
   appointments,
@@ -83,6 +83,8 @@ beforeAll(async () => {
         eq(service.isActive, true),
         ne(service.requiresMachine, true),
         ne(service.noVendible, true),
+        // Los fixtures de otros archivos van y vienen mientras éste corre.
+        notLike(service.name, "ZZ_QA%"),
         sql`${service.estimatedDurationMinutes} between 15 and 60`,
       ),
     )

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq, inArray, like, ne } from "drizzle-orm";
+import { and, eq, inArray, like, ne, notLike } from "drizzle-orm";
 import * as schema from "../db/schema";
 import {
   appointmentBodyZone,
@@ -155,10 +155,15 @@ beforeAll(async () => {
 
   anclaId = await anclaDeDepilacion(db);
 
+  // `not like 'ZZ_QA%'` no sobra: otros archivos de la suite CREAN y BORRAN
+  // servicios con ese prefijo mientras éste corre (p. ej.
+  // `compras-ficha.repo.test.ts`). Si el `limit 1` agarraba uno de esos, el
+  // turno de más abajo reventaba con `fk_appt_service` cuando el otro
+  // archivo lo borraba — la suite fallaba una de cada tres corridas por eso.
   const [normal] = await db
     .select({ id: service.id })
     .from(service)
-    .where(ne(service.id, anclaId))
+    .where(and(ne(service.id, anclaId), notLike(service.name, "ZZ_QA%")))
     .limit(1);
   servicioNormalId = normal!.id;
 
@@ -359,9 +364,10 @@ describe("crear un turno de depilación", () => {
   });
 
   /**
-   * Ronda de arreglos 1: el detalle de UN turno (`GET /:id`, lo que alimenta
-   * el recibo) también tiene que traer las zonas — sin esto, abrir un turno
-   * de depilación no dice qué se depiló.
+   * Ronda de arreglos 1: el detalle de UN turno (`GET /:id`) también trae las
+   * zonas. Ronda 3: ninguna pantalla las lee todavía —ver el comentario de
+   * `getAppointmentDetail`—, así que por ahora este test es lo único que
+   * sostiene el contrato del payload.
    */
   it("el detalle del turno trae las zonas elegidas", async () => {
     const detalle = await getAppointmentDetail(db, turno1Id);

@@ -40,6 +40,8 @@ let servicioId: string;
 let packId: string;
 let promoId: string;
 let compraId: string;
+let capacitacionId: string;
+let compraCapacitacionId: string;
 
 async function limpiar() {
   // Las compras primero: `cancelCompra` no borra, y una fila viva referencia
@@ -116,10 +118,28 @@ beforeAll(async () => {
     finalAmount: 100000,
   });
   compraId = compra.id;
+
+  // Una compra de CAPACITACIÓN suelta: sus líneas también llevan
+  // `service_id` en NULL, igual que las de depilación. Es lo que hace falta
+  // para probar que la ficha distingue una de la otra (ronda de arreglos 3,
+  // Important 3).
+  const [cap] = await db.execute<{ id: string }>("select id from training limit 1" as never);
+  capacitacionId = cap!.id;
+  const compraCap = await createCompra(db, {
+    customerId: clienteId,
+    trainingId: capacitacionId,
+    description: `${QA}_CAPACITACION`,
+    sessionsTotal: 2,
+    baseAmount: 200000,
+    discountedAmount: 200000,
+    finalAmount: 200000,
+  });
+  compraCapacitacionId = compraCap.id;
 });
 
 afterAll(async () => {
   if (compraId) await cancelCompra(db, compraId, "limpieza de test");
+  if (compraCapacitacionId) await cancelCompra(db, compraCapacitacionId, "limpieza de test");
   await limpiar();
   await pgClient.end();
 });
@@ -146,5 +166,40 @@ describe("listComprasDeCliente — cada línea dice su propio nombre (1.55.0)", 
     const lineaPack = compra!.servicios.find((s) => s.serviceId === null);
     expect(lineaPack).toBeDefined();
     expect(lineaPack!.serviceName).toBe(`${QA}_PACK`);
+  });
+});
+
+/**
+ * Ronda de arreglos 3 (Important 3). La pastilla "A agendar" del CRM decidía
+ * "esto es depilación" por la AUSENCIA de `serviceId` — pero las líneas de
+ * CAPACITACIÓN también lo tienen en NULL. Resultado: tocarla sobre un
+ * instructorado abría el modal en modo depilación, el `GET /para-agendar`
+ * daba 404 y el modal quedaba en blanco, sin ningún mensaje.
+ *
+ * La ficha tiene que decir de qué es cada línea, no dejarlo a adivinar.
+ */
+describe("listComprasDeCliente — la línea dice si es de depilación", () => {
+  it("la línea de un pack de depilación trae su depilationComboId", async () => {
+    const compras = await listComprasDeCliente(db, clienteId);
+    const compra = compras.find((c) => c.id === compraId)!;
+    const lineaPack = compra.servicios.find((s) => s.serviceId === null)!;
+    expect(lineaPack.depilationComboId).toBe(packId);
+  });
+
+  it("la de un servicio, no", async () => {
+    const compras = await listComprasDeCliente(db, clienteId);
+    const compra = compras.find((c) => c.id === compraId)!;
+    const lineaServicio = compra.servicios.find((s) => s.serviceId === servicioId)!;
+    expect(lineaServicio.depilationComboId).toBeNull();
+  });
+
+  it("y la de una CAPACITACIÓN tampoco, aunque tenga el serviceId en NULL igual que la depilación", async () => {
+    const compras = await listComprasDeCliente(db, clienteId);
+    const compra = compras.find((c) => c.id === compraCapacitacionId)!;
+    expect(compra.servicios.length).toBeGreaterThan(0);
+    for (const linea of compra.servicios) {
+      expect(linea.serviceId).toBeNull();
+      expect(linea.depilationComboId).toBeNull();
+    }
   });
 });
