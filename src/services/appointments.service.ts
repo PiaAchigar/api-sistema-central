@@ -67,6 +67,16 @@ export type CreateAppointmentInput = {
    * otra persona. El sobrante no se guarda a favor: la sesión se gastó.
    */
   zonas?: string[];
+  /**
+   * Con qué sexo se presupuestó esta sesión de depilación (1.56.0, §3.3a).
+   *
+   * Ausente = el de la ficha de la clienta (`sexoDeLaClienta`; NULL ⇒ mujer),
+   * que es el caso normal. La pantalla lo manda cuando Laura pisó el selector
+   * —"esta clienta es un hombre aunque la ficha no lo diga"— y el servidor NO
+   * le cree el resultado: recalcula todo, pero con el MISMO sexo. Sin esto,
+   * la pantalla mostraba 15 min y la base guardaba 12.
+   */
+  sexo?: Sexo;
 };
 
 export async function createAppointment(
