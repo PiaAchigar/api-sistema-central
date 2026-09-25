@@ -18,6 +18,15 @@ export type DatosParaAgendar = {
   sesion: number;
   sesionesTotales: number;
   presupuestoMinutos: number;
+  /**
+   * El tope de zonas "a elección" del pack (`choiceZoneCount`): **hasta** N,
+   * no "todas las chicas que entren en los minutos" (spec §7.2).
+   *
+   * Viaja a la pantalla para que el menú no ofrezca lo que el servidor va a
+   * rechazar. La verdad sigue estando en el servidor: `createAppointment` lo
+   * vuelve a validar con `regalosElegidos`.
+   */
+  zonasDeRegalo: number;
   sexo: Sexo;
   zonas: ZonaDelMenu[];
   /** Si esta sesión se puede AGENDAR o sólo RESERVAR (Task 13). */
@@ -303,6 +312,7 @@ export async function datosParaAgendar(
     sesion: linea.repeticion,
     sesionesTotales,
     presupuestoMinutos: combo.duracionMinutos,
+    zonasDeRegalo: combo.choiceZoneCount,
     sexo,
     zonas,
     puerta,

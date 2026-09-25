@@ -24,6 +24,7 @@ import { lineasDeDepilacionLibres } from "../repositories/consumo.repo";
 import { createCompra } from "../repositories/compras.repo";
 import { crearCombo, hardDeleteCombo } from "../repositories/depilacion.repo";
 import { getAppointmentDetail } from "../repositories/appointments.repo";
+import { datosParaAgendar } from "../repositories/turno-de-depilacion.repo";
 import { createAppointment, rescheduleAppointment, updateAppointmentStatus } from "./appointments.service";
 
 /**
@@ -67,6 +68,7 @@ let axilaId: string;
 let packAId: string; // presupuesta 30' — de sobra para pierna(9)+axila(3)=12
 let packBId: string; // presupuesta 10' — MENOS que pierna+axila, a propósito
 let packCId: string; // presupuesta 40' — para el turno de MÁS de 30'
+let packDId: string; // presupuesta 30' y UNA zona a elección — para el tope de regalos
 let zonasGrandesIds: string[]; // 4 zonas grande (9' c/u para "mujer") = 36'
 
 // Una línea libre por test, para que ninguno le coma la sesión al otro.
@@ -218,6 +220,19 @@ beforeAll(async () => {
     zonaIds: zonasGrandesIds,
   });
   packCId = packC!.id;
+
+  // Pack D: una sola zona cargada (pierna, 9') y UNA a elección, con 30' de
+  // presupuesto. El presupuesto sobra a propósito: es lo que hace que el
+  // tope de zonas de regalo tenga que existir por su cuenta.
+  const packD = await crearCombo(db, {
+    name: `${QA}_PACK_D`,
+    kind: "pack_fijo",
+    fixedPrice: 60000,
+    fixedDurationMinutes: 30,
+    choiceZoneCount: 1,
+    zonaIds: [piernaId],
+  });
+  packDId = packD!.id;
 
   // Máquina + proveedora habilitadas para el ancla: la base local no trae
   // ninguna (el ancla no se vende, así que nadie la cargó).
@@ -973,5 +988,146 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
 
     const restaurado = await updateAppointmentStatus(db, creada!.id, { status: "scheduled" });
     expect(restaurado!.status).toBe("scheduled");
+  });
+});
+
+/**
+ * Ronda de arreglos 3 (Minor 3). El spec §7.2 dice "**hasta** N zonas a
+ * elección", pero N no existía en ningún lado: `armarMenu` ofrecía todas las
+ * chicas activas del catálogo y el servidor sólo validaba el presupuesto de
+ * minutos. Con "Combo de Esenciales" (2 grandes + 3 chicas + 1 a elección,
+ * 30') alcanzaba con tildar las 2 grandes y 4 chicas de regalo —30 ≤ 30,
+ * pasa— para que la clienta se llevara 4 zonas de regalo en vez de 1.
+ *
+ * El pack D de este archivo es el caso al desnudo: pierna (9') + 1 a
+ * elección, con 30' de presupuesto. Los minutos sobran, así que lo único que
+ * puede frenar la segunda zona de regalo es el tope.
+ */
+describe("el tope de zonas a elección (ronda 3)", () => {
+  async function lineaDelPackD(sufijo: string) {
+    const compra = await createCompra(db, {
+      customerId: CUSTOMER_ID,
+      depilationComboId: packDId,
+      description: `${QA}_COMPRA_${sufijo}`,
+      sessionsTotal: 1,
+      baseAmount: 60000,
+      discountedAmount: 60000,
+      finalAmount: 60000,
+    });
+    const ahora = new Date();
+    await db.insert(payments).values({
+      customerId: CUSTOMER_ID,
+      customerPurchaseId: compra.id,
+      amount: "60000",
+      paymentMethod: "cash",
+      status: "confirmed",
+      paymentDate: ahora,
+      isDeclared: true,
+      confirmedAt: ahora,
+    });
+    const libres = await lineasDeDepilacionLibres(db, CUSTOMER_ID, new Date());
+    return libres.find((l) => l.purchaseId === compra.id)!.purchaseServiceId;
+  }
+
+  /** Dos zonas de regalo cualesquiera del menú de ese pack. */
+  async function dosRegalos(lineaId: string) {
+    const datos = await datosParaAgendar(db, lineaId);
+    const regalos = datos.zonas.filter((z) => z.esDeRegalo && z.disponible);
+    expect(regalos.length).toBeGreaterThanOrEqual(2);
+    return { datos, regalos: regalos.slice(0, 2).map((z) => z.id) };
+  }
+
+  it("el pack dice cuántas zonas a elección trae", async () => {
+    const lineaId = await lineaDelPackD("TOPE_DATOS");
+    const datos = await datosParaAgendar(db, lineaId);
+    expect(datos.zonasDeRegalo).toBe(1);
+  });
+
+  it("dos zonas de regalo sobre un cupo de una se rechazan, aunque los minutos entren", async () => {
+    const lineaId = await lineaDelPackD("TOPE_DOS");
+    const { datos, regalos } = await dosRegalos(lineaId);
+
+    // Los minutos NO son lo que frena: 9 + 3 + 3 = 15 contra 30 de
+    // presupuesto. Si el tope no existiera, esto pasaría.
+    const minutos = [piernaId, ...regalos]
+      .map((id) => datos.zonas.find((z) => z.id === id)!.minutos)
+      .reduce((a, b) => a + b, 0);
+    expect(minutos).toBeLessThanOrEqual(datos.presupuestoMinutos);
+
+    await expect(
+      createAppointment(db, {
+        customerId: CUSTOMER_ID,
+        serviceId: anclaId,
+        providerId: proveedoraId,
+        start: "2026-11-09T13:00:00.000Z",
+        customerPurchaseServiceId: lineaId,
+        zonas: [piernaId, ...regalos],
+        notes: QA,
+      }),
+    ).rejects.toThrow(/hasta 1 zona a elección/i);
+  });
+
+  it("una sola zona de regalo sí entra", async () => {
+    const lineaId = await lineaDelPackD("TOPE_UNA");
+    const { regalos } = await dosRegalos(lineaId);
+
+    const turno = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-11-09T15:00:00.000Z",
+      customerPurchaseServiceId: lineaId,
+      zonas: [piernaId, regalos[0]!],
+      notes: QA,
+    });
+    expect(turno.durationMinutes).toBe(12); // pierna 9 + chica 3
+  });
+
+  /**
+   * Un pack sin cupo no puede regalar nada. Hoy `armarMenu` ni siquiera
+   * ofrece zonas de regalo en ese caso, así que el único que puede mandar
+   * una es una pantalla vieja o un POST a mano — y ahí la validación de
+   * "esa zona no está disponible para este pack" lo frena antes. El test
+   * deja constancia de que el camino está cerrado por alguno de los dos.
+   */
+  it("un pack sin cupo no acepta ninguna zona de fuera del pack", async () => {
+    const libres = await lineasDeDepilacionLibres(db, CUSTOMER_ID, new Date());
+    const { regalos } = await dosRegalos(await lineaDelPackD("TOPE_CERO_MENU"));
+    expect(libres).toBeDefined();
+
+    const compra = await createCompra(db, {
+      customerId: CUSTOMER_ID,
+      depilationComboId: packAId, // choiceZoneCount 0
+      description: `${QA}_COMPRA_TOPE_CERO`,
+      sessionsTotal: 1,
+      baseAmount: 90000,
+      discountedAmount: 90000,
+      finalAmount: 90000,
+    });
+    const ahora = new Date();
+    await db.insert(payments).values({
+      customerId: CUSTOMER_ID,
+      customerPurchaseId: compra.id,
+      amount: "90000",
+      paymentMethod: "cash",
+      status: "confirmed",
+      paymentDate: ahora,
+      isDeclared: true,
+      confirmedAt: ahora,
+    });
+    const nuevas = await lineasDeDepilacionLibres(db, CUSTOMER_ID, new Date());
+    const lineaId = nuevas.find((l) => l.purchaseId === compra.id)!.purchaseServiceId;
+
+    await expect(
+      createAppointment(db, {
+        customerId: CUSTOMER_ID,
+        serviceId: anclaId,
+        providerId: proveedoraId,
+        start: "2026-11-09T17:00:00.000Z",
+        customerPurchaseServiceId: lineaId,
+        zonas: [piernaId, regalos[0]!],
+        notes: QA,
+      }),
+    ).rejects.toThrow(/no está disponible para este pack|no incluye zonas a elección/i);
   });
 });

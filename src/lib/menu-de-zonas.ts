@@ -76,6 +76,25 @@ export function armarMenu(
 }
 
 /**
+ * Cuántas de las zonas tildadas son de REGALO (salen del cupo "a elección"
+ * del pack y no de lo que el pack trae cargado).
+ *
+ * El spec §7.2 dice "hasta N zonas a elección", y ese tope no lo aplicaba
+ * nadie: el menú ofrecía todas las chicas activas y el servidor sólo miraba
+ * el presupuesto de minutos. Con "Combo de Esenciales" (2 grandes + 3 chicas
+ * + 1 a elección, 30 min) alcanzaba con tildar las 2 grandes y 4 chicas de
+ * regalo —30 ≤ 30, pasa— para que la clienta se llevara 4 zonas de regalo en
+ * vez de 1.
+ */
+export function regalosElegidos(
+  menu: readonly ZonaDelMenu[],
+  elegidas: readonly string[],
+): number {
+  const deRegalo = new Set(menu.filter((z) => z.esDeRegalo).map((z) => z.id));
+  return elegidas.filter((id) => deRegalo.has(id)).length;
+}
+
+/**
  * Cuántos minutos ocupan las zonas tildadas.
  *
  * Los ids que no están en el menú se ignoran en vez de sumar `NaN`: una

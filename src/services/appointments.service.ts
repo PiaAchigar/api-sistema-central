@@ -4,7 +4,7 @@ import { appointmentBodyZone } from "../db/schema";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { subtractAll, type Interval } from "../lib/intervals";
 import type { Sexo } from "../lib/depilation-pricing";
-import { minutosElegidos } from "../lib/menu-de-zonas";
+import { minutosElegidos, regalosElegidos } from "../lib/menu-de-zonas";
 import {
   filaDeReagendado,
   huboMovimiento,
@@ -137,6 +137,20 @@ export async function createAppointment(
     durationMinutes = minutosElegidos(datos.zonas, input.zonas!);
     if (durationMinutes > datos.presupuestoMinutos) {
       throw badRequest("Las zonas elegidas no entran en el presupuesto del pack");
+    }
+
+    // El tope de zonas "a elección" (spec §7.2: **hasta** N). El presupuesto
+    // de minutos NO alcanza para contenerlo: "Combo de Esenciales" (2 grandes
+    // + 3 chicas + 1 a elección, 30') deja tildar las 2 grandes y 4 chicas de
+    // regalo —30 ≤ 30, pasa— y la clienta se lleva 4 zonas de regalo en vez
+    // de 1. La pantalla también lo aplica, pero la verdad vive acá.
+    const regalos = regalosElegidos(datos.zonas, input.zonas!);
+    if (regalos > datos.zonasDeRegalo) {
+      throw badRequest(
+        datos.zonasDeRegalo === 0
+          ? "Este pack no incluye zonas a elección"
+          : `Este pack incluye hasta ${datos.zonasDeRegalo} zona${datos.zonasDeRegalo === 1 ? "" : "s"} a elección`,
+      );
     }
 
     // La puerta de pago (Task 13): reservar guarda el lugar sin cobrar nada,

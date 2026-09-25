@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DepilationConfig, ZonaParaCotizar } from "./depilation-pricing";
-import { armarMenu, minutosElegidos } from "./menu-de-zonas";
+import { armarMenu, minutosElegidos, regalosElegidos } from "./menu-de-zonas";
 
 const CONFIG: DepilationConfig = {
   precioLista: {
@@ -96,5 +96,33 @@ describe("minutosElegidos", () => {
   it("ignora ids que no están en el menú, en vez de sumar NaN", () => {
     const menu = armarMenu([z("pierna", "grande")], CATALOGO, 0, "mujer", CONFIG);
     expect(minutosElegidos(menu, ["pierna", "inventada"])).toBe(9);
+  });
+});
+
+/**
+ * Ronda de arreglos 3 (Minor 3). El spec §7.2 dice "hasta N zonas a
+ * elección" y ese tope no lo aplicaba nadie: `armarMenu` ofrece TODAS las
+ * chicas activas y el servidor sólo miraba el presupuesto de minutos. Contar
+ * cuántas de las tildadas salen del cupo es lo que le falta al servidor para
+ * poder decir que no.
+ */
+describe("regalosElegidos", () => {
+  const PACK = [z("pierna", "grande"), z("espalda", "grande")];
+
+  it("cuenta sólo las que salen del cupo, no las que el pack trae", () => {
+    const menu = armarMenu(PACK, CATALOGO, 1, "mujer", CONFIG);
+    expect(regalosElegidos(menu, ["pierna", "espalda"])).toBe(0);
+    expect(regalosElegidos(menu, ["pierna", "axila"])).toBe(1);
+    expect(regalosElegidos(menu, ["pierna", "axila", "bozo", "cavado"])).toBe(3);
+  });
+
+  it("sin cupo no hay zonas de regalo que contar", () => {
+    const menu = armarMenu(PACK, CATALOGO, 0, "mujer", CONFIG);
+    expect(regalosElegidos(menu, ["pierna", "espalda"])).toBe(0);
+  });
+
+  it("ignora ids que no están en el menú", () => {
+    const menu = armarMenu(PACK, CATALOGO, 1, "mujer", CONFIG);
+    expect(regalosElegidos(menu, ["inventada"])).toBe(0);
   });
 });
