@@ -23,7 +23,7 @@ import { creditCustomer, getCustomerById } from "../repositories/customers.repo"
 import { cancelDeal, getDealByAppointmentId } from "../repositories/deals.repo";
 import { getActiveAgreement } from "../repositories/providers.repo";
 import { getServiceById } from "../repositories/services.repo";
-import { datosParaAgendar } from "../repositories/turno-de-depilacion.repo";
+import { datosParaAgendar, puertaDeLaReserva } from "../repositories/turno-de-depilacion.repo";
 import { gananciaDelTurno } from "./pago-de-promo";
 import { loadAvailabilityContext } from "./availability.service";
 import { consumirInsumos } from "./consumo.service";
@@ -315,6 +315,48 @@ export async function updateAppointmentStatus(
     if (appt.status === "completed" && changes.status !== "completed") {
       throw conflict("Un turno completado no puede cambiar de estado");
     }
+
+    // La puerta de pago (Task 13) también aplica acá. `createAppointment`
+    // sólo la evalúa al CREAR el turno, pero una reserva de depilación puede
+    // volverse turno real por otros dos caminos que no pasan por ahí:
+    // "Confirmar reserva" (reserved → scheduled) y "Realizado" apretado
+    // directo sobre una reserva (reserved → completed, salteándose
+    // scheduled). Los dos son la misma puerta de entrada que
+    // `createAppointment` — si sólo se cierra una, la otra la reemplaza sin
+    // que nadie note que hay dos.
+    //
+    // Cancelar y "Ausente" NO pasan por acá a propósito: bloquear una
+    // cancelación por falta de pago le sacaría a Laura la única herramienta
+    // para liberar un turno que no se va a cobrar.
+    //
+    // `scheduled → completed` no se re-evalúa: ese turno YA pasó la puerta
+    // (al crearse, o al confirmarse desde acá mismo) — repetir la cuenta acá
+    // no cambia nada salvo el costo de la consulta.
+    const dejaLaReserva =
+      appt.status === "reserved" &&
+      changes.status !== "reserved" &&
+      changes.status !== "cancelled" &&
+      changes.status !== "no_show";
+    if (dejaLaReserva) {
+      const ancla = await anclaDeDepilacion(db);
+      if (appt.serviceId === ancla) {
+        // `puertaDeLaReserva` y no `datosParaAgendar`: a esta altura la línea
+        // ya está tomada por ESTE turno, así que `lineasDeDepilacionLibres`
+        // ya no la ve libre — `datosParaAgendar` la busca ahí y tira
+        // "Servicio de depilación not found" si se la llama con una línea ya
+        // tomada. `puertaDeLaReserva` lee la línea directo por
+        // `appointmentId` y comparte la MISMA cuenta (`puertaDeLaLinea`
+        // dentro de `turno-de-depilacion.repo.ts`) — no hay una segunda
+        // fórmula de la puerta, sólo una forma distinta de encontrar la
+        // línea. `null` = sin línea comprada asociada (no debería pasar; si
+        // pasa, no es esta guarda la que decide).
+        const puerta = await puertaDeLaReserva(db, id);
+        if (puerta && !puerta.puedeAgendar) {
+          throw badRequest(`${puerta.motivo} (falta $${puerta.faltaCobrar})`);
+        }
+      }
+    }
+
     values.status = changes.status;
 
     // Al confirmar una reserva → limpiar la fecha de expiración

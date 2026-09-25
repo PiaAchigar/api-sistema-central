@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq, inArray, like } from "drizzle-orm";
+import { eq, inArray, like, ne } from "drizzle-orm";
 import * as schema from "../db/schema";
 import {
   appointmentBodyZone,
@@ -11,6 +11,7 @@ import {
   depilationCombo,
   machines,
   payments,
+  service,
   serviceMachine,
   serviceProviderAvailability,
   serviceProviderMachine,
@@ -58,6 +59,7 @@ const QA = "ZZ_QA_DEPILTURNO";
 const CUSTOMER_ID = "dddddddd-0000-0000-0000-000000000001";
 
 let anclaId: string;
+let servicioNormalId: string; // cualquier servicio real que NO sea el ancla
 let proveedoraId: string;
 let maquinaId: string;
 let piernaId: string;
@@ -150,6 +152,13 @@ beforeAll(async () => {
   await limpiar();
 
   anclaId = await anclaDeDepilacion(db);
+
+  const [normal] = await db
+    .select({ id: service.id })
+    .from(service)
+    .where(ne(service.id, anclaId))
+    .limit(1);
+  servicioNormalId = normal!.id;
 
   // Categorías elegidas para que, con la config de hoy (mujer: grande=9',
   // chica=3'), pierna+axila den justo 12' — el número que pide el brief.
@@ -512,5 +521,133 @@ describe("crear un turno de depilación", () => {
       notes: QA,
     });
     expect(reserva.status).toBe("reserved");
+  });
+});
+
+/**
+ * Ronda de arreglos 1 (Critical). `createAppointment` sólo evalúa la puerta
+ * al CREAR el turno — pero una reserva de depilación se vuelve turno real
+ * por otros dos caminos que pasan por `updateAppointmentStatus`, no por ahí:
+ * "Confirmar reserva" (reserved → scheduled, front `DayViewPage.tsx`) y
+ * "Realizado" apretado directo sobre una reserva (reserved → completed, sin
+ * pasar por scheduled). Los dos dejaban confirmar sin haber cobrado un peso.
+ */
+describe("puerta de pago al confirmar una reserva (Task 13, ronda 1)", () => {
+  it("confirmar una reserva de depilación sin pagar se rechaza, con motivo y monto — y con el pago correcto sí", async () => {
+    const compra = await createCompra(db, {
+      customerId: CUSTOMER_ID,
+      depilationComboId: packAId,
+      description: `${QA}_COMPRA_RESERVA_IMPAGA`,
+      sessionsTotal: 1,
+      baseAmount: 90000,
+      discountedAmount: 90000,
+      finalAmount: 90000,
+    });
+    const libres = await lineasDeDepilacionLibres(db, CUSTOMER_ID, new Date());
+    const lineaId = libres.find((l) => l.purchaseId === compra.id)!.purchaseServiceId;
+
+    // Se reserva sin pagar nada — regla que sigue intacta.
+    const reserva = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-10-12T15:00:00.000Z",
+      customerPurchaseServiceId: lineaId,
+      zonas: [piernaId, axilaId],
+      status: "reserved",
+      expiryMinutes: 1440,
+      notes: QA,
+    });
+    expect(reserva.status).toBe("reserved");
+
+    // "Confirmar reserva" (reserved → scheduled) sin haber pagado: rechazado,
+    // con el motivo Y el monto — mismo texto que en `createAppointment`.
+    await expect(
+      updateAppointmentStatus(db, reserva.id, { status: "scheduled" }),
+    ).rejects.toThrow(/se paga entero.*falta \$90000/i);
+
+    // Se cobra lo que corresponde (compra de una sola sesión: el 100%).
+    const ahora = new Date();
+    await db.insert(payments).values({
+      customerId: CUSTOMER_ID,
+      customerPurchaseId: compra.id,
+      amount: "90000",
+      paymentMethod: "cash",
+      status: "confirmed",
+      paymentDate: ahora,
+      isDeclared: true,
+      confirmedAt: ahora,
+    });
+
+    // Con el pago al día, la MISMA confirmación pasa.
+    const confirmado = await updateAppointmentStatus(db, reserva.id, { status: "scheduled" });
+    expect(confirmado!.status).toBe("scheduled");
+    // Se limpia la fecha de expiración, como cualquier confirmación normal.
+    expect(confirmado!.reservationExpiresAt).toBeNull();
+  });
+
+  /**
+   * La parte que no puede romperse: la puerta es de depilación, no de la
+   * agenda entera. Un turno reservado de cualquier otro servicio se confirma
+   * igual que siempre, sin que nadie le pida un pago que esa compra nunca
+   * exigió. Se arma con un INSERT directo (no `createAppointment`) porque acá
+   * lo que se prueba es `updateAppointmentStatus` aislado, no el flujo de
+   * disponibilidad de un servicio cualquiera del catálogo.
+   */
+  it("un turno que no es de depilación se sigue confirmando igual, sin pasar por la puerta", async () => {
+    const [creada] = await db
+      .insert(appointments)
+      .values({
+        customerId: CUSTOMER_ID,
+        serviceProviderId: proveedoraId,
+        serviceId: servicioNormalId,
+        appointmentStart: new Date("2026-10-12T17:00:00.000Z"),
+        appointmentEnd: new Date("2026-10-12T17:30:00.000Z"),
+        durationMinutes: 30,
+        servicePrice: "1000",
+        status: "reserved",
+        notes: QA,
+      })
+      .returning({ id: appointments.id });
+
+    const confirmado = await updateAppointmentStatus(db, creada!.id, { status: "scheduled" });
+    expect(confirmado!.status).toBe("scheduled");
+  });
+
+  /**
+   * El segundo agujero que encontró el coordinador: el botón "Realizado"
+   * aparece para cualquier estado que no sea completado, incluido reservado
+   * — se puede saltar de `reserved` a `completed` sin pasar nunca por
+   * `scheduled`. Marcar "realizado" algo que nunca se cobró es tan malo como
+   * confirmarlo sin cobrar, así que `completed` pasa por la MISMA puerta.
+   */
+  it("'Realizado' directo sobre una reserva sin pagar (saltando scheduled) también se rechaza", async () => {
+    const compra = await createCompra(db, {
+      customerId: CUSTOMER_ID,
+      depilationComboId: packAId,
+      description: `${QA}_COMPRA_RESERVA_IMPAGA_2`,
+      sessionsTotal: 1,
+      baseAmount: 90000,
+      discountedAmount: 90000,
+      finalAmount: 90000,
+    });
+    const libres = await lineasDeDepilacionLibres(db, CUSTOMER_ID, new Date());
+    const lineaId = libres.find((l) => l.purchaseId === compra.id)!.purchaseServiceId;
+
+    const reserva = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-10-12T18:00:00.000Z",
+      customerPurchaseServiceId: lineaId,
+      zonas: [piernaId, axilaId],
+      status: "reserved",
+      expiryMinutes: 1440,
+      notes: QA,
+    });
+
+    await expect(
+      updateAppointmentStatus(db, reserva.id, { status: "completed" }),
+    ).rejects.toThrow(/se paga entero.*falta \$90000/i);
   });
 });

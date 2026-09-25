@@ -7,7 +7,7 @@ import { armarMenu, type ZonaDelMenu, type ZonaDelPack } from "../lib/menu-de-zo
 import { puertaDePago, type EstadoDePuerta } from "../lib/puerta-de-pago";
 import { getPagadoDeCompra } from "./compras.repo";
 import { sexoDeLaClienta } from "./clientes-sexo.repo";
-import { lineasDeDepilacionLibres } from "./consumo.repo";
+import { lineasDeDepilacionLibres, type LineaDeDepilacion } from "./consumo.repo";
 import { leerConfig, obtenerCombo } from "./depilacion.repo";
 
 /** Lo que la pantalla de turno nuevo necesita para ofrecer el menú de zonas
@@ -123,6 +123,107 @@ async function sesionesTotalesDelPack(
 }
 
 /**
+ * La puerta de pago (Task 13) de una línea de depilación puntual — la cuenta
+ * que decide `puedeAgendar`, `motivo` y `faltaCobrar`.
+ *
+ * La comparten los DOS caminos que pueden convertir una reserva de
+ * depilación en turno real:
+ *
+ * - `datosParaAgendar` (crear un turno nuevo): la línea todavía está LIBRE,
+ *   así que ya se cuenta sola dentro de `libres`.
+ * - `puertaDeLaReserva` (confirmar o completar una reserva ya existente,
+ *   ronda 1): la línea ya tiene ESE turno enganchado, así que
+ *   `lineasDeDepilacionLibres` la EXCLUYE de `libres` — `lineaYaTomada: true`
+ *   la suma de vuelta. Sigue siendo la misma sesión "en juego"; lo único que
+ *   cambió es que ya tiene un turno atado.
+ *
+ * Es la única función que arma el input de `puertaDePago`: si mañana cambia
+ * qué cuenta como "la última sesión libre", cambia acá y los dos caminos lo
+ * heredan — no hay una segunda cuenta para que se desincronice.
+ */
+async function puertaDeLaLinea(
+  db: Db,
+  opts: {
+    purchaseId: string;
+    esPaquete: boolean;
+    sesionesTotales: number;
+    libres: LineaDeDepilacion[];
+    lineaYaTomada: boolean;
+  },
+): Promise<EstadoDePuerta> {
+  const [finalAmount, pagado] = await Promise.all([
+    finalAmountDeCompra(db, opts.purchaseId),
+    // "Lo pagado" es la MISMA cuenta que usa la ficha de la compra
+    // (`getPagadoDeCompra`, "la única definición del saldo"): la suma de los
+    // `payments` CONFIRMADOS de esa compra. Inventar una consulta propia acá
+    // podría mostrarle a Laura dos números distintos para lo mismo.
+    getPagadoDeCompra(db, opts.purchaseId),
+  ]);
+  const sesionesLibres =
+    opts.libres.filter((l) => l.purchaseId === opts.purchaseId).length +
+    (opts.lineaYaTomada ? 1 : 0);
+
+  return puertaDePago({
+    finalAmount,
+    pagado,
+    esPaquete: opts.esPaquete,
+    sesionesTotales: opts.sesionesTotales,
+    sesionesLibres,
+  });
+}
+
+/**
+ * La puerta de pago para un turno RESERVADO que se quiere confirmar o
+ * completar de un salto (Task 13, ronda 1 — "Confirmar reserva" y
+ * "Realizado" en `updateAppointmentStatus`).
+ *
+ * A diferencia de `datosParaAgendar` —pensada para un turno por CREAR, con la
+ * línea todavía libre—, ésta lee la línea que YA está tomada por
+ * `appointmentId`: no puede pasar por `lineasDeDepilacionLibres` para
+ * encontrarla (esa función la excluye a propósito, es lo que la hace
+ * "libre"). Por eso el `select` busca directo por `appointmentId`.
+ *
+ * `null` cuando el turno no tiene ninguna línea de depilación enganchada —no
+ * debería pasar en un turno del servicio ancla creado por `createAppointment`
+ * (que siempre exige `customerPurchaseServiceId`), pero si pasa, no es esta
+ * función la que decide qué hacer con eso.
+ */
+export async function puertaDeLaReserva(
+  db: Db,
+  appointmentId: string,
+): Promise<EstadoDePuerta | null> {
+  const [fila] = await db
+    .select({
+      customerId: customerPurchase.customerId,
+      purchaseId: customerPurchase.id,
+      depilationComboId: customerPurchaseService.depilationComboId,
+      esPaquete: customerPurchase.esPaqueteDePromo,
+    })
+    .from(customerPurchaseService)
+    .innerJoin(
+      customerPurchase,
+      eq(customerPurchase.id, customerPurchaseService.customerPurchaseId),
+    )
+    .where(eq(customerPurchaseService.appointmentId, appointmentId))
+    .limit(1);
+  if (!fila || !fila.customerId || !fila.depilationComboId) return null;
+
+  const ahora = new Date();
+  const [libres, sesionesTotales] = await Promise.all([
+    lineasDeDepilacionLibres(db, fila.customerId, ahora),
+    sesionesTotalesDelPack(db, fila.purchaseId, fila.depilationComboId),
+  ]);
+
+  return puertaDeLaLinea(db, {
+    purchaseId: fila.purchaseId,
+    esPaquete: fila.esPaquete,
+    sesionesTotales,
+    libres,
+    lineaYaTomada: true,
+  });
+}
+
+/**
  * Todo lo que la pantalla de turno nuevo necesita para agendar una sesión de
  * depilación: el menú de zonas para elegir y el presupuesto de minutos.
  *
@@ -151,33 +252,25 @@ export async function datosParaAgendar(
 
   const sexo = sexoPedido ?? (await sexoDeLaClienta(db, customerId));
 
-  const [combo, config, pack, catalogo, sesionesTotales, finalAmount, pagado] = await Promise.all([
+  const [combo, config, pack, catalogo, sesionesTotales] = await Promise.all([
     obtenerCombo(db, linea.depilationComboId, sexo),
     leerConfig(db),
     zonasDelPack(db, linea.depilationComboId),
     zonasActivasDelCatalogo(db),
     sesionesTotalesDelPack(db, linea.purchaseId, linea.depilationComboId),
-    finalAmountDeCompra(db, linea.purchaseId),
-    // "Lo pagado" es la MISMA cuenta que usa la ficha de la compra
-    // (`getPagadoDeCompra`, "la única definición del saldo"): la suma de los
-    // `payments` CONFIRMADOS de esa compra. Inventar una consulta propia acá
-    // podría mostrarle a Laura dos números distintos para lo mismo.
-    getPagadoDeCompra(db, linea.purchaseId),
   ]);
   if (!combo) throw notFound("Pack de depilación");
 
   const zonas = armarMenu(pack, catalogo, combo.choiceZoneCount, sexo, config);
 
-  // Cuántas sesiones de ESTA MISMA compra siguen libres — incluida esta línea
-  // — para saber si es la última (puerta de pago, Task 13).
-  const sesionesLibres = libres.filter((l) => l.purchaseId === linea.purchaseId).length;
-
-  const puerta = puertaDePago({
-    finalAmount,
-    pagado,
+  // La línea todavía está libre acá (recién se está por crear el turno), así
+  // que ya se cuenta sola dentro de `libres` — ver `puertaDeLaLinea`.
+  const puerta = await puertaDeLaLinea(db, {
+    purchaseId: linea.purchaseId,
     esPaquete: linea.esPaquete,
     sesionesTotales,
-    sesionesLibres,
+    libres,
+    lineaYaTomada: false,
   });
 
   return {
