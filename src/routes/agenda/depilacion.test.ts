@@ -1244,6 +1244,23 @@ describe("POST /cotizar (integración real)", () => {
     expect(body.total).toBe(65000);
   });
 
+  /**
+   * Ronda de arreglos 3 (Minor 1). `listarPacksFijos` devolvía
+   * `precioFijo: Number(fixed_price)` crudo y `/cotizar` lo usaba tal cual,
+   * sin pasar por `precioDePackFijo` — la función que la Task 3 escribió
+   * justo para esto. Resultado: el mismo "Cuerpo Full" costaba $65.000 en el
+   * armador del dashboard y $81.000 en el modal de Vender del CRM (que sí
+   * pasa por `obtenerCombo`), para el mismo hombre. Dos precios para lo
+   * mismo, en dos pantallas.
+   *
+   * 65.000 × 75/60 = 81.250, redondeado al `packRedondeo` (1000) → 81.000.
+   */
+  it("el pack fijo le cotiza a un hombre el precio de hombre", async () => {
+    const body = await cotizar(zonasCuerpoFull, "hombre");
+    expect(body.packFijo).toMatchObject({ nombre: "Cuerpo Full", precio: 81000 });
+    expect(body.total).toBe(81000);
+  });
+
   it("rechaza una selección con dos zonas que se pisan", async () => {
     const res = await cotizarRaw([piernaId, mediaPiernaId], "mujer");
     expect(res.status).toBe(400);

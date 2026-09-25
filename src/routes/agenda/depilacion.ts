@@ -45,6 +45,7 @@ import {
   type Categoria,
   type ZonaParaCotizar,
 } from "../../lib/depilation-pricing";
+import { precioDePackFijo } from "../../lib/precio-de-pack-fijo";
 import { datosParaAgendar } from "../../repositories/turno-de-depilacion.repo";
 import type { AppBindings, Variables } from "../../env";
 
@@ -593,7 +594,34 @@ depilacionRouter.post(
     const packs = await listarPacksFijos(db);
     const packFijo = buscarPackFijo(zonaIds, packs);
 
-    const total = packFijo ? packFijo.precioFijo : totalFormula;
+    // El precio de un pack fijo lo carga Laura para MUJER; el de hombre se
+    // deriva de la relación de minutos del pack (`precioDePackFijo`, Task 3),
+    // que es la misma función por la que pasan `obtenerCombo` y, con él, el
+    // modal de Vender del CRM. Usar `packFijo.precioFijo` crudo hacía que el
+    // mismo "Cuerpo Full" saliera $65.000 acá y $81.000 al venderlo, para el
+    // mismo hombre.
+    //
+    // Las zonas que van a la cuenta son las BASE del pack, no la selección
+    // entera: las "a elección" entran como fantasmas chicas adentro de
+    // `precioDePackFijo`, igual que en `assembleDepilationCombo`. Contar la
+    // selección entera las contaría dos veces. `buscarPackFijo` ya garantiza
+    // que `zonasBase` ⊆ selección, así que todas están en `activas`.
+    const zonasBaseDelPack: ZonaParaCotizar[] = (packFijo?.zonasBase ?? []).map((id) => {
+      const z = activas.get(id)!;
+      return { id: z.id, nombre: z.name, categoria: z.category as Categoria };
+    });
+    const precioDelPackFijo = packFijo
+      ? precioDePackFijo(
+          packFijo.precioFijo,
+          zonasBaseDelPack,
+          packFijo.zonasAEleccion,
+          packFijo.duracionFija,
+          sexo,
+          config,
+        )
+      : null;
+
+    const total = precioDelPackFijo ?? totalFormula;
     const duracionMinutos =
       packFijo?.duracionFija ?? calcularDuracionTurno(zonas, sexo, config);
     const packTotal = calcularPrecioPack(total, config);
@@ -611,7 +639,7 @@ depilacionRouter.post(
         ? {
             id: packFijo.id,
             nombre: packFijo.nombre,
-            precio: packFijo.precioFijo,
+            precio: precioDelPackFijo!,
             precioFormula: totalFormula,
           }
         : null,
