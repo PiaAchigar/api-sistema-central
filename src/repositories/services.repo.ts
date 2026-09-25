@@ -117,7 +117,20 @@ export async function updateServiceWebSettings(
   return result[0] ?? null;
 }
 
-/** Servicios activos que ofrece una prestadora (acuerdo activo + servicio activo). */
+/**
+ * Servicios activos que ofrece una prestadora (acuerdo activo + servicio activo).
+ *
+ * Excluye el ancla de depilación (`no_vendible`, 1.56.0) igual que
+ * `listServices` y `searchTreatments`: la puesta en marcha OBLIGA a cargarle
+ * al ancla un acuerdo con una proveedora —sin eso no se agenda ninguna
+ * depilación—, y sin este filtro "Depilación Definitiva" aparecía en el
+ * desplegable de Servicio del Nuevo Turno apenas Laura lo cargaba. Elegirla
+ * ahí da un 400 sin salida: una sesión de depilación sale de la pastilla "A
+ * agendar" de la ficha, no de este desplegable.
+ *
+ * `IS DISTINCT FROM true` y no `= false` para que una fila con `no_vendible`
+ * en NULL siga apareciendo.
+ */
 export async function listServicesForProvider(db: Db, providerId: string) {
   return db
     .select({
@@ -134,6 +147,7 @@ export async function listServicesForProvider(db: Db, providerId: string) {
         eq(serviceProviderService.serviceProviderId, providerId),
         eq(serviceProviderService.isActive, true),
         eq(service.isActive, true),
+        ne(service.noVendible, true),
       ),
     )
     .orderBy(asc(service.name));
