@@ -145,11 +145,17 @@ async function sesionesTotalesDelPack(
  *
  * - `datosParaAgendar` (crear un turno nuevo): la línea todavía está LIBRE,
  *   así que ya se cuenta sola dentro de `libres`.
- * - `puertaDeLaReserva` (confirmar o completar una reserva ya existente,
- *   ronda 1): la línea ya tiene ESE turno enganchado, así que
- *   `lineasDeDepilacionLibres` la EXCLUYE de `libres` — `lineaYaTomada: true`
- *   la suma de vuelta. Sigue siendo la misma sesión "en juego"; lo único que
- *   cambió es que ya tiene un turno atado.
+ * - `puertaDeLaReserva` (confirmar, completar o RESTAURAR un turno ya
+ *   existente, rondas 1 y 3): si el turno sigue vivo, la línea ya lo tiene
+ *   enganchado y `lineasDeDepilacionLibres` la EXCLUYE de `libres` —
+ *   `lineaYaTomada: true` la suma de vuelta. Sigue siendo la misma sesión
+ *   "en juego"; lo único que cambió es que ya tiene un turno atado.
+ *   **Pero un turno CANCELADO libera su línea**
+ *   (`condicionDeLineaDeDepilacionLibre` trata `cancelled` como libre), así
+ *   que ahí ya viene contada dentro de `libres` y sumarla de nuevo la
+ *   contaría dos veces: la última sesión del pack dejaría de parecer la
+ *   última y pediría el 40% en vez del 100%. Por eso `lineaYaTomada` lo
+ *   decide quien llama, mirando si la línea está o no en `libres`.
  *
  * Es la única función que arma el input de `puertaDePago`: si mañana cambia
  * qué cuenta como "la última sesión libre", cambia acá y los dos caminos lo
@@ -208,6 +214,7 @@ export async function puertaDeLaReserva(
 ): Promise<EstadoDePuerta | null> {
   const [fila] = await db
     .select({
+      purchaseServiceId: customerPurchaseService.id,
       customerId: customerPurchase.customerId,
       purchaseId: customerPurchase.id,
       depilationComboId: customerPurchaseService.depilationComboId,
@@ -233,7 +240,10 @@ export async function puertaDeLaReserva(
     esPaquete: fila.esPaquete,
     sesionesTotales,
     libres,
-    lineaYaTomada: true,
+    // `true` sólo si esta línea NO está ya contada entre las libres. Con un
+    // turno vivo (reservado) no está y hay que sumarla; con uno cancelado
+    // —el camino de "Restaurar"— sí está, y sumarla la contaría dos veces.
+    lineaYaTomada: !libres.some((l) => l.purchaseServiceId === fila.purchaseServiceId),
   });
 }
 

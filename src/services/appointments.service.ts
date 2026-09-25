@@ -321,13 +321,21 @@ export async function updateAppointmentStatus(
     }
 
     // La puerta de pago (Task 13) también aplica acá. `createAppointment`
-    // sólo la evalúa al CREAR el turno, pero una reserva de depilación puede
-    // volverse turno real por otros dos caminos que no pasan por ahí:
-    // "Confirmar reserva" (reserved → scheduled) y "Realizado" apretado
+    // sólo la evalúa al CREAR el turno, pero un turno de depilación puede
+    // volverse turno real por varios caminos que no pasan por ahí:
+    // "Confirmar reserva" (reserved → scheduled), "Realizado" apretado
     // directo sobre una reserva (reserved → completed, salteándose
-    // scheduled). Los dos son la misma puerta de entrada que
-    // `createAppointment` — si sólo se cierra una, la otra la reemplaza sin
-    // que nadie note que hay dos.
+    // scheduled) y "Restaurar" sobre un turno cancelado o ausente
+    // (cancelled/no_show → scheduled). Son todos la misma puerta de entrada
+    // que `createAppointment` — si sólo se cierra una, la otra la reemplaza
+    // sin que nadie note que hay varias.
+    //
+    // **La condición mira el estado DESTINO, no el de partida** (ronda 3).
+    // La versión vieja colgaba de `appt.status === "reserved"`, así que
+    // bastaba con que la reserva pasara antes por `cancelled` —a mano o por
+    // el `pg_cron` que expira reservas— o por `no_show` para que "Restaurar"
+    // la agendara sin cobrar nada. La pregunta correcta no es de dónde
+    // viene el turno sino si QUEDA comprometiendo la agenda.
     //
     // Cancelar y "Ausente" NO pasan por acá a propósito: bloquear una
     // cancelación por falta de pago le sacaría a Laura la única herramienta
@@ -336,11 +344,10 @@ export async function updateAppointmentStatus(
     // `scheduled → completed` no se re-evalúa: ese turno YA pasó la puerta
     // (al crearse, o al confirmarse desde acá mismo) — repetir la cuenta acá
     // no cambia nada salvo el costo de la consulta.
-    const dejaLaReserva =
-      appt.status === "reserved" &&
-      changes.status !== "reserved" &&
-      changes.status !== "cancelled" &&
-      changes.status !== "no_show";
+    const quedaComprometido =
+      changes.status === "scheduled" || changes.status === "completed";
+    const yaEstabaComprometido = appt.status === "scheduled" || appt.status === "completed";
+    const dejaLaReserva = quedaComprometido && !yaEstabaComprometido;
     if (dejaLaReserva) {
       const ancla = await anclaDeDepilacionOpcional(db);
       if (ancla != null && appt.serviceId === ancla) {
@@ -504,12 +511,28 @@ export async function rescheduleAppointment(
       await recordReschedule(tx, filaDeReagendado(appt, franja, quien));
     }
 
+    // Reagendar mueve el CUÁNDO, no la categoría del turno (ronda 3,
+    // Critical 1). Para cualquier servicio, reagendar una reserva la
+    // confirma —es el comportamiento de siempre y ahí no hay nada que
+    // cobrar—, pero una reserva de DEPILACIÓN que se asciende a `scheduled`
+    // se saltea la puerta de pago: quedaba agendada sin un peso cobrado y
+    // con `reservation_expires_at` en NULL, así que el `pg_cron` que expira
+    // reservas ya no la alcanzaba nunca y la sesión comprada quedaba tomada
+    // para siempre. Y no es un rodeo raro: el modal de "Reserva expirada"
+    // ofrece "Reagendar" como acción principal.
+    //
+    // Mover una reserva de horario es legítimo y tiene que seguir andando,
+    // así que sigue siendo una reserva, con su mismo vencimiento. Para
+    // convertirla en turno real está "Confirmar reserva", que sí pasa por la
+    // puerta (`updateAppointmentStatus`).
+    const sigueSiendoReserva = esDepilacion && appt.status === "reserved";
+
     return updateAppointment(tx, id, {
       appointmentStart:      startDate,
       appointmentEnd:        endDate,
       durationMinutes,
-      status:                "scheduled",
-      reservationExpiresAt:  null,
+      status:                sigueSiendoReserva ? "reserved" : "scheduled",
+      reservationExpiresAt:  sigueSiendoReserva ? appt.reservationExpiresAt : null,
     });
   });
 }

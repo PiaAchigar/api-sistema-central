@@ -735,3 +735,243 @@ describe("el sexo elegido al agendar (ronda 3)", () => {
     expect(turno.durationMinutes).toBe(12);
   });
 });
+
+/**
+ * Ronda de arreglos 3 (Critical 1). La puerta de pago tenía un TERCER y un
+ * CUARTO camino abiertos, los dos a dos clics de la grilla:
+ *
+ * 1. **Reagendar.** `rescheduleAppointment` terminaba SIEMPRE con
+ *    `status: "scheduled", reservationExpiresAt: null`, sin consultar la
+ *    puerta. Reservar sin pagar y tocar "Reagendar" convertía la reserva en
+ *    turno real, y el `pg_cron` —que sólo cancela `status = 'reserved'`— ya
+ *    no la alcanzaba nunca. Agravante: el modal de "Reserva expirada" ofrece
+ *    "Reagendar" como acción principal.
+ * 2. **Restaurar.** La guarda colgaba del estado ANTERIOR
+ *    (`appt.status === "reserved"`), así que una reserva que ya había pasado
+ *    por `cancelled` —a mano o por el `pg_cron`— volvía a `scheduled` sin
+ *    pasar por ninguna puerta.
+ */
+describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
+  /** Una compra SIN pagar con una sesión libre del pack A. */
+  async function lineaLibreImpaga(sufijo: string) {
+    const compra = await createCompra(db, {
+      customerId: CUSTOMER_ID,
+      depilationComboId: packAId,
+      description: `${QA}_COMPRA_${sufijo}`,
+      sessionsTotal: 1,
+      baseAmount: 90000,
+      discountedAmount: 90000,
+      finalAmount: 90000,
+    });
+    const libres = await lineasDeDepilacionLibres(db, CUSTOMER_ID, new Date());
+    return { compra, lineaId: libres.find((l) => l.purchaseId === compra.id)!.purchaseServiceId };
+  }
+
+  async function pagar(compraId: string, monto: string) {
+    const ahora = new Date();
+    await db.insert(payments).values({
+      customerId: CUSTOMER_ID,
+      customerPurchaseId: compraId,
+      amount: monto,
+      paymentMethod: "cash",
+      status: "confirmed",
+      paymentDate: ahora,
+      isDeclared: true,
+      confirmedAt: ahora,
+    });
+  }
+
+  /**
+   * Mover una reserva de horario es legítimo —la clienta avisó que no puede a
+   * esa hora— y tiene que seguir andando. Lo que no puede es ascenderla de
+   * categoría: sigue siendo una reserva, con su mismo vencimiento, y para
+   * confirmarla hay que pasar por "Confirmar reserva", que sí cobra.
+   */
+  it("reagendar una reserva impaga la mueve de hora pero la deja RESERVADA", async () => {
+    const { lineaId } = await lineaLibreImpaga("REAGENDA_IMPAGA");
+    const reserva = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-10-19T17:00:00.000Z",
+      customerPurchaseServiceId: lineaId,
+      zonas: [piernaId, axilaId],
+      status: "reserved",
+      expiryMinutes: 1440,
+      notes: QA,
+    });
+    expect(reserva.status).toBe("reserved");
+    expect(reserva.reservationExpiresAt).not.toBeNull();
+
+    const movida = await rescheduleAppointment(db, reserva.id, "2026-10-26T17:00:00.000Z");
+    expect(movida).not.toBeNull();
+    // Se movió de verdad…
+    expect(movida!.appointmentStart).toEqual(new Date("2026-10-26T17:00:00.000Z"));
+    // …pero sigue siendo una reserva, con su vencimiento intacto: si se
+    // hubiera ascendido a `scheduled` con `reservationExpiresAt: null`, el
+    // `pg_cron` no la cancelaría nunca y la sesión quedaría tomada para
+    // siempre sin un peso cobrado.
+    expect(movida!.status).toBe("reserved");
+    expect(movida!.reservationExpiresAt).toEqual(reserva.reservationExpiresAt);
+  });
+
+  it("un turno de depilación ya agendado se reagenda y sigue agendado", async () => {
+    const { compra, lineaId } = await lineaLibreImpaga("REAGENDA_PAGA");
+    await pagar(compra.id, "90000");
+    const turno = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-10-19T19:00:00.000Z",
+      customerPurchaseServiceId: lineaId,
+      zonas: [piernaId, axilaId],
+      notes: QA,
+    });
+    expect(turno.status).toBe("scheduled");
+
+    const movido = await rescheduleAppointment(db, turno.id, "2026-10-26T19:00:00.000Z");
+    expect(movido!.status).toBe("scheduled");
+    expect(movido!.reservationExpiresAt).toBeNull();
+  });
+
+  /**
+   * El camino más fácil de encontrar solo: vence la reserva, el `pg_cron` la
+   * cancela, al día siguiente la clienta llama y Laura toca "Restaurar".
+   */
+  it("restaurar un turno de depilación cancelado sin pagar se rechaza", async () => {
+    const { compra, lineaId } = await lineaLibreImpaga("RESTAURAR");
+    const reserva = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-10-19T21:00:00.000Z",
+      customerPurchaseServiceId: lineaId,
+      zonas: [piernaId, axilaId],
+      status: "reserved",
+      expiryMinutes: 1440,
+      notes: QA,
+    });
+
+    // Lo que hace el `pg_cron` cuando la reserva vence.
+    await updateAppointmentStatus(db, reserva.id, { status: "cancelled" });
+
+    await expect(
+      updateAppointmentStatus(db, reserva.id, { status: "scheduled" }),
+    ).rejects.toThrow(/se paga entero.*falta \$90000/i);
+
+    // Y con la plata en mano, el MISMO botón funciona.
+    await pagar(compra.id, "90000");
+    const restaurado = await updateAppointmentStatus(db, reserva.id, { status: "scheduled" });
+    expect(restaurado!.status).toBe("scheduled");
+  });
+
+  /**
+   * La otra mitad de la guarda vieja: `reserved → no_show → scheduled`
+   * tampoco puede ser un atajo. "Ausente" no pasa por la puerta a propósito
+   * (es información, no un cobro), así que si la puerta colgara del estado
+   * anterior, este camino la saltearía igual que "Restaurar".
+   */
+  it("pasar por 'Ausente' tampoco abre un atajo", async () => {
+    const { lineaId } = await lineaLibreImpaga("AUSENTE");
+    const reserva = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-10-26T21:00:00.000Z",
+      customerPurchaseServiceId: lineaId,
+      zonas: [piernaId, axilaId],
+      status: "reserved",
+      expiryMinutes: 1440,
+      notes: QA,
+    });
+
+    await updateAppointmentStatus(db, reserva.id, { status: "no_show" });
+    await expect(
+      updateAppointmentStatus(db, reserva.id, { status: "scheduled" }),
+    ).rejects.toThrow(/se paga entero/i);
+  });
+
+  /**
+   * El detalle que se paga caro al abrirle la puerta al camino de
+   * "Restaurar": `puertaDeLaReserva` sumaba SIEMPRE +1 a las sesiones libres
+   * ("esta línea ya está tomada por este turno"). Eso es cierto para una
+   * reserva viva, pero un turno CANCELADO libera su línea
+   * (`condicionDeLineaDeDepilacionLibre`), así que la línea se contaba dos
+   * veces y la última sesión del pack dejaba de parecer la última: pedía el
+   * 40% en vez del 100%.
+   *
+   * Pack de 2 sesiones, pagado justo el 40%. La primera se agenda (pasa: no
+   * es la última). La segunda se reserva, se cancela y se quiere restaurar:
+   * es la última que queda, así que hay que estar al día.
+   */
+  it("restaurar la ÚLTIMA sesión de un pack exige el 100%, no el 40%", async () => {
+    const compra = await createCompra(db, {
+      customerId: CUSTOMER_ID,
+      depilationComboId: packAId,
+      description: `${QA}_COMPRA_ULTIMA`,
+      sessionsTotal: 2,
+      baseAmount: 90000,
+      discountedAmount: 90000,
+      finalAmount: 90000,
+    });
+    await pagar(compra.id, "36000"); // el 40% exacto
+
+    const libres = await lineasDeDepilacionLibres(db, CUSTOMER_ID, new Date());
+    const [primera, segunda] = libres
+      .filter((l) => l.purchaseId === compra.id)
+      .map((l) => l.purchaseServiceId);
+
+    // La primera se agenda con el 40%: no es la última.
+    await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-11-02T13:00:00.000Z",
+      customerPurchaseServiceId: primera,
+      zonas: [axilaId],
+      notes: QA,
+    });
+
+    const reserva = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-11-02T15:00:00.000Z",
+      customerPurchaseServiceId: segunda,
+      zonas: [axilaId],
+      status: "reserved",
+      expiryMinutes: 1440,
+      notes: QA,
+    });
+    await updateAppointmentStatus(db, reserva.id, { status: "cancelled" });
+
+    await expect(
+      updateAppointmentStatus(db, reserva.id, { status: "scheduled" }),
+    ).rejects.toThrow(/última sesión.*falta \$54000/i);
+  });
+
+  /**
+   * La parte que no puede romperse: la puerta es de depilación, no de la
+   * agenda entera. Restaurar un turno cancelado de cualquier otro servicio
+   * sigue siendo un clic sin preguntas.
+   */
+  it("restaurar un turno cancelado que NO es de depilación no pide nada", async () => {
+    const [creada] = await db
+      .insert(appointments)
+      .values({
+        customerId: CUSTOMER_ID,
+        serviceProviderId: proveedoraId,
+        serviceId: servicioNormalId,
+        appointmentStart: new Date("2026-10-26T22:00:00.000Z"),
+        appointmentEnd: new Date("2026-10-26T22:30:00.000Z"),
+        durationMinutes: 30,
+        servicePrice: "1000",
+        status: "cancelled",
+        notes: QA,
+      })
+      .returning({ id: appointments.id });
+
+    const restaurado = await updateAppointmentStatus(db, creada!.id, { status: "scheduled" });
+    expect(restaurado!.status).toBe("scheduled");
+  });
+});
