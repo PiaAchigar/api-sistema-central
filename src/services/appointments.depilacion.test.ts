@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { and, eq, inArray, like, ne, notLike } from "drizzle-orm";
+import { and, eq, inArray, like, ne, notLike, sql } from "drizzle-orm";
 import * as schema from "../db/schema";
 import {
   appointmentBodyZone,
@@ -23,7 +23,7 @@ import { anclaDeDepilacion } from "../repositories/ancla-de-depilacion.repo";
 import { lineasDeDepilacionLibres } from "../repositories/consumo.repo";
 import { createCompra } from "../repositories/compras.repo";
 import { crearCombo, hardDeleteCombo } from "../repositories/depilacion.repo";
-import { getAppointmentDetail } from "../repositories/appointments.repo";
+import { getAppointmentById, getAppointmentDetail } from "../repositories/appointments.repo";
 import { datosParaAgendar } from "../repositories/turno-de-depilacion.repo";
 import { createAppointment, rescheduleAppointment, updateAppointmentStatus } from "./appointments.service";
 
@@ -160,10 +160,23 @@ beforeAll(async () => {
   // `compras-ficha.repo.test.ts`). Si el `limit 1` agarraba uno de esos, el
   // turno de más abajo reventaba con `fk_appt_service` cuando el otro
   // archivo lo borraba — la suite fallaba una de cada tres corridas por eso.
+  // Sin máquina y con duración cargada: los tests de no-regresión de la ronda
+  // 4 reagendan un turno de ESTE servicio de verdad, o sea que tiene que
+  // poder pasar por `loadAvailabilityContext` con la proveedora fixture (que
+  // sólo está certificada en la máquina del ancla).
   const [normal] = await db
     .select({ id: service.id })
     .from(service)
-    .where(and(ne(service.id, anclaId), notLike(service.name, "ZZ_QA%")))
+    .where(
+      and(
+        eq(service.isActive, true),
+        ne(service.id, anclaId),
+        ne(service.requiresMachine, true),
+        notLike(service.name, "ZZ_QA%"),
+        sql`${service.estimatedDurationMinutes} between 15 and 60`,
+      ),
+    )
+    .orderBy(service.id)
     .limit(1);
   servicioNormalId = normal!.id;
 
@@ -261,6 +274,17 @@ beforeAll(async () => {
   await db.insert(serviceProviderService).values({
     serviceProviderId: proveedoraId,
     serviceId: anclaId,
+    paymentType: "fixed_per_service",
+    rate: "1000",
+    isActive: true,
+  });
+  // El segundo acuerdo, del servicio NORMAL: `loadAvailabilityContext` exige
+  // acuerdo vigente, y los tests de no-regresión de la ronda 4 reagendan un
+  // turno de ese servicio para verificar que la puerta no se metió donde no
+  // va.
+  await db.insert(serviceProviderService).values({
+    serviceProviderId: proveedoraId,
+    serviceId: servicioNormalId,
     paymentType: "fixed_per_service",
     rate: "1000",
     isActive: true,
@@ -970,6 +994,157 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
       updateAppointmentStatus(db, reserva.id, { status: "scheduled" }),
     ).rejects.toThrow(/última sesión.*falta \$54000/i);
   });
+
+  /**
+   * Ronda 4, rotura 1. `rescheduleAppointment` sólo rechaza `completed`, así
+   * que un turno de depilación en `cancelled` o `no_show` SE PUEDE reagendar
+   * — y caía en el `else` del `if` de la ronda 3, quedando `scheduled` con
+   * `reservation_expires_at` en NULL sin ninguna llamada a la puerta.
+   *
+   * Camino real con la pantalla de hoy: reserva impaga → el `pg_cron` la
+   * cancela → Laura abre el turno y toca "Reagendar" en vez de "Restaurar"
+   * (los dos botones están en el mismo modal, `DayViewPage.tsx:459-467`
+   * muestra "Reagendar" para todo estado que no sea `completed`) ⇒ turno
+   * firme, $0 cobrados, sesión del pack consumida para siempre.
+   */
+  it("reagendar un turno de depilación CANCELADO sin pagar se rechaza", async () => {
+    const { compra, lineaId } = await lineaLibreImpaga("REAGENDA_CANCELADO");
+    const reserva = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-11-16T13:00:00.000Z",
+      customerPurchaseServiceId: lineaId,
+      zonas: [piernaId, axilaId],
+      status: "reserved",
+      expiryMinutes: 1440,
+      notes: QA,
+    });
+    await updateAppointmentStatus(db, reserva.id, { status: "cancelled" });
+
+    await expect(
+      rescheduleAppointment(db, reserva.id, "2026-11-23T13:00:00.000Z"),
+    ).rejects.toThrow(/se paga entero.*falta \$90000/i);
+
+    // Y con la plata en mano, el mismo botón mueve el turno y lo agenda.
+    await pagar(compra.id, "90000");
+    const movido = await rescheduleAppointment(db, reserva.id, "2026-11-23T13:00:00.000Z");
+    expect(movido!.status).toBe("scheduled");
+    expect(movido!.reservationExpiresAt).toBeNull();
+  });
+
+  it("reagendar un turno de depilación en AUSENTE sin pagar se rechaza", async () => {
+    const { lineaId } = await lineaLibreImpaga("REAGENDA_AUSENTE");
+    const reserva = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-11-16T15:00:00.000Z",
+      customerPurchaseServiceId: lineaId,
+      zonas: [piernaId, axilaId],
+      status: "reserved",
+      expiryMinutes: 1440,
+      notes: QA,
+    });
+    // "Ausente" no pasa por la puerta a propósito (es información, no un
+    // cobro), así que es el otro estado desde el que se podía entrar gratis.
+    await updateAppointmentStatus(db, reserva.id, { status: "no_show" });
+
+    await expect(
+      rescheduleAppointment(db, reserva.id, "2026-11-23T15:00:00.000Z"),
+    ).rejects.toThrow(/se paga entero.*falta \$90000/i);
+  });
+
+  /**
+   * Ronda 4, rotura 2. El `if` de la ronda 3 conservaba el vencimiento
+   * VIEJO. Si ya había vencido, el turno quedaba `reserved` con vencimiento
+   * en el pasado y el `pg_cron` lo cancelaba en ≤5 minutos: Laura la corría a
+   * la semana que viene, la pantalla le decía que se movió, y minutos después
+   * el turno aparecía cancelado solo. Agravante: el modal "⏳ Reserva
+   * expirada" ofrece "Reagendar" como acción principal, así que el que la usa
+   * es justo el caso que esto rompía.
+   */
+  it("reagendar una reserva VENCIDA sin pagar se rechaza, y dice que venció", async () => {
+    const { compra, lineaId } = await lineaLibreImpaga("REAGENDA_VENCIDA");
+    const reserva = await createAppointment(db, {
+      customerId: CUSTOMER_ID,
+      serviceId: anclaId,
+      providerId: proveedoraId,
+      start: "2026-11-16T17:00:00.000Z",
+      customerPurchaseServiceId: lineaId,
+      zonas: [piernaId, axilaId],
+      status: "reserved",
+      expiryMinutes: 1440,
+      notes: QA,
+    });
+    // Lo que hace el reloj: la reserva venció y el `pg_cron` todavía no pasó.
+    await db
+      .update(appointments)
+      .set({ reservationExpiresAt: new Date(Date.now() - 60_000) })
+      .where(eq(appointments.id, reserva.id));
+
+    await expect(
+      rescheduleAppointment(db, reserva.id, "2026-11-23T17:00:00.000Z"),
+    ).rejects.toThrow(/venció/i);
+    // El motivo y el monto siguen estando: es la misma puerta, con contexto.
+    await expect(
+      rescheduleAppointment(db, reserva.id, "2026-11-23T17:00:00.000Z"),
+    ).rejects.toThrow(/falta \$90000/);
+
+    // Nada se movió: sigue en su horario original y sigue reservada.
+    const sinMover = await getAppointmentById(db, reserva.id);
+    expect(sinMover!.appointmentStart).toEqual(new Date("2026-11-16T17:00:00.000Z"));
+    expect(sinMover!.status).toBe("reserved");
+
+    // Con el pago al día, reagendarla la AGENDA: nunca queda `reserved` con un
+    // vencimiento que ya pasó.
+    await pagar(compra.id, "90000");
+    const movida = await rescheduleAppointment(db, reserva.id, "2026-11-23T17:00:00.000Z");
+    expect(movida!.status).toBe("scheduled");
+    expect(movida!.reservationExpiresAt).toBeNull();
+  });
+
+  /**
+   * No-regresión de las dos roturas: un turno de un servicio cualquiera que
+   * no es depilación se reagenda igual que siempre desde cualquier estado, sin
+   * que nadie le pida un pago que esa compra nunca exigió. Se arma con INSERT
+   * directo porque lo que se prueba es `rescheduleAppointment`, no el flujo de
+   * creación de un servicio del catálogo.
+   */
+  // Una hora propia por caso: los tres corren seguidos sobre la MISMA
+  // proveedora, y el turno que dejó el caso anterior en el horario destino le
+  // tapa el lugar al siguiente ("La proveedora no tiene ese horario
+  // disponible").
+  it.each([
+    ["reserved", "19:00", "19:30"],
+    ["cancelled", "20:00", "20:30"],
+    ["no_show", "21:00", "21:30"],
+  ] as const)(
+    "reagendar un turno que NO es de depilación desde %s lo deja agendado, sin pasar por la puerta",
+    async (estado, hora, fin) => {
+      const [creada] = await db
+        .insert(appointments)
+        .values({
+          customerId: CUSTOMER_ID,
+          serviceProviderId: proveedoraId,
+          serviceId: servicioNormalId,
+          appointmentStart: new Date(`2026-11-16T${hora}:00.000Z`),
+          appointmentEnd: new Date(`2026-11-16T${fin}:00.000Z`),
+          durationMinutes: 30,
+          servicePrice: "1000",
+          status: estado,
+          // Vencida a propósito en el caso `reserved`: si la puerta se colara
+          // en el camino normal, este es el turno que rechazaría.
+          reservationExpiresAt: estado === "reserved" ? new Date(Date.now() - 60_000) : null,
+          notes: QA,
+        })
+        .returning({ id: appointments.id });
+
+      const movido = await rescheduleAppointment(db, creada!.id, `2026-11-23T${hora}:00.000Z`);
+      expect(movido!.status).toBe("scheduled");
+      expect(movido!.reservationExpiresAt).toBeNull();
+    },
+  );
 
   /**
    * La parte que no puede romperse: la puerta es de depilación, no de la

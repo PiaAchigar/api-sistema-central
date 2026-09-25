@@ -46,8 +46,11 @@ export async function listServices(
   // dashboard como el listado público que consume piubella_web (GET
   // /api/agenda/services sin auth) — el ancla tiene `unit_price_list = 0`, y
   // publicada en la web sería un servicio gratis.
-  // `ne(..., true)` y no `eq(..., false)`: una fila con `no_vendible` en NULL
-  // tiene que seguir apareciendo.
+  // `ne(..., true)` genera `<> true`, que con `no_vendible` en NULL NO
+  // devolvería la fila (lógica de tres valores). Hoy da lo mismo porque la
+  // columna es `NOT NULL DEFAULT false` (1.56.0); si alguna vez se vuelve
+  // nullable hay que revisar esto acá, en `listServicesForProvider` y en
+  // `listCatalogoVendible`.
   conditions.push(ne(service.noVendible, true));
   if (!filters.includeInactive) conditions.push(eq(service.isActive, true));
   if (filters.q) conditions.push(ilike(service.name, `%${filters.q}%`));
@@ -128,8 +131,11 @@ export async function updateServiceWebSettings(
  * ahí da un 400 sin salida: una sesión de depilación sale de la pastilla "A
  * agendar" de la ficha, no de este desplegable.
  *
- * `IS DISTINCT FROM true` y no `= false` para que una fila con `no_vendible`
- * en NULL siga apareciendo.
+ * Filtra con `ne(...)`, que en SQL es `<> true`: una fila con `no_vendible` en
+ * NULL NO aparecería. Hoy es equivalente a `IS DISTINCT FROM true` porque la
+ * columna es `NOT NULL DEFAULT false` (1.56.0) — pero el comentario tiene que
+ * decir lo que el código hace, no lo que uno quiso escribir. Si la columna se
+ * vuelve nullable, revisar también `listServices` y `listCatalogoVendible`.
  */
 export async function listServicesForProvider(db: Db, providerId: string) {
   return db

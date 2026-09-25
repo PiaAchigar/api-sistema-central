@@ -156,9 +156,12 @@ export async function listCatalogoVendible(db: Db) {
         unitPriceCash: service.unitPriceCash,
       })
       .from(service)
-      // El ancla de depilación (Task 9) no es un servicio vendible: filtrar
-      // con `ne(..., true)` y no `eq(..., false)` porque una fila con
-      // `no_vendible` en NULL tiene que seguir apareciendo.
+      // El ancla de depilación (Task 9) no es un servicio vendible.
+      // `ne(..., true)` genera `<> true`, que con `no_vendible` en NULL NO
+      // devolvería la fila (lógica de tres valores). Hoy da lo mismo porque
+      // la columna es `NOT NULL DEFAULT false` (1.56.0); si alguna vez se
+      // vuelve nullable hay que revisar esto acá, en `listServices` y en
+      // `listServicesForProvider`.
       .where(and(eq(service.isActive, true), ne(service.noVendible, true)))
       .orderBy(asc(service.name)),
     db

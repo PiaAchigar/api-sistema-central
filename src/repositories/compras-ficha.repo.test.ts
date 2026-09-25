@@ -124,7 +124,16 @@ beforeAll(async () => {
   // para probar que la ficha distingue una de la otra (ronda de arreglos 3,
   // Important 3).
   const [cap] = await db.execute<{ id: string }>("select id from training limit 1" as never);
-  capacitacionId = cap!.id;
+  // Falla diciendo qué falta: sin esta guarda, una base sin capacitaciones
+  // reventaba con un `TypeError: Cannot read properties of undefined` en el
+  // `beforeAll`, que no explica nada y manda a debuggear el lugar equivocado.
+  if (!cap) {
+    throw new Error(
+      "este fixture necesita al menos una capacitación en la base local y no hay ninguna " +
+        "(¿corriste ./scripts/traer-catalogo.sh?)",
+    );
+  }
+  capacitacionId = cap.id;
   const compraCap = await createCompra(db, {
     customerId: clienteId,
     trainingId: capacitacionId,

@@ -509,6 +509,64 @@ export async function rescheduleAppointment(
   const esDepilacion = ancla != null && appt.serviceId === ancla;
   const durationMinutes = esDepilacion ? appt.durationMinutes ?? ctx.durationMinutes : ctx.durationMinutes;
 
+  // ── En qué estado QUEDA el turno reagendado ────────────────────────────
+  //
+  // Dos invariantes, y se aseguran mirando el estado en el que queda y no de
+  // dónde viene. Razonar por estado de origen falló dos veces (primero la
+  // guarda era `reserved` sola, después `reserved|cancelled`, y las dos veces
+  // quedó un estado afuera):
+  //
+  //   1. Ningún camino puede dejar un turno de depilación en `scheduled` sin
+  //      que la puerta de pago lo haya autorizado.
+  //   2. Ningún camino puede dejarlo en `reserved` con un vencimiento que ya
+  //      pasó.
+  //
+  // Una reserva VIGENTE se mueve de horario y sigue siendo la misma reserva,
+  // con su mismo vencimiento: eso es legítimo —la clienta avisó que no puede a
+  // esa hora— y no pide un peso. Reagendar mueve el CUÁNDO, no la categoría;
+  // para convertirla en turno real está "Confirmar reserva", que sí cobra.
+  const ahora = new Date();
+  const reservaVigente =
+    appt.status === "reserved" &&
+    // NULL = no vence (no debería pasar en una reserva creada por
+    // `createAppointment`, pero si pasa no es este camino el que la condena).
+    (appt.reservationExpiresAt == null || appt.reservationExpiresAt > ahora);
+
+  // Todo lo demás que no sea ya `scheduled` —una reserva VENCIDA, un turno
+  // `cancelled`, un `no_show`— HOY no está comprometiendo la agenda: la
+  // sesión está de vuelta en el pozo, o a punto de estarlo. Reagendarlo la
+  // compromete de nuevo, así que es la misma puerta de entrada que
+  // "Confirmar reserva" y que "Restaurar".
+  //
+  // Por qué una reserva vencida se trata como las otras y NO se le da una
+  // ventana nueva: el negocio capó la reserva en 24 h una vez. Renovarla en
+  // cada reagendado convierte ese tope en "para siempre" —tiempo de máquina y
+  // una sesión del pack retenidos gratis sin límite—, que es justo el agujero
+  // que esta serie de arreglos viene cerrando. Si la clienta pagó mientras
+  // tanto, la puerta pasa y el turno queda agendado de verdad, que es el caso
+  // real más común. Si no pagó, el rechazo dice qué hacer (cobrar, o cancelar
+  // y reservar de nuevo en el horario nuevo, que es una reserva nueva con su
+  // propio plazo honesto). Lo que no puede pasar es lo de antes: quedar
+  // `reserved` con vencimiento en el pasado y que el `pg_cron` la cancele
+  // sola minutos después, con la pantalla diciéndole a Laura que se movió.
+  const vuelveAComprometerLaAgenda =
+    esDepilacion && !reservaVigente && appt.status !== "scheduled";
+  if (vuelveAComprometerLaAgenda) {
+    // `puertaDeLaReserva` y no `datosParaAgendar`: la línea ya está enganchada
+    // a ESTE turno, así que `lineasDeDepilacionLibres` no la ve libre. Y ya
+    // resuelve sola el doble conteo de un turno `cancelled` (que SÍ liberó su
+    // línea): ver `puertaDeLaLinea`.
+    const puerta = await puertaDeLaReserva(db, id);
+    if (puerta && !puerta.puedeAgendar) {
+      const detalle = `${puerta.motivo} (falta $${puerta.faltaCobrar})`;
+      throw badRequest(
+        appt.status === "reserved"
+          ? `La reserva venció, así que moverla es agendarla: ${detalle}. Si no se puede cobrar, cancelala y hacé una reserva nueva en el horario nuevo.`
+          : detalle,
+      );
+    }
+  }
+
   const startMin = utcToLocalMinutes(startDate);
   const requested: Interval = { start: startMin, end: startMin + durationMinutes };
   const endDate = new Date(startDate.getTime() + durationMinutes * 60_000);
@@ -535,21 +593,12 @@ export async function rescheduleAppointment(
       await recordReschedule(tx, filaDeReagendado(appt, franja, quien));
     }
 
-    // Reagendar mueve el CUÁNDO, no la categoría del turno (ronda 3,
-    // Critical 1). Para cualquier servicio, reagendar una reserva la
-    // confirma —es el comportamiento de siempre y ahí no hay nada que
-    // cobrar—, pero una reserva de DEPILACIÓN que se asciende a `scheduled`
-    // se saltea la puerta de pago: quedaba agendada sin un peso cobrado y
-    // con `reservation_expires_at` en NULL, así que el `pg_cron` que expira
-    // reservas ya no la alcanzaba nunca y la sesión comprada quedaba tomada
-    // para siempre. Y no es un rodeo raro: el modal de "Reserva expirada"
-    // ofrece "Reagendar" como acción principal.
-    //
-    // Mover una reserva de horario es legítimo y tiene que seguir andando,
-    // así que sigue siendo una reserva, con su mismo vencimiento. Para
-    // convertirla en turno real está "Confirmar reserva", que sí pasa por la
-    // puerta (`updateAppointmentStatus`).
-    const sigueSiendoReserva = esDepilacion && appt.status === "reserved";
+    // Decidido arriba, antes de la transacción: una reserva de depilación
+    // VIGENTE sigue siendo reserva con su mismo vencimiento; cualquier otro
+    // camino queda `scheduled` y con la expiración limpia, y si era de
+    // depilación ya pasó por la puerta. Para cualquier servicio que no sea
+    // depilación esto no cambia nada: reagendar confirma, como siempre.
+    const sigueSiendoReserva = esDepilacion && reservaVigente;
 
     return updateAppointment(tx, id, {
       appointmentStart:      startDate,
