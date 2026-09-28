@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq, inArray, like } from "drizzle-orm";
+import { and, eq, inArray, like } from "drizzle-orm";
 import * as schema from "../../db/schema";
 import { machines, service, serviceProviders, serviceProviderService } from "../../db/schema";
 import type { Db } from "../../db/client";
@@ -144,6 +144,67 @@ describe("PUT /api/agenda/services/:id/agreements — el ancla de depilación", 
       ENV,
     );
     expect(res.status).toBe(200);
+  });
+
+  // Ronda de arreglos 1, punto 2 (SDD 2026-09-28-configuracion-de-depilacion).
+  // Dos acuerdos para la misma proveedora no son un descuido estético:
+  // `diffAgreements` no deduplica, así que las dos filas caen en `toCreate`, y
+  // `setServiceAgreements` hace los UPDATE de cierre ANTES del INSERT y sin
+  // transacción. El índice único parcial (`uq_sps_active`, y en producción
+  // además `uq_service_provider_service_active`) hace fallar el INSERT, pero
+  // los cierres ya commitearon: la proveedora se queda SIN acuerdo activo,
+  // cobrando $0. El mismo agujero que esta rama arregla, entrando por otra
+  // puerta. Se rechaza en el borde para proteger a todo llamador, no sólo a la
+  // pantalla de Comisión.
+  it("rechaza dos acuerdos para la misma proveedora, y no le cierra el que ya tenía", async () => {
+    const alta = await app.request(
+      `/${servicioNormalId}/agreements`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+        body: JSON.stringify({
+          agreements: [
+            { serviceProviderId: provId, paymentType: "fixed_per_service", rate: 20000 },
+          ],
+        }),
+      },
+      ENV,
+    );
+    expect(alta.status).toBe(200);
+
+    // Las DOS filas difieren del acuerdo vigente, que es lo que hace que las
+    // dos vayan a `toCreate` y choquen entre sí en el mismo INSERT.
+    const res = await app.request(
+      `/${servicioNormalId}/agreements`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+        body: JSON.stringify({
+          agreements: [
+            { serviceProviderId: provId, paymentType: "per_hour", rate: 30000 },
+            { serviceProviderId: provId, paymentType: "fixed_per_service", rate: 40000 },
+          ],
+        }),
+      },
+      ENV,
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(JSON.stringify(body)).toMatch(/repetida|dos veces|una sola vez/i);
+
+    // Y lo que de verdad importa: el acuerdo que ya tenía sigue vivo. Sin el
+    // rechazo, acá quedan CERO filas activas.
+    const activos = await testDb
+      .select({ id: serviceProviderService.id })
+      .from(serviceProviderService)
+      .where(
+        and(
+          eq(serviceProviderService.serviceId, servicioNormalId),
+          eq(serviceProviderService.serviceProviderId, provId),
+          eq(serviceProviderService.isActive, true),
+        ),
+      );
+    expect(activos).toHaveLength(1);
   });
 
   // La no-regresión importa más que el rechazo: percentage es lo que Laura usa

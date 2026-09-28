@@ -341,6 +341,23 @@ services.put(
       rate: a.rate ?? null,
     }));
 
+    // Una proveedora no puede venir dos veces. `diffAgreements` no deduplica,
+    // así que las dos filas caen en `toCreate`, y `setServiceAgreements` hace
+    // los UPDATE de cierre ANTES del INSERT y sin transacción: el índice único
+    // parcial sobre (service_provider_id, service_id) WHERE is_active hace
+    // fallar el INSERT, pero los cierres ya commitearon. Resultado: la
+    // proveedora queda SIN acuerdo activo, cobrando $0 — el mismo agujero que
+    // la pantalla de depilación existe para tapar, entrando por otra puerta.
+    // Va acá, en el borde, y no sólo en la pantalla: protege a todo llamador.
+    const repetida = desired.find(
+      (a, i) => desired.findIndex((b) => b.serviceProviderId === a.serviceProviderId) !== i,
+    );
+    if (repetida) {
+      throw badRequest(
+        "Hay una proveedora repetida en la lista: cada proveedora va una sola vez, con un solo acuerdo por servicio.",
+      );
+    }
+
     // El ancla de depilación no tiene precio —lo que se vende es el pack—, así
     // que `gananciaDelTurno` calcularía el porcentaje sobre 0 y la proveedora
     // cobraría $0 en cada sesión. Peor: `provider_earning` se CONGELA al marcar
