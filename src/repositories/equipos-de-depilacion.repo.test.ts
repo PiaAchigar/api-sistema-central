@@ -15,6 +15,7 @@ const pgClient = postgres("postgresql://piubella:piubella@localhost:5499/piubell
 const db = drizzle(pgClient, { schema });
 import {
   machines,
+  service,
   serviceMachine,
   serviceProviderMachine,
   serviceProviderService,
@@ -28,12 +29,14 @@ const PROV = "ZZ_QA_EQUIPOS_prov";
 const PROV_SIN_ACUERDO = "ZZ_QA_EQUIPOS_prov_sin_acuerdo";
 const MAQ_DEPI = "ZZ_QA_EQUIPOS_depi";
 const MAQ_AJENA = "ZZ_QA_EQUIPOS_ajena";
+const SERVICIO_AJENO = "ZZ_QA_EQUIPOS_servicio_ajeno";
 
 let ancla: string;
 let provId: string;
 let provSinAcuerdoId: string;
 let maqDepiId: string;
 let maqAjenaId: string;
+let servicioAjenoId: string;
 
 beforeAll(async () => {
   ancla = await anclaDeDepilacion(db);
@@ -72,12 +75,27 @@ beforeAll(async () => {
     rate: "20000.00",
     isActive: true,
   });
+
+  // Un servicio que NO es depilación, con la máquina ajena colgada en su
+  // `service_machine`. Es el caso que `equiposDeDepilacion` tiene que EXCLUIR:
+  // sin esta fila, una consulta sin `where(serviceId = ancla)` devuelve
+  // exactamente lo mismo que la correcta y ningún test se entera.
+  const [svcAjeno] = await db
+    .insert(service)
+    .values({ name: SERVICIO_AJENO, isActive: true })
+    .returning({ id: service.id });
+  servicioAjenoId = svcAjeno!.id;
+  await db
+    .insert(serviceMachine)
+    .values({ serviceId: servicioAjenoId, machineId: maqAjenaId, isPrimaryMachine: false });
 });
 
 afterAll(async () => {
   await db.delete(serviceMachine).where(
     and(eq(serviceMachine.serviceId, ancla), eq(serviceMachine.machineId, maqDepiId)),
   );
+  await db.delete(serviceMachine).where(eq(serviceMachine.serviceId, servicioAjenoId));
+  await db.delete(service).where(eq(service.id, servicioAjenoId));
   await db.delete(serviceProviderMachine).where(eq(serviceProviderMachine.serviceProviderId, provId));
   await db
     .delete(serviceProviderMachine)
@@ -94,6 +112,18 @@ describe("equipos-de-depilacion", () => {
     await agregarEquipo(db, maqDepiId);
     const ids = (await equiposDeDepilacion(db)).map((e) => e.machineId);
     expect(ids).toContain(maqDepiId);
+  });
+
+  // La lista de equipos es la MITAD de la cuenta de la disponibilidad, y el
+  // bloque 1 de la pantalla de Comisión es el que certifica proveedoras sobre
+  // ella. Si devolviera las máquinas de cualquier servicio, Laura estaría
+  // certificando gente en equipos que la depilación no usa.
+  it("no devuelve la máquina que cuelga de OTRO servicio", async () => {
+    await agregarEquipo(db, maqDepiId);
+    const ids = (await equiposDeDepilacion(db)).map((e) => e.machineId);
+    expect(ids).toContain(maqDepiId);
+    // `maqAjena` está en `service_machine`, pero del servicio ajeno.
+    expect(ids).not.toContain(maqAjenaId);
   });
 
   it("agregar dos veces no duplica", async () => {
@@ -123,5 +153,24 @@ describe("equipos-de-depilacion", () => {
     // certificación en el equipo que usa en su propia área.
     const idsSinAcuerdo = (await maquinasDeProveedora(db, provSinAcuerdoId)).map((m) => m.machineId);
     expect(idsSinAcuerdo).toContain(maqDepiId);
+  });
+
+  // `sacarEquipo` borra de `service_machine` filtrando por el ancla. Sin ese
+  // filtro le sacaría la máquina al servicio de otra área, que no tiene nada
+  // que ver con esta pantalla.
+  it("sacar un equipo no toca el service_machine de otro servicio", async () => {
+    await agregarEquipo(db, maqAjenaId);
+    await sacarEquipo(db, maqAjenaId);
+
+    const enElAjeno = await db
+      .select({ id: serviceMachine.id })
+      .from(serviceMachine)
+      .where(
+        and(
+          eq(serviceMachine.serviceId, servicioAjenoId),
+          eq(serviceMachine.machineId, maqAjenaId),
+        ),
+      );
+    expect(enElAjeno).toHaveLength(1);
   });
 });
