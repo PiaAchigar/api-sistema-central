@@ -6,7 +6,7 @@ import * as schema from "../db/schema";
 import { appointments, bodyZone, customerPurchase, customerPurchaseService, depilationCombo } from "../db/schema";
 import type { Db } from "../db/client";
 import { sesionesCompradasSinTurno } from "./turno-de-depilacion.repo";
-import { createCompra } from "./compras.repo";
+import { cancelCompra, createCompra } from "./compras.repo";
 import { crearCombo, hardDeleteCombo } from "./depilacion.repo";
 
 // `fetch_types: false` a propósito: espeja las opciones de producción bajo
@@ -107,6 +107,52 @@ beforeAll(async () => {
     .update(customerPurchaseService)
     .set({ appointmentId: turno!.id })
     .where(eq(customerPurchaseService.id, lineaAEnganchar.id));
+
+  // Los tres casos que el conteo tiene que EXCLUIR, y que hasta la revisión
+  // final no estaban en ningún fixture. Sin ellos, la versión que ignora
+  // `customer_purchase` pasaba el test igual — y en producción decía 6 donde
+  // la verdad era 3, porque una compra de "Cuerpo Full ×3" cancelada el
+  // 2026-09-23 seguía sumando sus 3 sesiones.
+  //
+  // 1) Compra CANCELADA: la clienta ya no tiene esas sesiones.
+  const cancelada = await createCompra(db, {
+    customerId: cli.id,
+    depilationComboId: comboId,
+    description: `${QA}_CANCELADA`,
+    sessionsTotal: 3,
+    baseAmount: 30000,
+    discountedAmount: 30000,
+    finalAmount: 30000,
+  });
+  await cancelCompra(db, cancelada.id, `${QA}_motivo`);
+
+  // 2) Compra VENCIDA ayer: la sesión está sin usar, pero ya no se agenda.
+  const ayer = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  await createCompra(db, {
+    customerId: cli.id,
+    depilationComboId: comboId,
+    description: `${QA}_VENCIDA`,
+    sessionsTotal: 1,
+    baseAmount: 10000,
+    discountedAmount: 10000,
+    finalAmount: 10000,
+    expiresAt: ayer,
+  });
+
+  // 3) Línea CONSUMIDA sin turno enganchado: ya se usó, no espera nada.
+  const consumida = await createCompra(db, {
+    customerId: cli.id,
+    depilationComboId: comboId,
+    description: `${QA}_CONSUMIDA`,
+    sessionsTotal: 1,
+    baseAmount: 10000,
+    discountedAmount: 10000,
+    finalAmount: 10000,
+  });
+  await db
+    .update(customerPurchaseService)
+    .set({ consumedAt: new Date() })
+    .where(eq(customerPurchaseService.customerPurchaseId, consumida.id));
 }, 30000);
 
 afterAll(async () => {
@@ -118,6 +164,50 @@ describe("sesionesCompradasSinTurno", () => {
   it("cuenta las líneas de depilación sin turno, sin contar la que ya tiene uno", async () => {
     // El fixture compró 2 sesiones y sólo enganchó turno a 1: el conteo
     // tiene que subir en exactamente 1, no en 2.
+    //
+    // Y además hay 5 sesiones más en la base —3 canceladas, 1 vencida y 1
+    // consumida— que NO tienen que sumar. `sinTurnoAntes + 1` es la aserción
+    // fuerte: cualquiera de esas cinco que se cuele lo rompe.
+    expect(await sesionesCompradasSinTurno(db)).toBe(sinTurnoAntes + 1);
+  });
+
+  // Los tres de arriba, cada uno por su cuenta: si el conteo se rompe, el
+  // nombre del test dice CUÁL de los tres filtros se cayó en vez de dejar un
+  // "+1 ≠ +4" a interpretar.
+  it("no cuenta las sesiones de una compra cancelada", async () => {
+    const canceladas = await db
+      .select({ id: customerPurchaseService.id })
+      .from(customerPurchaseService)
+      .innerJoin(
+        customerPurchase,
+        eq(customerPurchase.id, customerPurchaseService.customerPurchaseId),
+      )
+      .where(eq(customerPurchase.description, `${QA}_CANCELADA`));
+    // El fixture existe de verdad: sin esto el test pasaría por vacío.
+    expect(canceladas).toHaveLength(3);
+    expect(await sesionesCompradasSinTurno(db)).toBe(sinTurnoAntes + 1);
+  });
+
+  it("no cuenta las sesiones de una compra vencida", async () => {
+    const [vencida] = await db
+      .select({ id: customerPurchase.id, expiresAt: customerPurchase.expiresAt })
+      .from(customerPurchase)
+      .where(eq(customerPurchase.description, `${QA}_VENCIDA`));
+    expect(vencida?.expiresAt).toBeTruthy();
+    expect(vencida!.expiresAt!.getTime()).toBeLessThan(Date.now());
+    expect(await sesionesCompradasSinTurno(db)).toBe(sinTurnoAntes + 1);
+  });
+
+  it("no cuenta una línea ya consumida aunque no tenga turno enganchado", async () => {
+    const consumidas = await db
+      .select({ id: customerPurchaseService.id })
+      .from(customerPurchaseService)
+      .innerJoin(
+        customerPurchase,
+        eq(customerPurchase.id, customerPurchaseService.customerPurchaseId),
+      )
+      .where(eq(customerPurchase.description, `${QA}_CONSUMIDA`));
+    expect(consumidas).toHaveLength(1);
     expect(await sesionesCompradasSinTurno(db)).toBe(sinTurnoAntes + 1);
   });
 });

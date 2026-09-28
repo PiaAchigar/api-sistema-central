@@ -1,6 +1,13 @@
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { bodyZone, customerPurchase, customerPurchaseService, depilationComboZone } from "../db/schema";
+import {
+  appointments,
+  bodyZone,
+  customerPurchase,
+  customerPurchaseService,
+  depilationCombo,
+  depilationComboZone,
+} from "../db/schema";
 import type { Categoria, Sexo } from "../lib/depilation-pricing";
 import { notFound } from "../lib/errors";
 import { armarMenu, type ZonaDelMenu, type ZonaDelPack } from "../lib/menu-de-zonas";
@@ -8,7 +15,11 @@ import { puertaDePago, type EstadoDePuerta } from "../lib/puerta-de-pago";
 import { anclaDeDepilacion } from "./ancla-de-depilacion.repo";
 import { getPagadoDeCompra } from "./compras.repo";
 import { sexoDeLaClienta } from "./clientes-sexo.repo";
-import { lineasDeDepilacionLibres, type LineaDeDepilacion } from "./consumo.repo";
+import {
+  condicionDeLineaDeDepilacionLibre,
+  lineasDeDepilacionLibres,
+  type LineaDeDepilacion,
+} from "./consumo.repo";
 import { leerConfig, obtenerCombo } from "./depilacion.repo";
 
 /** Lo que la pantalla de turno nuevo necesita para ofrecer el menú de zonas
@@ -262,17 +273,30 @@ export async function puertaDeLaReserva(
  * Es el número del estado vacío de la pantalla de Configuración: sirve para
  * decirle a Laura "hay 3 clientas esperando" cuando todavía no habilitó a
  * nadie. Cuenta líneas, no compras: cada línea es una sesión agendable.
+ *
+ * La condición es `condicionDeLineaDeDepilacionLibre` —la MISMA que decide qué
+ * se puede agendar de verdad—, con `customerId` en `null` para mirar a todas
+ * las clientas. No es una elección estética: una definición propia acá contaba
+ * también las compras canceladas, las vencidas y las sesiones ya consumidas.
+ * En producción eso daba **6 cuando la verdad eran 3** (una compra de "Cuerpo
+ * Full ×3" cancelada seguía sumando), o sea el doble de clientas esperando de
+ * las que Laura podía agendar, en el único cartel de esa pantalla que habla de
+ * clientas esperando.
  */
 export async function sesionesCompradasSinTurno(db: Db): Promise<number> {
   const filas = await db
     .select({ id: customerPurchaseService.id })
     .from(customerPurchaseService)
-    .where(
-      and(
-        isNotNull(customerPurchaseService.depilationComboId),
-        isNull(customerPurchaseService.appointmentId),
-      ),
-    );
+    // Los mismos joins que `lineasDeDepilacionLibres`: la identidad de
+    // depilación sale del combo de la LÍNEA, y el `leftJoin` a `appointments`
+    // es lo que permite que un turno CANCELADO no deje la sesión tomada.
+    .innerJoin(
+      customerPurchase,
+      eq(customerPurchase.id, customerPurchaseService.customerPurchaseId),
+    )
+    .innerJoin(depilationCombo, eq(depilationCombo.id, customerPurchaseService.depilationComboId))
+    .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
+    .where(condicionDeLineaDeDepilacionLibre(null, new Date()));
   return filas.length;
 }
 

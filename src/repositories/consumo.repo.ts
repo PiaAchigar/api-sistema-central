@@ -225,10 +225,19 @@ export type LineaDeDepilacion = {
  * la puede armar y revisarle los parámetros sin tocar la base. Ver
  * `lib/parametros-de-consulta.ts` — un `Date` acá adentro, metido por un
  * fragmento `sql` crudo, hace fallar la consulta recién contra Postgres.
+ *
+ * `customerId` acepta `null` para preguntar por todas las clientas a la vez.
+ * Es la única forma de que `sesionesCompradasSinTurno` cuente con ESTA
+ * definición y no con una propia.
  */
-export function condicionDeLineaDeDepilacionLibre(customerId: string, ahora: Date) {
+export function condicionDeLineaDeDepilacionLibre(customerId: string | null, ahora: Date) {
   return and(
-    eq(customerPurchase.customerId, customerId),
+    // `null` = todas las clientas. Lo usa `sesionesCompradasSinTurno`, que
+    // cuenta las sesiones que esperan turno en TODO el salón y necesita
+    // exactamente esta misma definición de "libre": si contara con una propia
+    // —y más laxa— la pantalla de Configuración le diría a Laura el doble de
+    // clientas esperando de las que realmente puede agendar.
+    customerId == null ? undefined : eq(customerPurchase.customerId, customerId),
     // La compra tiene que estar viva.
     isNull(customerPurchase.cancelledAt),
     // `gte` y no un fragmento `sql` crudo: el operador pasa la fecha por el
