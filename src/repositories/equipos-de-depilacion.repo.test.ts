@@ -42,7 +42,7 @@ beforeAll(async () => {
     .insert(serviceProviders)
     .values({ fullName: PROV, status: "active" })
     .returning({ id: serviceProviders.id });
-  provId = p.id;
+  provId = p!.id;
 
   // Sin fila en service_provider_service sobre el ancla: NO hace depilación.
   // Es la proveedora que prueba que sacarEquipo no le borra la certificación
@@ -51,7 +51,7 @@ beforeAll(async () => {
     .insert(serviceProviders)
     .values({ fullName: PROV_SIN_ACUERDO, status: "active" })
     .returning({ id: serviceProviders.id });
-  provSinAcuerdoId = pSinAcuerdo.id;
+  provSinAcuerdoId = pSinAcuerdo!.id;
 
   const [m1] = await db
     .insert(machines)
@@ -61,8 +61,8 @@ beforeAll(async () => {
     .insert(machines)
     .values({ name: MAQ_AJENA, status: "active" })
     .returning({ id: machines.id });
-  maqDepiId = m1.id;
-  maqAjenaId = m2.id;
+  maqDepiId = m1!.id;
+  maqAjenaId = m2!.id;
 
   // La proveedora hace depilación: acuerdo vigente sobre el ancla.
   await db.insert(serviceProviderService).values({
