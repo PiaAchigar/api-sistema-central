@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
+import { and, eq, inArray } from "drizzle-orm";
 import { createDb, type Db } from "../../db/client";
+import { appointments } from "../../db/schema";
 import { badRequest, conflict, notFound } from "../../lib/errors";
 import { zv } from "../../lib/validator";
 import { auth, requireAdmin, requireAuth, requirePermission } from "../../middleware/auth";
@@ -48,6 +50,7 @@ import {
 import { precioDePackFijo } from "../../lib/precio-de-pack-fijo";
 import { datosParaAgendar, sesionesCompradasSinTurno } from "../../repositories/turno-de-depilacion.repo";
 import { anclaDeDepilacionOpcional } from "../../repositories/ancla-de-depilacion.repo";
+import { agregarEquipo, equiposDeDepilacion, sacarEquipo } from "../../repositories/equipos-de-depilacion.repo";
 import type { AppBindings, Variables } from "../../env";
 
 const depilacionRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
@@ -346,6 +349,79 @@ depilacionRouter.get("/packs-publicos", async (c) => {
   const db = createDb(c.env);
   return c.json(await listarPacksPublicos(db));
 });
+
+// ── Turnos sin cerrar por proveedora y equipos de depilación ───────────────
+// Rutas fijas ("/turnos-futuros", "/equipos", "/equipos/:machineId") — van
+// ANTES de cualquier ruta con `:param` de este router por el mismo motivo que
+// "/packs-publicos" de arriba: Hono resuelve por orden de registro.
+
+// Cuántos turnos de depilación sin cerrar tiene cada proveedora. Es lo que la
+// pantalla muestra ANTES de dejar sacar a alguien: "Romina tiene 4 turnos sin
+// completar; si la sacás, esos turnos quedan sin proveedora". No bloquea —
+// Laura sigue siendo la que decide— pero no la deja hacerlo a ciegas (§4.3).
+//
+// `inArray` y no `= ANY(...)`: con `fetch_types: false` bajo Hyperdrive,
+// postgres-js no puede mandar un array como parámetro.
+depilacionRouter.get(
+  "/turnos-futuros",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "view"),
+  async (c) => {
+    const db = createDb(c.env);
+    const ancla = await anclaDeDepilacionOpcional(db);
+    if (ancla == null) return c.json([]);
+    const filas = await db
+      .select({ providerId: appointments.serviceProviderId, id: appointments.id })
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.serviceId, ancla),
+          inArray(appointments.status, ["scheduled", "reserved"]),
+        ),
+      );
+    const porProveedora = new Map<string, number>();
+    for (const f of filas) {
+      if (!f.providerId) continue;
+      porProveedora.set(f.providerId, (porProveedora.get(f.providerId) ?? 0) + 1);
+    }
+    return c.json([...porProveedora].map(([providerId, turnos]) => ({ providerId, turnos })));
+  },
+);
+
+// Los equipos (máquinas) que usa la depilación — `service_machine` del
+// servicio ancla. Ver el docstring de `equiposDeDepilacion` en el repo para
+// por qué esta lista se mueve siempre junto con la certificación de cada
+// proveedora.
+depilacionRouter.get(
+  "/equipos",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "view"),
+  async (c) => c.json(await equiposDeDepilacion(createDb(c.env))),
+);
+
+depilacionRouter.put(
+  "/equipos/:machineId",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "manage"),
+  async (c) => {
+    await agregarEquipo(createDb(c.env), c.req.param("machineId"));
+    return c.json({ ok: true });
+  },
+);
+
+depilacionRouter.delete(
+  "/equipos/:machineId",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "manage"),
+  async (c) => {
+    await sacarEquipo(createDb(c.env), c.req.param("machineId"));
+    return c.json({ ok: true });
+  },
+);
 
 // ── Turno nuevo: menú de zonas y presupuesto ────────────────────────────────
 

@@ -2,12 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { inArray, like } from "drizzle-orm";
+import { eq, inArray, like } from "drizzle-orm";
 import * as schema from "../../db/schema";
-import { service, serviceProviders, serviceProviderService } from "../../db/schema";
+import { machines, service, serviceProviders, serviceProviderService } from "../../db/schema";
 import type { Db } from "../../db/client";
 import type { AppBindings, Variables } from "../../env";
-import { services } from "./services";
+import { providersRouter, services } from "./services";
 import { anclaDeDepilacion } from "../../repositories/ancla-de-depilacion.repo";
 
 // ── Integración real contra Postgres local ──────────────────────────────────
@@ -38,6 +38,18 @@ app.onError((err, c) => {
   return c.json({ error: "Internal server error" }, 500);
 });
 app.route("/", services);
+// Las rutas de máquinas de una proveedora viven en `providersRouter`, que
+// `services.ts` exporta aparte (no en `services`) — se monta bajo `/providers`
+// igual que hace `index.ts` en el Worker real.
+app.route("/providers", providersRouter);
+
+// Cierra el pool una sola vez, después de TODOS los describe del archivo:
+// el describe de abajo (agreements) cerraba `pgClient` en su propio
+// `afterAll`, y con un segundo describe corriendo después en el mismo
+// archivo eso lo dejaba sin conexión a mitad de suite.
+afterAll(async () => {
+  await pgClient.end();
+});
 
 async function limpiarQA() {
   // `service_provider_service` cuelga de FK a ambas tablas: hay que borrarlo
@@ -96,7 +108,6 @@ describe("PUT /api/agenda/services/:id/agreements — el ancla de depilación", 
 
   afterAll(async () => {
     await limpiarQA();
-    await pgClient.end();
   });
 
   it("rechaza percentage sobre el ancla, con el motivo", async () => {
@@ -150,5 +161,66 @@ describe("PUT /api/agenda/services/:id/agreements — el ancla de depilación", 
       ENV,
     );
     expect(res.status).toBe(200);
+  });
+});
+
+describe("máquinas de una proveedora (providersRouter)", () => {
+  const PREFIX = "ZZ_QA_PROV_MACHINES_";
+  let provId = "";
+  let maqId = "";
+
+  beforeAll(async () => {
+    const [prov] = await testDb
+      .insert(serviceProviders)
+      .values({ fullName: `${PREFIX}PROVEEDORA`, status: "active" })
+      .returning({ id: serviceProviders.id });
+    provId = prov!.id;
+
+    // `machines.id` no tiene DEFAULT en Postgres: lo genera Drizzle en runtime.
+    const [maq] = await testDb
+      .insert(machines)
+      .values({ name: `${PREFIX}MAQUINA`, status: "active" })
+      .returning({ id: machines.id });
+    maqId = maq!.id;
+  });
+
+  afterAll(async () => {
+    await testDb
+      .delete(schema.serviceProviderMachine)
+      .where(eq(schema.serviceProviderMachine.serviceProviderId, provId));
+    await testDb.delete(machines).where(eq(machines.id, maqId));
+    await testDb.delete(serviceProviders).where(eq(serviceProviders.id, provId));
+  });
+
+  it("habilita, lista y deshabilita", async () => {
+    const h = { Authorization: `Bearer ${TOKEN}` };
+
+    const put = await app.request(
+      `/providers/${provId}/machines/${maqId}`,
+      { method: "PUT", headers: h },
+      ENV,
+    );
+    expect(put.status).toBe(200);
+
+    const get = await app.request(`/providers/${provId}/machines`, { headers: h }, ENV);
+    const lista = (await get.json()) as { machineId: string }[];
+    expect(lista.map((m) => m.machineId)).toContain(maqId);
+
+    const del = await app.request(
+      `/providers/${provId}/machines/${maqId}`,
+      { method: "DELETE", headers: h },
+      ENV,
+    );
+    expect(del.status).toBe(200);
+
+    const get2 = await app.request(`/providers/${provId}/machines`, { headers: h }, ENV);
+    expect(((await get2.json()) as { machineId: string }[]).map((m) => m.machineId)).not.toContain(
+      maqId,
+    );
+  });
+
+  it("sin token da 401", async () => {
+    const res = await app.request(`/providers/${provId}/machines`, {}, ENV);
+    expect(res.status).toBe(401);
   });
 });

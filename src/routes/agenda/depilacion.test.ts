@@ -37,6 +37,7 @@ import { createCompra } from "../../repositories/compras.repo";
 import { createPromotion, deletePromotionPermanently } from "../../repositories/promotions.repo";
 import * as schema from "../../db/schema";
 import {
+  appointments,
   bodyZone,
   zoneExclusion,
   depilationCombo,
@@ -44,7 +45,10 @@ import {
   depilationPricingConfig,
   customerPurchase,
   customerPurchaseService,
+  machines,
   promotions,
+  serviceMachine,
+  serviceProviders,
 } from "../../db/schema";
 import type { Db } from "../../db/client";
 import type { AppBindings } from "../../env";
@@ -2468,5 +2472,106 @@ describe("GET /para-agendar/:purchaseServiceId (integración real)", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { sesionesTotales: number };
     expect(body.sesionesTotales).toBe(3);
+  });
+});
+
+describe("GET /turnos-futuros", () => {
+  const PREFIJO_TF = "ZZ_QA_TURNOS_FUTUROS_";
+  let ancla = "";
+  let provIdConTurno = "";
+  // El nombre es al revés de lo que hace: TIENE un turno, pero CERRADO. Es a
+  // propósito — si el filtro ignorara el status, este caso lo delataría.
+  let provIdConTurnoCerrado = "";
+
+  beforeAll(async () => {
+    ancla = await anclaDeDepilacion(testDb);
+
+    const [p1] = await testDb
+      .insert(serviceProviders)
+      .values({ fullName: `${PREFIJO_TF}con_turno`, status: "active" })
+      .returning({ id: serviceProviders.id });
+    provIdConTurno = p1!.id;
+
+    const [p2] = await testDb
+      .insert(serviceProviders)
+      .values({ fullName: `${PREFIJO_TF}con_turno_cerrado`, status: "active" })
+      .returning({ id: serviceProviders.id });
+    provIdConTurnoCerrado = p2!.id;
+
+    // Turno abierto: cuenta.
+    await testDb.insert(appointments).values({
+      serviceProviderId: provIdConTurno,
+      serviceId: ancla,
+      status: "scheduled",
+    });
+
+    // Turno CERRADO: el endpoint tiene que excluirlo. Sin este caso, un
+    // conteo que ignore `status` por completo pasaría el test igual.
+    await testDb.insert(appointments).values({
+      serviceProviderId: provIdConTurnoCerrado,
+      serviceId: ancla,
+      status: "completed",
+    });
+  });
+
+  afterAll(async () => {
+    await testDb
+      .delete(appointments)
+      .where(inArray(appointments.serviceProviderId, [provIdConTurno, provIdConTurnoCerrado]));
+    await testDb
+      .delete(serviceProviders)
+      .where(inArray(serviceProviders.id, [provIdConTurno, provIdConTurnoCerrado]));
+  });
+
+  it("cuenta los turnos sin cerrar de cada proveedora, y excluye a la que solo tiene turnos cerrados", async () => {
+    const res = await testApp.request("/turnos-futuros", { headers: ADMIN_HEADERS }, ADMIN_ENV);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { providerId: string; turnos: number }[];
+    expect(body.find((f) => f.providerId === provIdConTurnoCerrado)).toBeUndefined();
+    expect(body.find((f) => f.providerId === provIdConTurno)?.turnos).toBe(1);
+  });
+});
+
+describe("equipos de depilación", () => {
+  const PREFIJO_EQ = "ZZ_QA_EQUIPOS_ROUTE_";
+  let ancla = "";
+  let maqId = "";
+
+  beforeAll(async () => {
+    ancla = await anclaDeDepilacion(testDb);
+    const [m] = await testDb
+      .insert(machines)
+      .values({ name: `${PREFIJO_EQ}MAQUINA`, status: "active" })
+      .returning({ id: machines.id });
+    maqId = m!.id;
+  });
+
+  afterAll(async () => {
+    // Por si algún `it` falla a mitad y deja el equipo puesto.
+    await testDb
+      .delete(serviceMachine)
+      .where(and(eq(serviceMachine.serviceId, ancla), eq(serviceMachine.machineId, maqId)));
+    await testDb.delete(machines).where(eq(machines.id, maqId));
+  });
+
+  it("agrega, lista y saca un equipo", async () => {
+    const h = ADMIN_HEADERS;
+
+    expect(
+      (await testApp.request(`/equipos/${maqId}`, { method: "PUT", headers: h }, ADMIN_ENV)).status,
+    ).toBe(200);
+
+    const get = await testApp.request("/equipos", { headers: h }, ADMIN_ENV);
+    expect(((await get.json()) as { machineId: string }[]).map((m) => m.machineId)).toContain(maqId);
+
+    expect(
+      (await testApp.request(`/equipos/${maqId}`, { method: "DELETE", headers: h }, ADMIN_ENV))
+        .status,
+    ).toBe(200);
+
+    const get2 = await testApp.request("/equipos", { headers: h }, ADMIN_ENV);
+    expect(((await get2.json()) as { machineId: string }[]).map((m) => m.machineId)).not.toContain(
+      maqId,
+    );
   });
 });

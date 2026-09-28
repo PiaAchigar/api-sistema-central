@@ -34,6 +34,11 @@ import {
 } from "../../repositories/services.repo";
 import { setServicePrimaryMachine } from "../../repositories/machines.repo";
 import {
+  deshabilitarMaquina,
+  habilitarMaquina,
+  maquinasDeProveedora,
+} from "../../repositories/maquinas-de-proveedora.repo";
+import {
   createMpAccount,
   deleteMpAccount,
   listMpAccountsByProvider,
@@ -741,6 +746,47 @@ providersRouter.delete(
     const db = createDb(c.env);
     const deleted = await deleteException(db, c.req.param("id"), c.req.param("rowId"));
     if (!deleted) throw notFound("AvailabilityException");
+    return c.json({ ok: true });
+  },
+);
+
+// ── Máquinas que sabe usar una proveedora (service_provider_machine) ───────
+
+// Máquinas que sabe usar una proveedora. De a UNA: la certificación es global
+// por proveedora (`service_provider_machine` no tiene columna de servicio), así
+// que un PUT que reconcilie el conjunto desde una pantalla de área le borraría
+// las máquinas que usa en las otras.
+providersRouter.get(
+  "/:id/machines",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "view"),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json(await maquinasDeProveedora(db, c.req.param("id")));
+  },
+);
+
+providersRouter.put(
+  "/:id/machines/:machineId",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "edit"),
+  async (c) => {
+    const db = createDb(c.env);
+    await habilitarMaquina(db, c.req.param("id"), c.req.param("machineId"));
+    return c.json({ ok: true });
+  },
+);
+
+providersRouter.delete(
+  "/:id/machines/:machineId",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "edit"),
+  async (c) => {
+    const db = createDb(c.env);
+    await deshabilitarMaquina(db, c.req.param("id"), c.req.param("machineId"));
     return c.json({ ok: true });
   },
 );
