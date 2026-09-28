@@ -358,6 +358,30 @@ services.put(
       );
     }
 
+    // Un acuerdo sin forma de cobrar no se puede guardar, y hasta acá el borde
+    // lo aceptaba: el 400 aparecía recién como un 500 de Postgres, sin decirle
+    // a nadie qué había que corregir. Las dos columnas son NOT NULL en las DOS
+    // bases (verificado en producción y en local), así que un `null` acá no es
+    // "todavía no lo acordamos": es un INSERT que revienta seguro.
+    const sinForma = desired.find((a) => a.paymentType == null || a.rate == null);
+    if (sinForma) {
+      throw badRequest(
+        "Cada proveedora necesita cómo cobra y cuánto cobra: un acuerdo sin forma de cobrar no se puede guardar. Si todavía no lo acordaron, sacala de la lista y agregala cuando lo tengan.",
+      );
+    }
+
+    // `rate: 0` no es un acuerdo: es una proveedora que cobra nada. Y encima
+    // `service_provider_service` tiene un CHECK `rate > 0` en las DOS bases
+    // (en producción se llama `service_provider_service_rate_check`, en local
+    // `chk_sps_rate`), así que sin esta guarda el INSERT explota y el llamador
+    // recibe otro 500 de Postgres sin ninguna pista.
+    const enCero = desired.find((a) => a.rate === 0);
+    if (enCero) {
+      throw badRequest(
+        "La tarifa no puede ser 0: una proveedora habilitada con tarifa en cero cobra $0 por cada turno. Poné cuánto cobra de verdad.",
+      );
+    }
+
     // El ancla de depilación no tiene precio —lo que se vende es el pack—, así
     // que `gananciaDelTurno` calcularía el porcentaje sobre 0 y la proveedora
     // cobraría $0 en cada sesión. Peor: `provider_earning` se CONGELA al marcar

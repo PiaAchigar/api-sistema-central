@@ -207,6 +207,85 @@ describe("PUT /api/agenda/services/:id/agreements — el ancla de depilación", 
     expect(activos).toHaveLength(1);
   });
 
+  // Revisión final, G5. El borde aceptaba dos formas de acuerdo que pagan $0
+  // o directamente no se liquidan. La pantalla de Comisión las bloquea; la API
+  // es la que manda.
+  it("rechaza rate: 0 con 400 y no con el 500 del CHECK de Postgres", async () => {
+    const res = await app.request(
+      `/${servicioNormalId}/agreements`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+        body: JSON.stringify({
+          agreements: [{ serviceProviderId: provId, paymentType: "fixed_per_service", rate: 0 }],
+        }),
+      },
+      ENV,
+    );
+    // 400, no 500: `service_provider_service_rate_check` (producción) /
+    // `chk_sps_rate` (local) es `rate > 0`, así que sin la guarda esto reventaba
+    // contra Postgres sin decirle a nadie qué había que corregir.
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(JSON.stringify(body)).toMatch(/tarifa/i);
+    expect(JSON.stringify(body)).not.toMatch(/Internal server error/i);
+  });
+
+  // `payment_type` y `rate` son NOT NULL en las DOS bases (verificado contra
+  // producción y contra la local), así que un `null` no es "todavía no lo
+  // acordamos": es un INSERT que revienta seguro. Hasta la revisión final el
+  // borde lo aceptaba y el resultado era un 500 de Postgres.
+  it("rechaza un acuerdo sin tipo de pago con 400, no con un 500 de Postgres", async () => {
+    const res = await app.request(
+      `/${servicioNormalId}/agreements`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+        body: JSON.stringify({
+          agreements: [{ serviceProviderId: provId, paymentType: null, rate: 20000 }],
+        }),
+      },
+      ENV,
+    );
+    expect(res.status).toBe(400);
+    const body = JSON.stringify(await res.json());
+    expect(body).toMatch(/cómo cobra/i);
+    expect(body).not.toMatch(/Internal server error/i);
+  });
+
+  it("rechaza un acuerdo sin tarifa con 400, no con un 500 de Postgres", async () => {
+    const res = await app.request(
+      `/${servicioNormalId}/agreements`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+        body: JSON.stringify({
+          agreements: [{ serviceProviderId: provId, paymentType: "fixed_per_service", rate: null }],
+        }),
+      },
+      ENV,
+    );
+    expect(res.status).toBe(400);
+    const body = JSON.stringify(await res.json());
+    expect(body).toMatch(/cuánto cobra/i);
+    expect(body).not.toMatch(/Internal server error/i);
+  });
+
+  // Lo que sí tiene que seguir andando: una lista VACÍA es cómo se saca a todas
+  // las proveedoras de un servicio, y no lleva ningún acuerdo que validar.
+  it("sigue aceptando una lista vacía de acuerdos", async () => {
+    const res = await app.request(
+      `/${servicioNormalId}/agreements`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+        body: JSON.stringify({ agreements: [] }),
+      },
+      ENV,
+    );
+    expect(res.status).toBe(200);
+  });
+
   // La no-regresión importa más que el rechazo: percentage es lo que Laura usa
   // en todos los demás servicios del salón.
   it("sigue aceptando percentage sobre CUALQUIER OTRO servicio", async () => {
