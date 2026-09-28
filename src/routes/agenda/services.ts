@@ -55,6 +55,7 @@ import { costoDeReceta } from "../../lib/receta";
 import { listRecetaDeServicio, setRecetaDeServicio } from "../../repositories/recetas.repo";
 import { localDayRangeUtc, todayLocal } from "../../lib/time";
 import { isForeignKeyViolation } from "../../lib/db-errors";
+import { anclaDeDepilacionOpcional } from "../../repositories/ancla-de-depilacion.repo";
 import type { AppBindings, Variables } from "../../env";
 
 /** Roles con permiso de editar catálogo (nivel E de la matriz de reglas_negocio). */
@@ -328,12 +329,30 @@ services.put(
   zValidator("json", z.object({ agreements: z.array(agreementSchema).default([]) })),
   async (c) => {
     const db = createDb(c.env);
+    const serviceId = c.req.param("id");
     const desired = c.req.valid("json").agreements.map((a) => ({
       serviceProviderId: a.serviceProviderId,
       paymentType: a.paymentType ?? null,
       rate: a.rate ?? null,
     }));
-    await setServiceAgreements(db, c.req.param("id"), desired, todayLocal());
+
+    // El ancla de depilación no tiene precio —lo que se vende es el pack—, así
+    // que `gananciaDelTurno` calcularía el porcentaje sobre 0 y la proveedora
+    // cobraría $0 en cada sesión. Peor: `provider_earning` se CONGELA al marcar
+    // la sesión como realizada y no se recalcula nunca, así que el cero queda.
+    // La pantalla de Depilación ya no ofrece porcentaje; esto es el borde, que
+    // es el que manda.
+    const ancla = await anclaDeDepilacionOpcional(db);
+    if (ancla != null && serviceId === ancla) {
+      const conPorcentaje = desired.some((a) => a.paymentType === "percentage");
+      if (conPorcentaje) {
+        throw badRequest(
+          "En depilación no se puede cobrar por porcentaje: lo que se vende es el pack, no el servicio, así que el porcentaje daría $0. Usá monto fijo por sesión o por hora.",
+        );
+      }
+    }
+
+    await setServiceAgreements(db, serviceId, desired, todayLocal());
     return c.json({ ok: true });
   },
 );
