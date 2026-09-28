@@ -46,7 +46,8 @@ import {
   type ZonaParaCotizar,
 } from "../../lib/depilation-pricing";
 import { precioDePackFijo } from "../../lib/precio-de-pack-fijo";
-import { datosParaAgendar } from "../../repositories/turno-de-depilacion.repo";
+import { datosParaAgendar, sesionesCompradasSinTurno } from "../../repositories/turno-de-depilacion.repo";
+import { anclaDeDepilacionOpcional } from "../../repositories/ancla-de-depilacion.repo";
 import type { AppBindings, Variables } from "../../env";
 
 const depilacionRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
@@ -538,7 +539,17 @@ depilacionRouter.get(
   requirePermission("catalogo", "view"),
   async (c) => {
     const db = createDb(c.env);
-    return c.json(await leerConfig(db));
+    // `anchorServiceId` y `sesionesEsperandoTurno` van en la RESPUESTA y no en
+    // `DepilationConfig`: ese tipo es el de la aritmética de precios, y
+    // meterle un id de servicio y un conteo lo obligaría a saber de cosas que
+    // no le incumben. La pantalla de Configuración los necesita, la de
+    // precios no.
+    const [config, anchorServiceId, sesionesEsperandoTurno] = await Promise.all([
+      leerConfig(db),
+      anclaDeDepilacionOpcional(db),
+      sesionesCompradasSinTurno(db),
+    ]);
+    return c.json({ ...config, anchorServiceId, sesionesEsperandoTurno });
   },
 );
 

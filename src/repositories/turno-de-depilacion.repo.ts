@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { bodyZone, customerPurchase, customerPurchaseService, depilationComboZone } from "../db/schema";
 import type { Categoria, Sexo } from "../lib/depilation-pricing";
@@ -254,6 +254,26 @@ export async function puertaDeLaReserva(
     // —el camino de "Restaurar"— sí está, y sumarla la contaría dos veces.
     lineaYaTomada: !libres.some((l) => l.purchaseServiceId === fila.purchaseServiceId),
   });
+}
+
+/**
+ * Cuántas sesiones de depilación se compraron y todavía no tienen turno.
+ *
+ * Es el número del estado vacío de la pantalla de Configuración: sirve para
+ * decirle a Laura "hay 3 clientas esperando" cuando todavía no habilitó a
+ * nadie. Cuenta líneas, no compras: cada línea es una sesión agendable.
+ */
+export async function sesionesCompradasSinTurno(db: Db): Promise<number> {
+  const filas = await db
+    .select({ id: customerPurchaseService.id })
+    .from(customerPurchaseService)
+    .where(
+      and(
+        isNotNull(customerPurchaseService.depilationComboId),
+        isNull(customerPurchaseService.appointmentId),
+      ),
+    );
+  return filas.length;
 }
 
 /**

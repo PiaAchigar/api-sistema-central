@@ -706,6 +706,39 @@ describe("GET /config sin token", () => {
   });
 });
 
+// ── Task 4 — datos de la pantalla de Configuración ──────────────────────────
+// `anchorServiceId` y `sesionesEsperandoTurno` van en la RESPUESTA de la
+// ruta, no en `DepilationConfig` (ese tipo es el de la aritmética de
+// precios): estos tests confirman que viajan junto a la config anidada de
+// siempre, sin romperla.
+describe("GET /config — ancla y sesiones esperando turno", () => {
+  it("devuelve el id del servicio ancla", async () => {
+    const res = await testApp.request("/config", { headers: ADMIN_HEADERS }, ADMIN_ENV);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { anchorServiceId: string | null };
+    expect(body.anchorServiceId).toBe(await anclaDeDepilacion(testDb));
+  });
+
+  it("devuelve cuántas sesiones compradas están esperando turno", async () => {
+    const res = await testApp.request("/config", { headers: ADMIN_HEADERS }, ADMIN_ENV);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sesionesEsperandoTurno: number };
+    expect(typeof body.sesionesEsperandoTurno).toBe("number");
+    expect(body.sesionesEsperandoTurno).toBeGreaterThanOrEqual(0);
+  });
+
+  it("sigue devolviendo la config anidada de precios, sin cambios", async () => {
+    const res = await testApp.request("/config", { headers: ADMIN_HEADERS }, ADMIN_ENV);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      precioLista: { mujer: { grande: number } };
+      minutosTurno: { hombre: { grande: number } };
+    };
+    expect(typeof body.precioLista.mujer.grande).toBe("number");
+    expect(typeof body.minutosTurno.hombre.grande).toBe("number");
+  });
+});
+
 // ── Ronda de fixes 2, punto 1 (Important) — integración real ─────────────────
 // Confirma que el rechazo llega hasta la punta: `PUT /config` con
 // `priceFemaleGrande: 1000` (lo que la pantalla dejaba tipear) tiene que dar
