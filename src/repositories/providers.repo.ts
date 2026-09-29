@@ -347,31 +347,42 @@ export async function setServiceAgreements(
     desired,
   );
 
-  for (const providerId of toCloseProviderIds) {
-    await db
-      .update(serviceProviderService)
-      .set({ isActive: false, validUntil: today })
-      .where(
-        and(
-          eq(serviceProviderService.serviceId, serviceId),
-          eq(serviceProviderService.serviceProviderId, providerId),
-          eq(serviceProviderService.isActive, true),
-        ),
-      );
-  }
+  // Los cierres y las altas van JUNTOS o no va ninguno.
+  //
+  // Sin transacción, un INSERT que falla —el CHECK `rate > 0`, una FK contra
+  // una proveedora borrada entre que se abrió la pantalla y se guardó— deja
+  // los UPDATE de cierre ya commiteados y a las proveedoras SIN acuerdo
+  // activo. Eso no se ve: `getActiveAgreement` devuelve null, la ganancia del
+  // turno no se calcula, `provider_earning` queda NULL, y
+  // `getCommissionsReport` filtra por `providerEarning != null` — el turno
+  // desaparece de la liquidación del mes en vez de aparecer en $0.
+  await db.transaction(async (tx) => {
+    for (const providerId of toCloseProviderIds) {
+      await tx
+        .update(serviceProviderService)
+        .set({ isActive: false, validUntil: today })
+        .where(
+          and(
+            eq(serviceProviderService.serviceId, serviceId),
+            eq(serviceProviderService.serviceProviderId, providerId),
+            eq(serviceProviderService.isActive, true),
+          ),
+        );
+    }
 
-  if (toCreate.length > 0) {
-    await db.insert(serviceProviderService).values(
-      toCreate.map((a) => ({
-        serviceProviderId: a.serviceProviderId,
-        serviceId,
-        paymentType: a.paymentType,
-        rate: a.rate != null ? String(a.rate) : null,
-        validFrom: today,
-        isActive: true,
-      })),
-    );
-  }
+    if (toCreate.length > 0) {
+      await tx.insert(serviceProviderService).values(
+        toCreate.map((a) => ({
+          serviceProviderId: a.serviceProviderId,
+          serviceId,
+          paymentType: a.paymentType,
+          rate: a.rate != null ? String(a.rate) : null,
+          validFrom: today,
+          isActive: true,
+        })),
+      );
+    }
+  });
 }
 
 // ── Hard-delete (borrado permanente, admin-only) ────────────────────────────
