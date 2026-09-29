@@ -96,14 +96,19 @@ describe("searchTreatments — el ancla de depilación no aparece en el buscador
       .returning({ id: service.id });
     lejanoId = lejano!.id;
 
-    // Local NO dispara ningún trigger de sync (no existe en esta base;
-    // `service_embeddings` arranca vacía): se inserta la fila a mano, sin
-    // pasar por la API de embeddings.
+    // El vector se pone a mano para no depender de la API de embeddings.
+    //
+    // Va con UPSERT y no con INSERT a secas: `trg_service_embeddings_sync` ya
+    // creó la fila (con `content` y sin vector) al insertarse el servicio.
+    // Antes de la 1.57.0 la base local no tenía ese trigger —producción SÍ— y
+    // el INSERT pelado pasaba sólo acá; contra el esquema real siempre habría
+    // chocado con `service_embeddings_service_id_key`.
     await db.execute(
       sql`INSERT INTO service_embeddings (service_id, embedding)
           VALUES (${anclaId}, ${VECTOR_LITERAL}::vector),
                  (${normalId}, ${VECTOR_LITERAL}::vector),
-                 (${lejanoId}, ${VECTOR_ORTOGONAL}::vector)`,
+                 (${lejanoId}, ${VECTOR_ORTOGONAL}::vector)
+          ON CONFLICT (service_id) DO UPDATE SET embedding = EXCLUDED.embedding`,
     );
   });
 
