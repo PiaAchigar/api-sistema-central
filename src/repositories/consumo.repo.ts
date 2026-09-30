@@ -338,16 +338,18 @@ export type HermanoDelCombo = {
 };
 
 /**
- * Los servicios de la MISMA compra y la MISMA vuelta que todavía no tienen
- * turno, cuando el combo detrás de `purchaseServiceId` está marcado "se
- * hacen juntos" (V3c).
+ * Los servicios LIBRES de la MISMA compra y la MISMA vuelta, cuando el
+ * combo detrás de `purchaseServiceId` está marcado "se hacen juntos"
+ * (V3c). "Libre" es la misma definición que `condicionDeServicioLibre` acá
+ * arriba: sin turno, o con un turno cancelado (reglas §3.8 — cancelar no
+ * deja la sesión tomada).
  *
  * Normalmente se llama DESPUÉS de agendar el primer servicio: la fila de
  * `purchaseServiceId` ya tiene `appointment_id` puesto (lo hizo
  * `tomarServicio`, en la misma transacción que creó ese turno). Pero para
  * ser robusta ante cualquier caller, no se confía en eso como única defensa:
  * la fila que se pasó como parámetro se excluye explícitamente por `id`, no
- * sólo por el filtro `appointmentId IS NULL`.
+ * sólo por el filtro de "libre".
  *
  * Devuelve `[]` —nunca tira— si la fila no existe, si la compra no tiene
  * combo, o si el combo no está marcado "juntos".
@@ -402,12 +404,22 @@ export async function hermanosDelCombo(
     })
     .from(customerPurchaseService)
     .innerJoin(service, eq(service.id, customerPurchaseService.serviceId))
+    // LEFT JOIN, no INNER: una fila sin turno tiene `appointment_id` NULL y
+    // no matchea ninguna fila de `appointments` — con INNER desaparecería
+    // de los resultados, que es justo lo opuesto de "está libre".
+    .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
     .where(
       and(
         eq(customerPurchaseService.customerPurchaseId, mia.customerPurchaseId),
         eq(customerPurchaseService.repeticion, mia.repeticion ?? 1),
-        isNull(customerPurchaseService.appointmentId),
         isNull(customerPurchaseService.consumedAt),
+        // "Libre" es la MISMA definición que `condicionDeServicioLibre` más
+        // arriba en este archivo: sin turno, O con un turno CANCELADO. Un
+        // turno cancelado no deja la sesión tomada (reglas §3.8) — nada en
+        // el código pone `appointment_id` en NULL al cancelar, así que sin
+        // el `or` acá un hermano cancelado dejaba de sugerirse para
+        // siempre, aunque `POST /appointments` lo agenda sin problema.
+        or(isNull(customerPurchaseService.appointmentId), eq(appointments.status, "cancelled")),
         // Excluir la fila que se acaba de agendar (lo que se pasó como parámetro)
         sql`${customerPurchaseService.id} != ${purchaseServiceId}`,
       ),

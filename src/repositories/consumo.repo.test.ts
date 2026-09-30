@@ -519,6 +519,59 @@ describe("hermanosDelCombo — V3c, los combos que se hacen juntos", () => {
     expect(await hermanosDelCombo(dbReal, fila!.id)).toEqual([]);
   });
 
+  // Hallazgo de la revisión final de la rama: "libre" en este archivo
+  // incluye "turno cancelado" (`condicionDeServicioLibre`, reglas §3.8:
+  // cancelar ANTES del horario no consume la sesión). `hermanosDelCombo`
+  // sólo miraba `appointmentId IS NULL`, así que un hermano cuyo turno se
+  // canceló no volvía a aparecer como sugerible, aunque SÍ se puede
+  // agendar de nuevo (nada en el código pone `appointment_id` en NULL al
+  // cancelar — el turno queda ahí con `status: "cancelled"`).
+  it("un hermano con turno CANCELADO sigue apareciendo — cancelar no lo deja tomado", async () => {
+    const compra = await createCompra(dbReal, {
+      customerId: idClienta,
+      comboId: comboJuntosId,
+      description: `${QA_COMBO}_C6`,
+      sessionsTotal: 1,
+      baseAmount: 10000,
+      discountedAmount: 10000,
+      finalAmount: 10000,
+    });
+    const filas = await dbReal
+      .select({ id: customerPurchaseService.id, serviceId: customerPurchaseService.serviceId })
+      .from(customerPurchaseService)
+      .where(eq(customerPurchaseService.customerPurchaseId, compra.id));
+    const filaA = filas.find((f) => f.serviceId === servAId)!;
+    const filaB = filas.find((f) => f.serviceId === servBId)!;
+    const filaC = filas.find((f) => f.serviceId === servCId)!;
+
+    // servB tuvo un turno que se CANCELÓ (no "de antes" sin relación: se
+    // canceló y por eso Laura vuelve a agendar el combo). servA es el que
+    // se acaba de confirmar ahora.
+    const [turnoB] = await dbReal
+      .insert(appointments)
+      .values({ status: "cancelled", notes: `${QA_COMBO}_B_CANCELADO` })
+      .returning({ id: appointments.id });
+    const [turnoA] = await dbReal
+      .insert(appointments)
+      .values({ status: "scheduled", notes: `${QA_COMBO}_A` })
+      .returning({ id: appointments.id });
+    await dbReal
+      .update(customerPurchaseService)
+      .set({ appointmentId: turnoB!.id })
+      .where(eq(customerPurchaseService.id, filaB.id));
+    await dbReal
+      .update(customerPurchaseService)
+      .set({ appointmentId: turnoA!.id })
+      .where(eq(customerPurchaseService.id, filaA.id));
+
+    const hermanos = await hermanosDelCombo(dbReal, filaA.id);
+
+    // servB (cancelado) y servC (nunca agendado) tienen que volver los dos.
+    expect(hermanos.map((h) => h.purchaseServiceId).sort()).toEqual(
+      [filaB.id, filaC.id].sort(),
+    );
+  });
+
   it("una compra sin combo (servicio suelto) no sugiere nada", async () => {
     const compra = await createCompra(dbReal, {
       customerId: idClienta,
