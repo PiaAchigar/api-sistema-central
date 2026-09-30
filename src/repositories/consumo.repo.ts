@@ -342,11 +342,12 @@ export type HermanoDelCombo = {
  * turno, cuando el combo detrás de `purchaseServiceId` está marcado "se
  * hacen juntos" (V3c).
  *
- * Se llama DESPUÉS de agendar el primer servicio: la fila de
+ * Normalmente se llama DESPUÉS de agendar el primer servicio: la fila de
  * `purchaseServiceId` ya tiene `appointment_id` puesto (lo hizo
- * `tomarServicio`, en la misma transacción que creó ese turno), así que no
- * hace falta excluirla a mano — el filtro `appointmentId IS NULL` de abajo
- * ya la deja afuera.
+ * `tomarServicio`, en la misma transacción que creó ese turno). Pero para
+ * ser robusta ante cualquier caller, no se confía en eso como única defensa:
+ * la fila que se pasó como parámetro se excluye explícitamente por `id`, no
+ * sólo por el filtro `appointmentId IS NULL`.
  *
  * Devuelve `[]` —nunca tira— si la fila no existe, si la compra no tiene
  * combo, o si el combo no está marcado "juntos".
