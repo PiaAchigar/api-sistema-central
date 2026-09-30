@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appointmentsRouter, createBody } from "./appointments";
+import { appointmentsRouter, comboPendientesQuery, createBody } from "./appointments";
 
 describe("el cuerpo del turno nuevo", () => {
   /**
@@ -77,5 +77,37 @@ describe("el orden de las rutas", () => {
     expect(comodin).toBeGreaterThanOrEqual(0);
     expect(consumible).toBeGreaterThanOrEqual(0);
     expect(consumible).toBeLessThan(comodin);
+  });
+
+  it("/combo-pendientes va ANTES del comodín /:id", () => {
+    const gets = appointmentsRouter.routes.filter((r) => r.method === "GET").map((r) => r.path);
+    const comodin = gets.indexOf("/:id");
+    const comboPendientes = gets.indexOf("/combo-pendientes");
+
+    expect(comodin).toBeGreaterThanOrEqual(0);
+    expect(comboPendientes).toBeGreaterThanOrEqual(0);
+    expect(comboPendientes).toBeLessThan(comodin);
+  });
+});
+
+describe("GET /combo-pendientes — validación", () => {
+  // Por HTTP directo (`.request()` sin montar `auth` encima) el 401 de
+  // `requireAuth` llega antes que cualquier validación, así que se prueba el
+  // schema solo — mismo patrón que `createBody` arriba.
+  it("exige purchaseServiceId", () => {
+    const mal = comboPendientesQuery.safeParse({});
+    expect(mal.success).toBe(false);
+  });
+
+  it("rechaza un purchaseServiceId que no es un uuid", () => {
+    const mal = comboPendientesQuery.safeParse({ purchaseServiceId: "no-es-un-uuid" });
+    expect(mal.success).toBe(false);
+  });
+
+  it("acepta un purchaseServiceId con forma de uuid", () => {
+    const ok = comboPendientesQuery.safeParse({
+      purchaseServiceId: "44444444-4444-4444-4444-444444444444",
+    });
+    expect(ok.success).toBe(true);
   });
 });

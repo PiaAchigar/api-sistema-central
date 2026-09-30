@@ -10,7 +10,7 @@ import {
   rescheduleAppointment,
   updateAppointmentStatus,
 } from "../../services/appointments.service";
-import { queSeDescuenta } from "../../repositories/consumo.repo";
+import { hermanosDelCombo, queSeDescuenta } from "../../repositories/consumo.repo";
 import { listReschedules } from "../../repositories/appointment-reschedule.repo";
 import { getAppointmentById, getAppointmentDetail } from "../../repositories/appointments.repo";
 import { getDealByAppointmentId } from "../../repositories/deals.repo";
@@ -65,6 +65,37 @@ appointmentsRouter.get(
     const db = createDb(c.env);
     const { customerId, serviceId } = c.req.valid("query");
     return c.json(await queSeDescuenta(db, customerId, serviceId, new Date()));
+  },
+);
+
+/**
+ * Exportado para que el test la valide con `.safeParse()` directo — mismo
+ * motivo que `createBody` más abajo: un `.request()` contra este router
+ * pasa por `requireAuth` primero (sin `auth` montado encima, `userId` nunca
+ * se setea y el 401 llega antes que cualquier validación), así que probar
+ * la forma del query string por HTTP exigiría montar la app entera con un
+ * token falso. Probar el schema solo es más simple y prueba lo mismo.
+ */
+export const comboPendientesQuery = z.object({
+  purchaseServiceId: z.string().uuid({ message: "Falta el servicio comprado" }),
+});
+
+/**
+ * Lo que falta agendar del mismo combo "se hacen juntos" (V3c), una vez
+ * confirmado el primer servicio.
+ *
+ * ⚠️ Va registrada ANTES de `/:id`, mismo motivo que `/consumible` (ver el
+ * comentario ahí arriba).
+ */
+appointmentsRouter.get(
+  "/combo-pendientes",
+  requireAuth,
+  zValidator("query", comboPendientesQuery),
+  async (c) => {
+    const db = createDb(c.env);
+    const { purchaseServiceId } = c.req.valid("query");
+    const pendientes = await hermanosDelCombo(db, purchaseServiceId);
+    return c.json({ pendientes });
   },
 );
 
