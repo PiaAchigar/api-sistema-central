@@ -2,12 +2,15 @@ import { and, asc, eq, gte, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   appointments,
+  combos,
   customerPurchase,
   customerPurchaseService,
   depilationCombo,
+  service,
 } from "../db/schema";
 import { conflict } from "../lib/errors";
 import { type ServicioDisponible, elegirServicio } from "../lib/eleccion-de-servicio";
+import { comboDelQueSalenLosServicios } from "../lib/servicios-comprados";
 
 /**
  * Lo que la clienta tiene a favor para un servicio, y qué se descontaría.
@@ -326,4 +329,92 @@ export async function tomarLineaDeDepilacion(
   if (!tomada) {
     throw conflict("Esa sesión acaba de ser tomada por otro turno");
   }
+}
+
+export type HermanoDelCombo = {
+  purchaseServiceId: string;
+  serviceId: string;
+  serviceName: string;
+};
+
+/**
+ * Los servicios de la MISMA compra y la MISMA vuelta que todavía no tienen
+ * turno, cuando el combo detrás de `purchaseServiceId` está marcado "se
+ * hacen juntos" (V3c).
+ *
+ * Se llama DESPUÉS de agendar el primer servicio: la fila de
+ * `purchaseServiceId` ya tiene `appointment_id` puesto (lo hizo
+ * `tomarServicio`, en la misma transacción que creó ese turno), así que no
+ * hace falta excluirla a mano — el filtro `appointmentId IS NULL` de abajo
+ * ya la deja afuera.
+ *
+ * Devuelve `[]` —nunca tira— si la fila no existe, si la compra no tiene
+ * combo, o si el combo no está marcado "juntos".
+ *
+ * Un PACK nunca lleva la marca en su propia fila —lo prohíbe el CHECK
+ * `ck_combos_pack`, que la obliga a `false`—: la marca de verdad vive en el
+ * combo que repite (`pack_of_combo_id`), y se resuelve con la misma función
+ * que ya usa la venta (`comboDelQueSalenLosServicios`) para no duplicar esa
+ * decisión en dos lugares.
+ */
+export async function hermanosDelCombo(
+  db: Db,
+  purchaseServiceId: string,
+): Promise<HermanoDelCombo[]> {
+  const [mia] = await db
+    .select({
+      customerPurchaseId: customerPurchaseService.customerPurchaseId,
+      repeticion: customerPurchaseService.repeticion,
+    })
+    .from(customerPurchaseService)
+    .where(eq(customerPurchaseService.id, purchaseServiceId))
+    .limit(1);
+  if (!mia?.customerPurchaseId) return [];
+
+  const [compra] = await db
+    .select({ comboId: customerPurchase.comboId })
+    .from(customerPurchase)
+    .where(eq(customerPurchase.id, mia.customerPurchaseId))
+    .limit(1);
+  if (!compra?.comboId) return [];
+
+  const [combo] = await db
+    .select({ kind: combos.kind, packOfComboId: combos.packOfComboId })
+    .from(combos)
+    .where(eq(combos.id, compra.comboId))
+    .limit(1);
+  if (!combo) return [];
+
+  const comboRealId = comboDelQueSalenLosServicios(combo.kind, combo.packOfComboId, compra.comboId);
+  const [comboReal] = await db
+    .select({ servicesTogether: combos.servicesTogether })
+    .from(combos)
+    .where(eq(combos.id, comboRealId))
+    .limit(1);
+  if (comboReal?.servicesTogether !== true) return [];
+
+  const filas = await db
+    .select({
+      purchaseServiceId: customerPurchaseService.id,
+      serviceId: customerPurchaseService.serviceId,
+      serviceName: service.name,
+    })
+    .from(customerPurchaseService)
+    .innerJoin(service, eq(service.id, customerPurchaseService.serviceId))
+    .where(
+      and(
+        eq(customerPurchaseService.customerPurchaseId, mia.customerPurchaseId),
+        eq(customerPurchaseService.repeticion, mia.repeticion ?? 1),
+        isNull(customerPurchaseService.appointmentId),
+        isNull(customerPurchaseService.consumedAt),
+        // Excluir la fila que se acaba de agendar (lo que se pasó como parámetro)
+        sql`${customerPurchaseService.id} != ${purchaseServiceId}`,
+      ),
+    );
+
+  return filas.map((f) => ({
+    purchaseServiceId: f.purchaseServiceId,
+    serviceId: f.serviceId!,
+    serviceName: f.serviceName ?? "—",
+  }));
 }

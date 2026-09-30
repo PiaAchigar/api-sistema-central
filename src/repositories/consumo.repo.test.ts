@@ -297,3 +297,290 @@ describe("lineasDeDepilacionLibres", () => {
     expect(dePaquete!.depilationComboId).toBe(packPiernaId);
   });
 });
+
+import { hermanosDelCombo } from "./consumo.repo";
+import { combos, comboService } from "../db/schema";
+
+describe("hermanosDelCombo — V3c, los combos que se hacen juntos", () => {
+  const QA_COMBO = "ZZ_QA_COMBOJUNTOS";
+
+  let idClienta: string;
+  let areaId: string;
+  let servAId: string;
+  let servBId: string;
+  let servCId: string;
+  let servXId: string;
+  let servYId: string;
+  let servSueltoId: string;
+  let comboJuntosId: string;
+  let comboSeparadoId: string;
+  let comboDelPackId: string;
+  let packDelComboId: string;
+  let packSueltoId: string;
+
+  async function limpiarCombo() {
+    const compras = await dbReal
+      .select({ id: customerPurchase.id })
+      .from(customerPurchase)
+      .where(like(customerPurchase.description, `${QA_COMBO}%`));
+    for (const c of compras) {
+      await dbReal
+        .delete(customerPurchaseService)
+        .where(eq(customerPurchaseService.customerPurchaseId, c.id));
+      await dbReal.delete(customerPurchase).where(eq(customerPurchase.id, c.id));
+    }
+    const combosQA = await dbReal
+      .select({ id: combos.id })
+      .from(combos)
+      .where(like(combos.name, `${QA_COMBO}%`));
+    for (const c of combosQA) {
+      await dbReal.delete(comboService).where(eq(comboService.comboId, c.id));
+    }
+    // Los packs (apuntan a otro combo por FK) antes que los combos que apuntan.
+    await dbReal.delete(combos).where(like(combos.name, `${QA_COMBO}%`));
+    await dbReal.delete(service).where(like(service.name, `${QA_COMBO}%`));
+    await dbReal.delete(appointments).where(like(appointments.notes, `${QA_COMBO}%`));
+  }
+
+  beforeAll(async () => {
+    await limpiarCombo();
+
+    const [cli] = await dbReal.execute<{ id: string }>(
+      "select id from customers limit 1" as never,
+    );
+    idClienta = cli!.id;
+    const [area] = await dbReal.execute<{ id: string }>(
+      "select id from categories where kind = 'area' and name not like 'ZZ_QA%' order by id limit 1" as never,
+    );
+    areaId = area!.id;
+
+    const servicios = await dbReal
+      .insert(service)
+      .values([
+        { name: `${QA_COMBO}_A` },
+        { name: `${QA_COMBO}_B` },
+        { name: `${QA_COMBO}_C` },
+        { name: `${QA_COMBO}_X` },
+        { name: `${QA_COMBO}_Y` },
+        { name: `${QA_COMBO}_SUELTO` },
+      ])
+      .returning({ id: service.id });
+    [servAId, servBId, servCId, servXId, servYId, servSueltoId] = servicios.map((s) => s.id);
+
+    // Combo de 3 servicios, JUNTOS.
+    const [comboJuntos] = await dbReal
+      .insert(combos)
+      .values({
+        name: `${QA_COMBO}_JUNTOS`, priceType: "fixed", fixedPrice: "10000",
+        validityMonths: 12, isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
+        kind: "combo", servicesTogether: true,
+      })
+      .returning({ id: combos.id });
+    comboJuntosId = comboJuntos!.id;
+    await dbReal.insert(comboService).values([
+      { comboId: comboJuntosId, serviceId: servAId, sessionsIncluded: 1, servicePrice: "3000" },
+      { comboId: comboJuntosId, serviceId: servBId, sessionsIncluded: 1, servicePrice: "3000" },
+      { comboId: comboJuntosId, serviceId: servCId, sessionsIncluded: 1, servicePrice: "4000" },
+    ]);
+
+    // Combo de 2 servicios, SEPARADOS (services_together: false).
+    const [comboSeparado] = await dbReal
+      .insert(combos)
+      .values({
+        name: `${QA_COMBO}_SEPARADO`, priceType: "fixed", fixedPrice: "6000",
+        validityMonths: 12, isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
+        kind: "combo", servicesTogether: false,
+      })
+      .returning({ id: combos.id });
+    comboSeparadoId = comboSeparado!.id;
+    await dbReal.insert(comboService).values([
+      { comboId: comboSeparadoId, serviceId: servAId, sessionsIncluded: 1, servicePrice: "3000" },
+      { comboId: comboSeparadoId, serviceId: servBId, sessionsIncluded: 1, servicePrice: "3000" },
+    ]);
+
+    // El combo que un PACK repite: 2 servicios, JUNTOS.
+    const [comboDelPack] = await dbReal
+      .insert(combos)
+      .values({
+        name: `${QA_COMBO}_COMBO_DEL_PACK`, priceType: "fixed", fixedPrice: "5000",
+        validityMonths: 12, isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
+        kind: "combo", servicesTogether: true,
+      })
+      .returning({ id: combos.id });
+    comboDelPackId = comboDelPack!.id;
+    await dbReal.insert(comboService).values([
+      { comboId: comboDelPackId, serviceId: servXId, sessionsIncluded: 1, servicePrice: "2500" },
+      { comboId: comboDelPackId, serviceId: servYId, sessionsIncluded: 1, servicePrice: "2500" },
+    ]);
+
+    // El PACK: 4 vueltas de ese combo. `services_together` en la fila del
+    // pack queda en `false` siempre (lo exige `ck_combos_pack`) — la marca
+    // de verdad está en `comboDelPackId`, arriba.
+    const [packDelCombo] = await dbReal
+      .insert(combos)
+      .values({
+        name: `${QA_COMBO}_PACK_DE_COMBO`, priceType: "fixed", fixedPrice: "20000",
+        validityMonths: 12, isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
+        kind: "pack", packOfComboId: comboDelPackId, packSessions: 4, servicesTogether: false,
+      })
+      .returning({ id: combos.id });
+    packDelComboId = packDelCombo!.id;
+
+    // Un PACK de un servicio SUELTO repetido (sin combo detrás): lleva su
+    // propia línea en `combo_service`, y `packOfComboId` es NULL.
+    const [packSuelto] = await dbReal
+      .insert(combos)
+      .values({
+        name: `${QA_COMBO}_PACK_SUELTO`, priceType: "fixed", fixedPrice: "9000",
+        validityMonths: 12, isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
+        kind: "pack", packOfComboId: null, packSessions: 3, servicesTogether: false,
+      })
+      .returning({ id: combos.id });
+    packSueltoId = packSuelto!.id;
+    await dbReal.insert(comboService).values({
+      comboId: packSueltoId, serviceId: servSueltoId, sessionsIncluded: 1, servicePrice: "3000",
+    });
+  }, 30000);
+
+  afterAll(async () => {
+    await limpiarCombo();
+  });
+
+  it("combo juntos=true: el que se acaba de agendar y uno con turno de antes quedan afuera; el resto vuelve", async () => {
+    const compra = await createCompra(dbReal, {
+      customerId: idClienta,
+      comboId: comboJuntosId,
+      description: `${QA_COMBO}_C1`,
+      sessionsTotal: 1,
+      baseAmount: 10000,
+      discountedAmount: 10000,
+      finalAmount: 10000,
+    });
+    const filas = await dbReal
+      .select({ id: customerPurchaseService.id, serviceId: customerPurchaseService.serviceId })
+      .from(customerPurchaseService)
+      .where(eq(customerPurchaseService.customerPurchaseId, compra.id));
+    const filaA = filas.find((f) => f.serviceId === servAId)!;
+    const filaB = filas.find((f) => f.serviceId === servBId)!;
+    const filaC = filas.find((f) => f.serviceId === servCId)!;
+
+    // servB ya tenía turno de ANTES (no relacionado con lo que se acaba de
+    // confirmar). servA es el que se acaba de agendar: se marca también, tal
+    // como lo deja `tomarServicio` en la misma transacción de creación.
+    const [turnoB] = await dbReal
+      .insert(appointments)
+      .values({ status: "scheduled", notes: `${QA_COMBO}_B` })
+      .returning({ id: appointments.id });
+    const [turnoA] = await dbReal
+      .insert(appointments)
+      .values({ status: "scheduled", notes: `${QA_COMBO}_A` })
+      .returning({ id: appointments.id });
+    await dbReal
+      .update(customerPurchaseService)
+      .set({ appointmentId: turnoB!.id })
+      .where(eq(customerPurchaseService.id, filaB.id));
+    await dbReal
+      .update(customerPurchaseService)
+      .set({ appointmentId: turnoA!.id })
+      .where(eq(customerPurchaseService.id, filaA.id));
+
+    const hermanos = await hermanosDelCombo(dbReal, filaA.id);
+
+    expect(hermanos).toHaveLength(1);
+    expect(hermanos[0]!.purchaseServiceId).toBe(filaC.id);
+    expect(hermanos[0]!.serviceId).toBe(servCId);
+    expect(hermanos[0]!.serviceName).toBe(`${QA_COMBO}_C`);
+  });
+
+  it("combo juntos=false: no sugiere nada", async () => {
+    const compra = await createCompra(dbReal, {
+      customerId: idClienta,
+      comboId: comboSeparadoId,
+      description: `${QA_COMBO}_C2`,
+      sessionsTotal: 1,
+      baseAmount: 6000,
+      discountedAmount: 6000,
+      finalAmount: 6000,
+    });
+    const [fila] = await dbReal
+      .select({ id: customerPurchaseService.id })
+      .from(customerPurchaseService)
+      .where(eq(customerPurchaseService.customerPurchaseId, compra.id))
+      .limit(1);
+
+    expect(await hermanosDelCombo(dbReal, fila!.id)).toEqual([]);
+  });
+
+  it("una compra sin combo (servicio suelto) no sugiere nada", async () => {
+    const compra = await createCompra(dbReal, {
+      customerId: idClienta,
+      serviceId: servSueltoId,
+      description: `${QA_COMBO}_C3`,
+      sessionsTotal: 1,
+      baseAmount: 3000,
+      discountedAmount: 3000,
+      finalAmount: 3000,
+    });
+    const [fila] = await dbReal
+      .select({ id: customerPurchaseService.id })
+      .from(customerPurchaseService)
+      .where(eq(customerPurchaseService.customerPurchaseId, compra.id))
+      .limit(1);
+
+    expect(await hermanosDelCombo(dbReal, fila!.id)).toEqual([]);
+  });
+
+  it("pack de un combo juntos=true, 4 repeticiones: sólo trae el hermano de la MISMA repetición", async () => {
+    const compra = await createCompra(dbReal, {
+      customerId: idClienta,
+      comboId: packDelComboId,
+      description: `${QA_COMBO}_C4`,
+      sessionsTotal: 4,
+      baseAmount: 20000,
+      discountedAmount: 20000,
+      finalAmount: 20000,
+    });
+    const filas = await dbReal
+      .select({
+        id: customerPurchaseService.id,
+        serviceId: customerPurchaseService.serviceId,
+        repeticion: customerPurchaseService.repeticion,
+      })
+      .from(customerPurchaseService)
+      .where(eq(customerPurchaseService.customerPurchaseId, compra.id));
+    expect(filas).toHaveLength(8); // 4 repeticiones × 2 servicios
+
+    const filaXRep2 = filas.find((f) => f.serviceId === servXId && f.repeticion === 2)!;
+    const filaYRep2 = filas.find((f) => f.serviceId === servYId && f.repeticion === 2)!;
+
+    const hermanos = await hermanosDelCombo(dbReal, filaXRep2.id);
+
+    expect(hermanos).toHaveLength(1);
+    expect(hermanos[0]!.purchaseServiceId).toBe(filaYRep2.id);
+  });
+
+  it("pack de un servicio suelto repetido (sin combo detrás) no sugiere nada", async () => {
+    const compra = await createCompra(dbReal, {
+      customerId: idClienta,
+      comboId: packSueltoId,
+      description: `${QA_COMBO}_C5`,
+      sessionsTotal: 3,
+      baseAmount: 9000,
+      discountedAmount: 9000,
+      finalAmount: 9000,
+    });
+    const [fila] = await dbReal
+      .select({ id: customerPurchaseService.id })
+      .from(customerPurchaseService)
+      .where(eq(customerPurchaseService.customerPurchaseId, compra.id))
+      .limit(1);
+
+    expect(await hermanosDelCombo(dbReal, fila!.id)).toEqual([]);
+  });
+
+  it("un purchaseServiceId que no existe no tira, devuelve vacío", async () => {
+    expect(
+      await hermanosDelCombo(dbReal, "00000000-0000-0000-0000-000000000000"),
+    ).toEqual([]);
+  });
+});
