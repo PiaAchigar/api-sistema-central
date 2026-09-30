@@ -365,7 +365,15 @@ describe("hermanosDelCombo — V3c, los combos que se hacen juntos", () => {
         { name: `${QA_COMBO}_SUELTO` },
       ])
       .returning({ id: service.id });
-    [servAId, servBId, servCId, servXId, servYId, servSueltoId] = servicios.map((s) => s.id);
+    // Destructuring directo tipaba cada variable `string | undefined` (TS no
+    // sabe que el INSERT de 6 filas siempre `returning()`a 6) — el `!` es
+    // seguro acá porque las 6 filas de arriba son fijas.
+    servAId = servicios[0]!.id;
+    servBId = servicios[1]!.id;
+    servCId = servicios[2]!.id;
+    servXId = servicios[3]!.id;
+    servYId = servicios[4]!.id;
+    servSueltoId = servicios[5]!.id;
 
     // Combo de 3 servicios, JUNTOS.
     const [comboJuntos] = await dbReal
