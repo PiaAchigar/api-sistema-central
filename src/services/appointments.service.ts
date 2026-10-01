@@ -480,6 +480,7 @@ export async function rescheduleAppointment(
   id: string,
   newStart: string,
   quien: QuienYPorQue = {},
+  nuevaProveedoraId?: string,
 ) {
   const startDate = new Date(newStart);
   if (Number.isNaN(startDate.getTime())) throw badRequest("Fecha de inicio inválida");
@@ -489,10 +490,24 @@ export async function rescheduleAppointment(
   if (appt.status === "completed") throw conflict("Un turno completado no puede reagendarse");
   if (!appt.serviceId || !appt.serviceProviderId) throw badRequest("Turno sin servicio o proveedora");
 
+  // Cambiar de proveedora al reagendar NO aplica a depilación: esa rama tiene
+  // reglas de línea comprada y puerta de pago (más abajo) que nunca previeron
+  // un cambio de proveedora. Se decide ANTES de mirar disponibilidad para que
+  // el rechazo sea siempre el mismo y no lo tape un "no está disponible".
+  const proveedoraId = nuevaProveedoraId ?? appt.serviceProviderId;
+  const cambiaProveedora = proveedoraId !== appt.serviceProviderId;
+  const ancla = await anclaDeDepilacionOpcional(db);
+  const esDepilacion = ancla != null && appt.serviceId === ancla;
+  if (cambiaProveedora && esDepilacion) {
+    throw badRequest("No se puede cambiar de proveedora en un turno de depilación al reagendar");
+  }
+
   const localDate = utcToLocalDateString(startDate);
   // El quinto argumento saca a este mismo turno del cálculo de ocupación: si no,
-  // se bloquea a sí mismo y no se lo puede correr media hora.
-  const ctx = await loadAvailabilityContext(db, appt.serviceId, localDate, appt.serviceProviderId, id);
+  // se bloquea a sí mismo y no se lo puede correr media hora. La proveedora es la
+  // pedida (o la de siempre): una que no ofrece el servicio queda fuera de
+  // `ctx.providers` y cae en "no está disponible ese día".
+  const ctx = await loadAvailabilityContext(db, appt.serviceId, localDate, proveedoraId, id);
   if (!ctx.open) throw conflict("El local está cerrado ese día");
   if (ctx.providers.length === 0) throw conflict("La proveedora no está disponible ese día");
 
@@ -505,8 +520,6 @@ export async function rescheduleAppointment(
   // `endDate`, la franja del historial y el UPDATE final tienen que ver el
   // mismo número, o se valida disponibilidad contra una duración y se guarda
   // otra.
-  const ancla = await anclaDeDepilacionOpcional(db);
-  const esDepilacion = ancla != null && appt.serviceId === ancla;
   const durationMinutes = esDepilacion ? appt.durationMinutes ?? ctx.durationMinutes : ctx.durationMinutes;
 
   // ── En qué estado QUEDA el turno reagendado ────────────────────────────
@@ -571,24 +584,45 @@ export async function rescheduleAppointment(
   const requested: Interval = { start: startMin, end: startMin + durationMinutes };
   const endDate = new Date(startDate.getTime() + durationMinutes * 60_000);
 
-  const freeWindows = ctx.freeWindowsByProvider.get(appt.serviceProviderId) ?? [];
+  const freeWindows = ctx.freeWindowsByProvider.get(proveedoraId) ?? [];
   const fits = freeWindows.some((w) => requested.start >= w.start && requested.end <= w.end);
   if (!fits) throw conflict("La proveedora no tiene ese horario disponible");
+
+  // Con otra proveedora cambia con qué máquina se puede hacer (cada una está
+  // certificada en las suyas): se elige la primera certificada y libre, igual
+  // que al crear un turno. Si la proveedora no cambia, la máquina no se toca.
+  let machineId = appt.machineId ?? null;
+  if (cambiaProveedora && ctx.requiresMachine) {
+    const candidatas = ctx.machinesByProvider.get(proveedoraId) ?? [];
+    const libre = candidatas.find((mid) => {
+      const huecos = subtractAll(freeWindows, ctx.busyByMachine.get(mid) ?? []);
+      return huecos.some((w) => requested.start >= w.start && requested.end <= w.end);
+    });
+    if (!libre) throw conflict("No hay máquina disponible en ese horario");
+    machineId = libre;
+  }
 
   return db.transaction(async (tx) => {
     const clashes = await getOverlappingAppointments(
       tx,
-      { providerId: appt.serviceProviderId! },
+      { providerId: proveedoraId },
       startDate,
       endDate,
     );
     const realClashes = clashes.filter((c) => c.id !== id);
     if (realClashes.length > 0) throw conflict("El horario acaba de ser tomado por otro turno");
 
+    if (cambiaProveedora && machineId) {
+      const machineClashes = await getOverlappingAppointments(tx, { machineId }, startDate, endDate);
+      if (machineClashes.some((c) => c.id !== id)) {
+        throw conflict("La máquina acaba de ser tomada por otro turno");
+      }
+    }
+
     // Antes del UPDATE, porque después la fecha vieja ya no existe en ningún
     // lado. Va en la misma transacción: o se mueve y queda registrado, o no
     // pasa ninguna de las dos cosas.
-    const franja = { start: startDate, end: endDate, durationMinutes };
+    const franja = { start: startDate, end: endDate, durationMinutes, providerId: proveedoraId };
     if (huboMovimiento(appt, franja)) {
       await recordReschedule(tx, filaDeReagendado(appt, franja, quien));
     }
@@ -606,6 +640,7 @@ export async function rescheduleAppointment(
       durationMinutes,
       status:                sigueSiendoReserva ? "reserved" : "scheduled",
       reservationExpiresAt:  sigueSiendoReserva ? appt.reservationExpiresAt : null,
+      ...(cambiaProveedora ? { serviceProviderId: proveedoraId, machineId } : {}),
     });
   });
 }

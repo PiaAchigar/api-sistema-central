@@ -1,6 +1,7 @@
 import { desc, eq } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { appointmentReschedule, users } from "../db/schema";
+import { alias } from "drizzle-orm/pg-core";
+import { appointmentReschedule, serviceProviders, users } from "../db/schema";
 import type { FilaDeReagendado } from "../lib/reagendado";
 
 /** Subconjunto de `Db` que también sirve dentro de una transacción (`tx`). */
@@ -25,6 +26,8 @@ export async function recordReschedule(tx: Tx, fila: FilaDeReagendado) {
  * lo que de verdad se perdía antes.
  */
 export async function listReschedules(db: Db, appointmentId: string) {
+  const proveedoraAnterior = alias(serviceProviders, "proveedora_anterior");
+  const proveedoraNueva = alias(serviceProviders, "proveedora_nueva");
   return db
     .select({
       id: appointmentReschedule.id,
@@ -35,9 +38,13 @@ export async function listReschedules(db: Db, appointmentId: string) {
       reason: appointmentReschedule.reason,
       createdAt: appointmentReschedule.createdAt,
       rescheduledByName: users.fullName,
+      previousProviderName: proveedoraAnterior.fullName,
+      newProviderName: proveedoraNueva.fullName,
     })
     .from(appointmentReschedule)
     .leftJoin(users, eq(users.authId, appointmentReschedule.rescheduledByUserId))
+    .leftJoin(proveedoraAnterior, eq(proveedoraAnterior.id, appointmentReschedule.previousProviderId))
+    .leftJoin(proveedoraNueva, eq(proveedoraNueva.id, appointmentReschedule.newProviderId))
     .where(eq(appointmentReschedule.appointmentId, appointmentId))
     .orderBy(desc(appointmentReschedule.createdAt));
 }

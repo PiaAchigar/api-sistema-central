@@ -191,8 +191,11 @@ appointmentsRouter.patch("/:id", requireAuth, zValidator("json", patchBody), asy
   return c.json(updated);
 });
 
-const rescheduleBody = z.object({
+export const rescheduleBody = z.object({
   newStart: z.string().datetime({ offset: true }),
+  // Opcional: pasar el turno a OTRA proveedora que ofrezca el mismo servicio.
+  // Ausente = la misma de siempre (el reagendado de sólo fecha/hora).
+  providerId: z.string().uuid().optional(),
   // Opcional: quien mueve el turno puede escribir por qué. Queda en el
   // historial, que es lo único que después explica un cambio de fecha.
   reason: z.string().max(500).optional(),
@@ -201,10 +204,13 @@ const rescheduleBody = z.object({
 appointmentsRouter.patch("/:id/reschedule", requireAuth, zValidator("json", rescheduleBody), async (c) => {
   const db      = createDb(c.env);
   const body    = c.req.valid("json");
-  const updated = await rescheduleAppointment(db, c.req.param("id"), body.newStart, {
-    userId: c.get("userId"),
-    reason: body.reason ?? null,
-  });
+  const updated = await rescheduleAppointment(
+    db,
+    c.req.param("id"),
+    body.newStart,
+    { userId: c.get("userId"), reason: body.reason ?? null },
+    body.providerId,
+  );
   return c.json(updated);
 });
 

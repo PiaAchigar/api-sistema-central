@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appointmentsRouter, comboPendientesQuery, createBody } from "./appointments";
+import { appointmentsRouter, comboPendientesQuery, createBody, rescheduleBody } from "./appointments";
 
 describe("el cuerpo del turno nuevo", () => {
   /**
@@ -109,5 +109,22 @@ describe("GET /combo-pendientes — validación", () => {
       purchaseServiceId: "44444444-4444-4444-4444-444444444444",
     });
     expect(ok.success).toBe(true);
+  });
+});
+
+describe("rescheduleBody — reagendar con proveedora", () => {
+  const base = { newStart: "2026-10-19T10:00:00-03:00" };
+
+  it("sin providerId sigue siendo válido (el camino de siempre)", () => {
+    expect(rescheduleBody.safeParse(base).success).toBe(true);
+  });
+
+  it("acepta un providerId uuid", () => {
+    const r = rescheduleBody.safeParse({ ...base, providerId: "11111111-1111-4111-8111-111111111111" });
+    expect(r.success).toBe(true);
+  });
+
+  it("rechaza un providerId que no es uuid", () => {
+    expect(rescheduleBody.safeParse({ ...base, providerId: "gabi" }).success).toBe(false);
   });
 });
