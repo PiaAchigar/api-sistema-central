@@ -29,6 +29,7 @@ vi.mock("../repositories/ancla-de-depilacion.repo", () => ({
 
 const { createAppointment, rescheduleAppointment } = await import("./appointments.service");
 const { listReschedules } = await import("../repositories/appointment-reschedule.repo");
+const { getAvailability, getMonthAvailability } = await import("./availability.service");
 
 const LOCAL_DB_URL = "postgresql://piubella:piubella@localhost:5499/piubella";
 const pgClient = postgres(LOCAL_DB_URL, { max: 1 });
@@ -246,5 +247,37 @@ describe("reagendar con proveedora", () => {
     } finally {
       estado.ancla = null;
     }
+  });
+});
+
+describe("disponibilidad para reagendar un turno de depilación", () => {
+  // El ancla de depilación tiene una duración de RELLENO (30 min) en el
+  // catálogo; la real es la que el turno guardó al crearse (la suma de sus
+  // zonas). Si el calendario y el select de hora calculan con 30, ofrecen
+  // horarios que `rescheduleAppointment` (que valida con la real) rechaza.
+  it("usa la duración guardada del turno, no la del ancla", async () => {
+    const t = await turnoDe(servicioId, provA, aLas10(LUNES_1));
+    await db.update(appointments).set({ durationMinutes: 90 }).where(eq(appointments.id, t.id));
+    estado.ancla = servicioId;
+    try {
+      const r = await getAvailability(db, servicioId, LUNES_1, provA, t.id);
+      expect(r.durationMinutes).toBe(90);
+      expect(r.slots.find((s) => s.start === "10:00")?.end).toBe("11:30");
+      // La prestadora trabaja hasta las 20: lo último que entra son 90 min desde las 18:30.
+      expect(r.slots.at(-1)?.start).toBe("18:30");
+
+      // El calendario usa el mismo cálculo.
+      const mes = await getMonthAvailability(db, servicioId, provA, LUNES_1.slice(0, 7), t.id);
+      expect(mes.availableDays).toContain(LUNES_1);
+    } finally {
+      estado.ancla = null;
+    }
+  });
+
+  it("un servicio que no es depilación sigue con la duración del catálogo", async () => {
+    const t = await turnoDe(servicioId, provA, aLas10(LUNES_1));
+    await db.update(appointments).set({ durationMinutes: 90 }).where(eq(appointments.id, t.id));
+    const r = await getAvailability(db, servicioId, LUNES_1, provA, t.id);
+    expect(r.durationMinutes).toBe(30);
   });
 });

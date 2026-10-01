@@ -16,7 +16,9 @@ import {
   todayLocal,
   utcToLocalMinutes,
 } from "../lib/time";
+import { anclaDeDepilacionOpcional } from "../repositories/ancla-de-depilacion.repo";
 import {
+  getAppointmentById,
   getBusyAppointmentsForMachines,
   getBusyAppointmentsForProviders,
 } from "../repositories/appointments.repo";
@@ -315,12 +317,17 @@ export async function getAvailability(
   date: string,
   providerIdFilter?: string,
   excludeAppointmentId?: string,
+  duracionDelTurno?: number | null,
 ): Promise<AvailabilityResult> {
   const ctx = await loadAvailabilityContext(db, serviceId, date, providerIdFilter, excludeAppointmentId);
+  const duracion =
+    duracionDelTurno !== undefined
+      ? (duracionDelTurno ?? ctx.durationMinutes)
+      : ((await duracionAlReagendar(db, serviceId, excludeAppointmentId)) ?? ctx.durationMinutes);
   const base: AvailabilityResult = {
     date,
     serviceId,
-    durationMinutes: ctx.durationMinutes,
+    durationMinutes: duracion,
     slots: [],
   };
   if (!ctx.open) return { ...base, reason: "closed" };
@@ -333,7 +340,7 @@ export async function getAvailability(
   for (const provider of ctx.providers) {
     const windows = ctx.freeWindowsByProvider.get(provider.providerId) ?? [];
     if (!ctx.requiresMachine) {
-      for (const start of generateSlots(windows, ctx.durationMinutes, SLOT_STEP_MINUTES)) {
+      for (const start of generateSlots(windows, duracion, SLOT_STEP_MINUTES)) {
         if (start <= minStart) continue;
         const list = optionsByStart.get(start) ?? [];
         list.push({ ...provider, machineId: null });
@@ -345,7 +352,7 @@ export async function getAvailability(
     const seenStarts = new Set<number>();
     for (const machineId of ctx.machinesByProvider.get(provider.providerId) ?? []) {
       const machineFree = subtractAll(windows, ctx.busyByMachine.get(machineId) ?? []);
-      for (const start of generateSlots(machineFree, ctx.durationMinutes, SLOT_STEP_MINUTES)) {
+      for (const start of generateSlots(machineFree, duracion, SLOT_STEP_MINUTES)) {
         if (start <= minStart || seenStarts.has(start)) continue;
         seenStarts.add(start);
         const list = optionsByStart.get(start) ?? [];
@@ -359,7 +366,7 @@ export async function getAvailability(
     .sort(([a], [b]) => a - b)
     .map(([start, options]) => ({
       start: minutesToTime(start),
-      end: minutesToTime(start + ctx.durationMinutes),
+      end: minutesToTime(start + duracion),
       options,
     }));
 
@@ -386,11 +393,34 @@ export async function getMonthAvailability(
 ): Promise<{ month: string; availableDays: string[] }> {
   const hoy = todayLocal();
   const candidatos = diasDelMes(month).filter((d) => d >= hoy);
+  // Se resuelve una vez y no en cada uno de los ~30 días.
+  const duracion = await duracionAlReagendar(db, serviceId, excludeAppointmentId);
   const resultados = await Promise.all(
-    candidatos.map((d) => getAvailability(db, serviceId, d, providerId, excludeAppointmentId)),
+    candidatos.map((d) => getAvailability(db, serviceId, d, providerId, excludeAppointmentId, duracion)),
   );
   return {
     month,
     availableDays: candidatos.filter((_, i) => resultados[i]!.slots.length > 0),
   };
+}
+
+/**
+ * La duración con la que hay que buscar huecos para MOVER un turno, o `null`
+ * si es la del catálogo.
+ *
+ * Sólo cambia en depilación: el ancla tiene una duración de relleno (30, 1.56.0)
+ * y la real es la que el turno guardó al crearse (la suma de sus zonas) — la
+ * misma que usa `rescheduleAppointment` para validar. Sin esto el calendario y
+ * el select de hora ofrecen horarios que después el reagendado rechaza.
+ */
+async function duracionAlReagendar(
+  db: Db,
+  serviceId: string,
+  excludeAppointmentId?: string,
+): Promise<number | null> {
+  if (!excludeAppointmentId) return null;
+  const ancla = await anclaDeDepilacionOpcional(db);
+  if (ancla == null || ancla !== serviceId) return null;
+  const turno = await getAppointmentById(db, excludeAppointmentId);
+  return turno?.serviceId === serviceId ? (turno.durationMinutes ?? null) : null;
 }
