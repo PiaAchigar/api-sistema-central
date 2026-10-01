@@ -7,6 +7,7 @@ import {
   subtractAll,
   type Interval,
 } from "../lib/intervals";
+import { diasDelMes } from "../lib/mes";
 import {
   dayOfWeek,
   localDayRangeUtc,
@@ -313,8 +314,9 @@ export async function getAvailability(
   serviceId: string,
   date: string,
   providerIdFilter?: string,
+  excludeAppointmentId?: string,
 ): Promise<AvailabilityResult> {
-  const ctx = await loadAvailabilityContext(db, serviceId, date, providerIdFilter);
+  const ctx = await loadAvailabilityContext(db, serviceId, date, providerIdFilter, excludeAppointmentId);
   const base: AvailabilityResult = {
     date,
     serviceId,
@@ -362,4 +364,33 @@ export async function getAvailability(
     }));
 
   return { ...base, slots };
+}
+
+/**
+ * Qué días de un mes tienen al menos un hueco libre para UNA proveedora y un
+ * servicio — lo que pinta de verde el calendario de "Reagendar".
+ *
+ * Un día cuenta cuando `getAvailability` devuelve algún slot: es EXACTAMENTE lo
+ * que Laura va a ver en el select de hora al clickearlo, así que el calendario
+ * nunca pinta de verde un día en el que después no hay horarios (máquina
+ * ocupada, hora de hoy ya pasada, etc.). Los días anteriores a hoy ni se
+ * consultan. `excludeAppointmentId` es el turno que se está moviendo: su propio
+ * hueco cuenta como libre.
+ */
+export async function getMonthAvailability(
+  db: Db,
+  serviceId: string,
+  providerId: string,
+  month: string,
+  excludeAppointmentId?: string,
+): Promise<{ month: string; availableDays: string[] }> {
+  const hoy = todayLocal();
+  const candidatos = diasDelMes(month).filter((d) => d >= hoy);
+  const resultados = await Promise.all(
+    candidatos.map((d) => getAvailability(db, serviceId, d, providerId, excludeAppointmentId)),
+  );
+  return {
+    month,
+    availableDays: candidatos.filter((_, i) => resultados[i]!.slots.length > 0),
+  };
 }
