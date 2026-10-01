@@ -94,3 +94,52 @@ describe("huboMovimiento", () => {
     expect(huboMovimiento(huerfano, nuevo)).toBe(true);
   });
 });
+
+describe("con proveedora (reagendar puede cambiar de proveedora)", () => {
+  const conA = { ...turno, serviceProviderId: "provA" };
+
+  it("guarda la proveedora VIEJA en previous y la nueva en new", () => {
+    const fila = filaDeReagendado(conA, { ...nuevo, providerId: "provB" }, {});
+    expect(fila.previousProviderId).toBe("provA");
+    expect(fila.newProviderId).toBe("provB");
+  });
+
+  it("sin proveedora nueva, new es la misma que la de antes (no se perdió, no cambió)", () => {
+    const fila = filaDeReagendado(conA, nuevo, {});
+    expect(fila.previousProviderId).toBe("provA");
+    expect(fila.newProviderId).toBe("provA");
+  });
+
+  it("un turno sin proveedora previa no rompe: previous null, new la nueva", () => {
+    const fila = filaDeReagendado(turno, { ...nuevo, providerId: "provB" }, {});
+    expect(fila.previousProviderId).toBeNull();
+    expect(fila.newProviderId).toBe("provB");
+  });
+
+  it("cambiar SÓLO la proveedora (misma franja) es un movimiento", () => {
+    // Antes `huboMovimiento` miraba sólo fecha/hora: pasar el turno de Gabi a Lu
+    // al mismo horario no dejaba ninguna fila en el historial.
+    const mismaFranja = {
+      start: turno.appointmentStart,
+      end: turno.appointmentEnd,
+      durationMinutes: 60,
+      providerId: "provB",
+    };
+    expect(huboMovimiento(conA, mismaFranja)).toBe(true);
+  });
+
+  it("la misma proveedora y la misma franja NO es un movimiento", () => {
+    const igual = {
+      start: turno.appointmentStart,
+      end: turno.appointmentEnd,
+      durationMinutes: 60,
+      providerId: "provA",
+    };
+    expect(huboMovimiento(conA, igual)).toBe(false);
+  });
+
+  it("sin providerId en la franja y misma franja NO es movimiento (el camino de siempre)", () => {
+    const igual = { start: turno.appointmentStart, end: turno.appointmentEnd, durationMinutes: 60 };
+    expect(huboMovimiento(conA, igual)).toBe(false);
+  });
+});

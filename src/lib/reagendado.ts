@@ -16,6 +16,8 @@ export type TurnoPrevio = {
   appointmentStart: Date | null;
   appointmentEnd: Date | null;
   durationMinutes: number | null;
+  /** Opcional: quien arma la fila de un turno que no trae la proveedora no se rompe. */
+  serviceProviderId?: string | null;
 };
 
 /** La franja nueva, ya validada contra la disponibilidad. */
@@ -23,6 +25,8 @@ export type FranjaNueva = {
   start: Date;
   end: Date;
   durationMinutes: number;
+  /** La proveedora a la que pasa el turno. Ausente = no cambia de proveedora. */
+  providerId?: string | null;
 };
 
 export type QuienYPorQue = {
@@ -40,6 +44,8 @@ export type FilaDeReagendado = {
   newDurationMinutes: number;
   reason: string | null;
   rescheduledByUserId: string | null;
+  previousProviderId: string | null;
+  newProviderId: string | null;
 };
 
 export function filaDeReagendado(
@@ -58,6 +64,8 @@ export function filaDeReagendado(
     newDurationMinutes:      nueva.durationMinutes,
     reason:                  motivo ? motivo : null,
     rescheduledByUserId:     quien.userId ?? null,
+    previousProviderId:      turno.serviceProviderId ?? null,
+    newProviderId:           nueva.providerId ?? turno.serviceProviderId ?? null,
   };
 }
 
@@ -69,6 +77,8 @@ export function filaDeReagendado(
  * idénticos, y deja de servir para leer qué pasó con el turno.
  */
 export function huboMovimiento(turno: TurnoPrevio, nueva: FranjaNueva): boolean {
+  // Pasarlo a otra proveedora es mover el turno aunque el horario sea el mismo.
+  if (nueva.providerId && nueva.providerId !== (turno.serviceProviderId ?? null)) return true;
   if (!turno.appointmentStart) return true;
   if (turno.appointmentStart.getTime() !== nueva.start.getTime()) return true;
   return turno.appointmentEnd?.getTime() !== nueva.end.getTime();
