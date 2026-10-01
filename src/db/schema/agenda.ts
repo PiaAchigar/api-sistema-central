@@ -331,6 +331,8 @@ export const appointmentReschedule = pgTable("appointment_reschedule", {
   newDurationMinutes: integer("new_duration_minutes"),
   reason: text("reason"),
   rescheduledByUserId: uuid("rescheduled_by_user_id"),
+  previousProviderId: uuid("previous_provider_id"),
+  newProviderId: uuid("new_provider_id"),
   createdAt: createdAt(),
 });
 
