@@ -3,6 +3,14 @@ main = "src/index.ts"
 compatibility_date = "2026-06-03"
 compatibility_flags = ["nodejs_compat"]
 
+# Smart Placement: el worker corre cerca de la base (Supabase, AWS us-west-2) y
+# no en el borde de Cloudflare más cercano a quien navega (Buenos Aires). Cada
+# consulta a Postgres costaba ~400 ms de ida y vuelta, y la disponibilidad hace
+# varias en fila: un día de agenda tardaba ~4 s y el calendario de Reagendar
+# ~20 s (medido el 2026-10-07). Si algo falla, borrar este bloque y desplegar.
+[placement]
+mode = "smart"
+
 # Hyperdrive hacia Supabase Postgres
 # El ID se completo desde `wrangler hyperdrive create`.
 [[hyperdrive]]
