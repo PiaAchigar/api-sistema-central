@@ -472,3 +472,125 @@ export async function hardDeleteProvider(db: Db, id: string): Promise<boolean> {
   });
   return deleted.length > 0;
 }
+
+// ── Las mismas lecturas de la disponibilidad, para un rango de fechas ────────
+// Las usa el calendario de un mes entero (`fuenteDelMes`): una consulta por
+// tabla para todo el rango en vez de una por día. Devuelven además las
+// columnas de vigencia/fecha, para que el filtro de cada día se haga en
+// memoria con la MISMA condición que las versiones de un día de arriba.
+
+export async function getAgreementsForServiceInRange(
+  db: Db,
+  serviceId: string,
+  from: string,
+  to: string,
+) {
+  return db
+    .select({
+      providerId: serviceProviders.id,
+      providerName: serviceProviders.fullName,
+      paymentType: serviceProviderService.paymentType,
+      rate: serviceProviderService.rate,
+      validFrom: serviceProviderService.validFrom,
+      validUntil: serviceProviderService.validUntil,
+    })
+    .from(serviceProviderService)
+    .innerJoin(serviceProviders, eq(serviceProviders.id, serviceProviderService.serviceProviderId))
+    .where(
+      and(
+        eq(serviceProviderService.serviceId, serviceId),
+        eq(serviceProviderService.isActive, true),
+        eq(serviceProviders.status, "active"),
+        or(isNull(serviceProviderService.validFrom), lte(serviceProviderService.validFrom, to)),
+        or(isNull(serviceProviderService.validUntil), gte(serviceProviderService.validUntil, from)),
+      ),
+    );
+}
+
+export async function getWeeklyAvailabilityInRange(
+  db: Db,
+  providerIds: string[],
+  from: string,
+  to: string,
+) {
+  if (providerIds.length === 0) return [];
+  return db
+    .select({
+      providerId: serviceProviderAvailability.serviceProviderId,
+      dayOfWeek: serviceProviderAvailability.dayOfWeek,
+      workStartTime: serviceProviderAvailability.workStartTime,
+      workEndTime: serviceProviderAvailability.workEndTime,
+      validFrom: serviceProviderAvailability.validFrom,
+      validUntil: serviceProviderAvailability.validUntil,
+    })
+    .from(serviceProviderAvailability)
+    .where(
+      and(
+        inArray(serviceProviderAvailability.serviceProviderId, providerIds),
+        eq(serviceProviderAvailability.isActive, true),
+        or(isNull(serviceProviderAvailability.validFrom), lte(serviceProviderAvailability.validFrom, to)),
+        or(isNull(serviceProviderAvailability.validUntil), gte(serviceProviderAvailability.validUntil, from)),
+      ),
+    );
+}
+
+export async function getSaturdaySchedulesInRange(
+  db: Db,
+  providerIds: string[],
+  from: string,
+  to: string,
+) {
+  if (providerIds.length === 0) return [];
+  return db
+    .select({
+      providerId: providerSaturdaySchedule.serviceProviderId,
+      saturdayDate: providerSaturdaySchedule.saturdayDate,
+      isWorking: providerSaturdaySchedule.isWorking,
+      workStartTime: providerSaturdaySchedule.workStartTime,
+      workEndTime: providerSaturdaySchedule.workEndTime,
+    })
+    .from(providerSaturdaySchedule)
+    .where(
+      and(
+        inArray(providerSaturdaySchedule.serviceProviderId, providerIds),
+        gte(providerSaturdaySchedule.saturdayDate, from),
+        lte(providerSaturdaySchedule.saturdayDate, to),
+      ),
+    );
+}
+
+export async function getExceptionsInRange(
+  db: Db,
+  providerIds: string[],
+  from: string,
+  to: string,
+) {
+  if (providerIds.length === 0) return [];
+  return db
+    .select({
+      providerId: providerAvailabilityExceptions.serviceProviderId,
+      isWorking: providerAvailabilityExceptions.isWorking,
+      timeOverrideStart: providerAvailabilityExceptions.timeOverrideStart,
+      timeOverrideEnd: providerAvailabilityExceptions.timeOverrideEnd,
+      exceptionType: providerAvailabilityExceptions.exceptionType,
+      dateException: providerAvailabilityExceptions.dateException,
+      dateStart: providerAvailabilityExceptions.dateStart,
+      dateEnd: providerAvailabilityExceptions.dateEnd,
+    })
+    .from(providerAvailabilityExceptions)
+    .where(
+      and(
+        inArray(providerAvailabilityExceptions.serviceProviderId, providerIds),
+        or(
+          and(
+            gte(providerAvailabilityExceptions.dateException, from),
+            lte(providerAvailabilityExceptions.dateException, to),
+          ),
+          and(
+            lte(providerAvailabilityExceptions.dateStart, to),
+            gte(providerAvailabilityExceptions.dateEnd, from),
+          ),
+        ),
+      ),
+    );
+}

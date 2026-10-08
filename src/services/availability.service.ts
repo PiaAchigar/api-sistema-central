@@ -24,11 +24,16 @@ import {
 } from "../repositories/appointments.repo";
 import {
   getActiveAgreementsForService,
+  getAgreementsForServiceInRange,
+  getAllOpenHours,
   getCertifiedMachines,
   getExceptionsForDate,
+  getExceptionsInRange,
   getOpenHoursForDay,
   getSaturdaySchedules,
+  getSaturdaySchedulesInRange,
   getWeeklyAvailability,
+  getWeeklyAvailabilityInRange,
   listActiveProviders,
 } from "../repositories/providers.repo";
 import { getMachinesForService, getServiceById } from "../repositories/services.repo";
@@ -74,6 +79,130 @@ export type AvailabilityContext = {
   requiresMachine: boolean;
 };
 
+type Rango = { start: Date; end: Date };
+
+/**
+ * De dónde saca `loadAvailabilityContext` cada dato. Las firmas son las de los
+ * repos de un día; así el cálculo es UNO solo y lo único que cambia es si cada
+ * dato viaja a la base (`fuenteDirecta`) o sale de memoria (`fuenteDelMes`).
+ */
+export type FuenteDeDisponibilidad = {
+  servicio: (serviceId: string) => ReturnType<typeof getServiceById>;
+  horarioDelLocal: (dow: number) => ReturnType<typeof getOpenHoursForDay>;
+  acuerdos: (serviceId: string, date: string) => ReturnType<typeof getActiveAgreementsForService>;
+  semanal: (providerIds: string[], dow: number, date: string) => ReturnType<typeof getWeeklyAvailability>;
+  sabados: (providerIds: string[], date: string) => ReturnType<typeof getSaturdaySchedules>;
+  excepciones: (providerIds: string[], date: string) => ReturnType<typeof getExceptionsForDate>;
+  ocupadosDeProveedoras: (providerIds: string[], r: Rango) => ReturnType<typeof getBusyAppointmentsForProviders>;
+  maquinasDelServicio: (serviceId: string) => ReturnType<typeof getMachinesForService>;
+  certificadas: (providerIds: string[]) => ReturnType<typeof getCertifiedMachines>;
+  ocupadosDeMaquinas: (machineIds: string[], r: Rango) => ReturnType<typeof getBusyAppointmentsForMachines>;
+};
+
+export function fuenteDirecta(db: Db): FuenteDeDisponibilidad {
+  return {
+    servicio: (serviceId) => getServiceById(db, serviceId),
+    horarioDelLocal: (dow) => getOpenHoursForDay(db, dow),
+    acuerdos: (serviceId, date) => getActiveAgreementsForService(db, serviceId, date),
+    semanal: (ids, dow, date) => getWeeklyAvailability(db, ids, dow, date),
+    sabados: (ids, date) => getSaturdaySchedules(db, ids, date),
+    excepciones: (ids, date) => getExceptionsForDate(db, ids, date),
+    ocupadosDeProveedoras: (ids, r) => getBusyAppointmentsForProviders(db, ids, r),
+    maquinasDelServicio: (serviceId) => getMachinesForService(db, serviceId),
+    certificadas: (ids) => getCertifiedMachines(db, ids),
+    ocupadosDeMaquinas: (ids, r) => getBusyAppointmentsForMachines(db, ids, r),
+  };
+}
+
+const vigenteEl = (d: string, desde: string | null, hasta: string | null) =>
+  (desde == null || desde <= d) && (hasta == null || hasta >= d);
+const empiezaEn = (a: { appointmentStart: Date | null }, r: Rango) =>
+  a.appointmentStart != null && a.appointmentStart >= r.start && a.appointmentStart < r.end;
+
+/**
+ * Todo lo que necesita la disponibilidad de UN servicio en [from, to], traído
+ * con una consulta por tabla. Después cada día se arma en memoria aplicando las
+ * mismas condiciones que las consultas de un día (vigencias, fecha exacta o
+ * rango de la excepción, turnos que EMPIEZAN dentro del día).
+ *
+ * Existe porque contra producción cada consulta cuesta cientos de ms: el
+ * calendario de un mes hacía ~9 por día (~235) y tardaba ~20 s.
+ */
+export async function fuenteDelMes(
+  db: Db,
+  serviceId: string,
+  from: string,
+  to: string,
+  providerIdFilter?: string,
+): Promise<FuenteDeDisponibilidad> {
+  const rango: Rango = { start: localDayRangeUtc(from).start, end: localDayRangeUtc(to).end };
+  const [svc, horarios, todosLosAcuerdos, maquinasDelServicio] = await Promise.all([
+    getServiceById(db, serviceId),
+    getAllOpenHours(db),
+    getAgreementsForServiceInRange(db, serviceId, from, to),
+    getMachinesForService(db, serviceId),
+  ]);
+  const acuerdos = providerIdFilter
+    ? todosLosAcuerdos.filter((a) => a.providerId === providerIdFilter)
+    : todosLosAcuerdos;
+  const providerIds = [...new Set(acuerdos.map((a) => a.providerId))];
+  const machineIds = maquinasDelServicio.map((m) => m.machineId);
+  const requiresMachine = svc?.requiresMachine === true;
+  const [semanal, sabados, excepciones, ocupados, certificadas, ocupadosMaq] = await Promise.all([
+    getWeeklyAvailabilityInRange(db, providerIds, from, to),
+    getSaturdaySchedulesInRange(db, providerIds, from, to),
+    getExceptionsInRange(db, providerIds, from, to),
+    getBusyAppointmentsForProviders(db, providerIds, rango),
+    requiresMachine ? getCertifiedMachines(db, providerIds) : Promise.resolve([]),
+    requiresMachine ? getBusyAppointmentsForMachines(db, machineIds, rango) : Promise.resolve([]),
+  ]);
+
+  const deEstas = (ids: string[]) => {
+    const set = new Set(ids);
+    return <T extends { providerId: string | null }>(x: T) => x.providerId != null && set.has(x.providerId);
+  };
+
+  return {
+    servicio: async () => svc,
+    horarioDelLocal: async (dow) => {
+      const h = horarios.find((x) => x.dayOfWeek === dow);
+      return h ? { openingTime: h.openingTime, closingTime: h.closingTime, isOpen: h.isOpen } : null;
+    },
+    acuerdos: async (_serviceId, date) =>
+      todosLosAcuerdos
+        .filter((a) => vigenteEl(date, a.validFrom, a.validUntil))
+        .map(({ providerId, providerName, paymentType, rate }) => ({ providerId, providerName, paymentType, rate })),
+    semanal: async (ids, dow, date) =>
+      semanal
+        .filter(deEstas(ids))
+        .filter((w) => w.dayOfWeek === dow && vigenteEl(date, w.validFrom, w.validUntil))
+        .map(({ providerId, workStartTime, workEndTime }) => ({ providerId, workStartTime, workEndTime })),
+    sabados: async (ids, date) =>
+      sabados
+        .filter(deEstas(ids))
+        .filter((x) => x.saturdayDate === date)
+        .map(({ providerId, isWorking, workStartTime, workEndTime }) => ({ providerId, isWorking, workStartTime, workEndTime })),
+    excepciones: async (ids, date) =>
+      excepciones
+        .filter(deEstas(ids))
+        .filter(
+          (e) =>
+            e.dateException === date ||
+            (e.dateStart != null && e.dateEnd != null && e.dateStart <= date && e.dateEnd >= date),
+        )
+        .map(({ providerId, isWorking, timeOverrideStart, timeOverrideEnd, exceptionType }) => ({
+          providerId, isWorking, timeOverrideStart, timeOverrideEnd, exceptionType,
+        })),
+    ocupadosDeProveedoras: async (ids, r) => ocupados.filter(deEstas(ids)).filter((a) => empiezaEn(a, r)),
+    maquinasDelServicio: async () => maquinasDelServicio,
+    certificadas: async (ids) => certificadas.filter(deEstas(ids)),
+    ocupadosDeMaquinas: async (ids, r) => {
+      const set = new Set(ids);
+      return ocupadosMaq.filter((a) => a.machineId != null && set.has(a.machineId) && empiezaEn(a, r));
+    },
+  };
+}
+
 /**
  * `excludeAppointmentId` saca un turno del cálculo de ocupación.
  *
@@ -89,13 +218,14 @@ export async function loadAvailabilityContext(
   date: string,
   providerIdFilter?: string,
   excludeAppointmentId?: string,
+  fuente: FuenteDeDisponibilidad = fuenteDirecta(db),
 ): Promise<AvailabilityContext> {
-  const svc = await getServiceById(db, serviceId);
+  const svc = await fuente.servicio(serviceId);
   if (!svc) throw notFound("Service");
   const durationMinutes = svc.estimatedDurationMinutes ?? 30;
 
   const dow = dayOfWeek(date);
-  const openRow = await getOpenHoursForDay(db, dow);
+  const openRow = await fuente.horarioDelLocal(dow);
   const empty: AvailabilityContext = {
     service: svc,
     durationMinutes,
@@ -114,7 +244,7 @@ export async function loadAvailabilityContext(
     end: timeToMinutes(openRow.closingTime),
   };
 
-  let agreements = await getActiveAgreementsForService(db, serviceId, date);
+  let agreements = await fuente.acuerdos(serviceId, date);
   if (providerIdFilter) {
     agreements = agreements.filter((a) => a.providerId === providerIdFilter);
   }
@@ -128,7 +258,7 @@ export async function loadAvailabilityContext(
   // Ventanas base: sábado usa la tabla de sábados específicos; el resto, el horario semanal
   const baseWindows = new Map<string, Interval[]>();
   if (dow === 6) {
-    const saturdays = await getSaturdaySchedules(db, providerIds, date);
+    const saturdays = await fuente.sabados(providerIds, date);
     for (const s of saturdays) {
       if (s.isWorking && s.workStartTime && s.workEndTime && s.providerId) {
         baseWindows.set(s.providerId, [
@@ -137,7 +267,7 @@ export async function loadAvailabilityContext(
       }
     }
   } else {
-    const weekly = await getWeeklyAvailability(db, providerIds, dow, date);
+    const weekly = await fuente.semanal(providerIds, dow, date);
     for (const w of weekly) {
       if (!w.providerId || !w.workStartTime || !w.workEndTime) continue;
       const list = baseWindows.get(w.providerId) ?? [];
@@ -147,7 +277,7 @@ export async function loadAvailabilityContext(
   }
 
   // Excepciones: bloqueo total, bloqueo parcial u override de horario
-  const exceptions = await getExceptionsForDate(db, providerIds, date);
+  const exceptions = await fuente.excepciones(providerIds, date);
   for (const ex of exceptions) {
     if (!ex.providerId) continue;
     const current = baseWindows.get(ex.providerId) ?? [];
@@ -178,7 +308,7 @@ export async function loadAvailabilityContext(
 
   // Intersección con el horario del local + restar turnos existentes
   const dayRange = localDayRangeUtc(date);
-  const busyAppointments = await getBusyAppointmentsForProviders(db, providerIds, dayRange);
+  const busyAppointments = await fuente.ocupadosDeProveedoras(providerIds, dayRange);
   const busyByProvider = new Map<string, Interval[]>();
   for (const appt of busyAppointments) {
     if (appt.id === excludeAppointmentId) continue;
@@ -201,12 +331,12 @@ export async function loadAvailabilityContext(
   const machinesByProvider = new Map<string, string[]>();
   const busyByMachine = new Map<string, Interval[]>();
   if (svc.requiresMachine) {
-    const svcMachines = await getMachinesForService(db, serviceId);
+    const svcMachines = await fuente.maquinasDelServicio(serviceId);
     // primarias primero
     const orderedMachineIds = [...svcMachines]
       .sort((a, b) => Number(b.isPrimaryMachine ?? false) - Number(a.isPrimaryMachine ?? false))
       .map((m) => m.machineId);
-    const certified = await getCertifiedMachines(db, providerIds);
+    const certified = await fuente.certificadas(providerIds);
     const certifiedSet = new Set(certified.map((c) => `${c.providerId}|${c.machineId}`));
     for (const pid of providerIds) {
       machinesByProvider.set(
@@ -214,7 +344,7 @@ export async function loadAvailabilityContext(
         orderedMachineIds.filter((mid) => certifiedSet.has(`${pid}|${mid}`)),
       );
     }
-    const machineBusy = await getBusyAppointmentsForMachines(db, orderedMachineIds, dayRange);
+    const machineBusy = await fuente.ocupadosDeMaquinas(orderedMachineIds, dayRange);
     for (const appt of machineBusy) {
       if (appt.id === excludeAppointmentId) continue;
       if (!appt.machineId || !appt.appointmentStart || !appt.appointmentEnd) continue;
@@ -318,8 +448,9 @@ export async function getAvailability(
   providerIdFilter?: string,
   excludeAppointmentId?: string,
   duracionDelTurno?: number | null,
+  fuente?: FuenteDeDisponibilidad,
 ): Promise<AvailabilityResult> {
-  const ctx = await loadAvailabilityContext(db, serviceId, date, providerIdFilter, excludeAppointmentId);
+  const ctx = await loadAvailabilityContext(db, serviceId, date, providerIdFilter, excludeAppointmentId, fuente);
   const duracion =
     duracionDelTurno !== undefined
       ? (duracionDelTurno ?? ctx.durationMinutes)
@@ -393,10 +524,17 @@ export async function getMonthAvailability(
 ): Promise<{ month: string; availableDays: string[] }> {
   const hoy = todayLocal();
   const candidatos = diasDelMes(month).filter((d) => d >= hoy);
-  // Se resuelve una vez y no en cada uno de los ~30 días.
-  const duracion = await duracionAlReagendar(db, serviceId, excludeAppointmentId);
+  if (candidatos.length === 0) return { month, availableDays: [] };
+  // Todo se trae UNA vez para el mes (ver `fuenteDelMes`); cada día se arma
+  // después en memoria con el mismo cálculo que el endpoint de un día.
+  const [duracion, fuente] = await Promise.all([
+    duracionAlReagendar(db, serviceId, excludeAppointmentId),
+    fuenteDelMes(db, serviceId, candidatos[0]!, candidatos.at(-1)!, providerId),
+  ]);
   const resultados = await Promise.all(
-    candidatos.map((d) => getAvailability(db, serviceId, d, providerId, excludeAppointmentId, duracion)),
+    candidatos.map((d) =>
+      getAvailability(db, serviceId, d, providerId, excludeAppointmentId, duracion, fuente),
+    ),
   );
   return {
     month,
