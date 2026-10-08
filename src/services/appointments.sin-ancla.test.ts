@@ -43,6 +43,13 @@ const { createAppointment, rescheduleAppointment, updateAppointmentStatus } = aw
   "./appointments.service"
 );
 
+/** Dos lunes seguidos a 8+ semanas de hoy: una fecha fija termina en el pasado. */
+const LUNES: string[] = (() => {
+  const d = new Date(Date.now() + 56 * 86_400_000);
+  while (d.getUTCDay() !== 1) d.setUTCDate(d.getUTCDate() + 1);
+  return [0, 1].map((i) => new Date(d.getTime() + i * 7 * 86_400_000).toISOString().slice(0, 10));
+})();
+
 const LOCAL_DB_URL = "postgresql://piubella:piubella@localhost:5499/piubella";
 const pgClient = postgres(LOCAL_DB_URL, { max: 1 });
 const db = drizzle(pgClient, { schema }) as unknown as Db;
@@ -105,7 +112,7 @@ beforeAll(async () => {
     rate: "1000",
     isActive: true,
   });
-  // Lunes: las fechas de prueba (2026-10-19 y 2026-10-26) caen las dos lunes,
+  // Lunes: las fechas de prueba (`LUNES[0]` y `LUNES[1]`) caen las dos lunes,
   // y `open_hours` abre 09–20 ese día.
   await db.insert(serviceProviderAvailability).values({
     serviceProviderId: proveedoraId,
@@ -129,7 +136,7 @@ describe("sin el ancla cargada, la agenda que no es de depilación sigue viva", 
       customerId: CUSTOMER_ID,
       serviceId: servicioNormalId,
       providerId: proveedoraId,
-      start: "2026-10-19T13:00:00.000Z",
+      start: `${LUNES[0]}T13:00:00.000Z`,
       notes: QA,
     });
     turnoId = turno.id;
@@ -137,9 +144,9 @@ describe("sin el ancla cargada, la agenda que no es de depilación sigue viva", 
   });
 
   it("se puede reagendar", async () => {
-    const movido = await rescheduleAppointment(db, turnoId, "2026-10-26T13:00:00.000Z");
+    const movido = await rescheduleAppointment(db, turnoId, `${LUNES[1]}T13:00:00.000Z`);
     expect(movido).not.toBeNull();
-    expect(movido!.appointmentStart).toEqual(new Date("2026-10-26T13:00:00.000Z"));
+    expect(movido!.appointmentStart).toEqual(new Date(`${LUNES[1]}T13:00:00.000Z`));
   });
 
   it("se puede confirmar una reserva", async () => {
@@ -147,7 +154,7 @@ describe("sin el ancla cargada, la agenda que no es de depilación sigue viva", 
       customerId: CUSTOMER_ID,
       serviceId: servicioNormalId,
       providerId: proveedoraId,
-      start: "2026-10-19T16:00:00.000Z",
+      start: `${LUNES[0]}T16:00:00.000Z`,
       status: "reserved",
       expiryMinutes: 60,
       notes: QA,
@@ -168,7 +175,7 @@ describe("sin el ancla cargada, la agenda que no es de depilación sigue viva", 
         customerId: CUSTOMER_ID,
         serviceId: servicioNormalId,
         providerId: proveedoraId,
-        start: "2026-10-19T18:00:00.000Z",
+        start: `${LUNES[0]}T18:00:00.000Z`,
         zonas: ["11111111-1111-1111-1111-111111111111"],
         notes: QA,
       }),

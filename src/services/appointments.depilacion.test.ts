@@ -48,6 +48,20 @@ import { createAppointment, rescheduleAppointment, updateAppointmentStatus } fro
  * que el servidor la rechaza.
  */
 
+/**
+ * Ocho lunes seguidos, el primero a 8+ semanas de hoy. Antes las fechas eran
+ * fijas (2026-10-05…2026-11-23) y cuando la primera quedó en el pasado la
+ * suite entera reventó con "El turno no puede ser en el pasado". Lunes porque
+ * la proveedora de prueba sólo trabaja ese día.
+ */
+const LUNES: string[] = (() => {
+  const d = new Date(Date.now() + 56 * 86_400_000);
+  while (d.getUTCDay() !== 1) d.setUTCDate(d.getUTCDate() + 1);
+  return Array.from({ length: 8 }, (_, i) =>
+    new Date(d.getTime() + i * 7 * 86_400_000).toISOString().slice(0, 10),
+  );
+})();
+
 const LOCAL_DB_URL = "postgresql://piubella:piubella@localhost:5499/piubella";
 const pgClient = postgres(LOCAL_DB_URL, { max: 1 });
 const db = drizzle(pgClient, { schema }) as unknown as Db;
@@ -293,8 +307,8 @@ beforeAll(async () => {
     serviceProviderId: proveedoraId,
     machineId: maquinaId,
   });
-  // Lunes (day_of_week=1): las fechas de prueba (2026-10-05 y 2026-10-12)
-  // caen las dos lunes, y `open_hours` del local ya abre 09–20 ese día.
+  // Lunes (day_of_week=1): todas las fechas de prueba son `LUNES[n]`, y
+  // `open_hours` del local ya abre 09–20 ese día.
   await db.insert(serviceProviderAvailability).values({
     serviceProviderId: proveedoraId,
     dayOfWeek: 1,
@@ -371,7 +385,7 @@ describe("crear un turno de depilación", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-10-05T13:00:00.000Z",
+      start: `${LUNES[0]}T13:00:00.000Z`,
       customerPurchaseServiceId: lineaTurno1Id,
       zonas: [piernaId, axilaId],
       notes: QA,
@@ -409,7 +423,7 @@ describe("crear un turno de depilación", () => {
       serviceId: anclaId,
       providerId: proveedoraId,
       // Otro horario del mismo día: no puede pisar al turno del test anterior.
-      start: "2026-10-05T15:00:00.000Z",
+      start: `${LUNES[0]}T15:00:00.000Z`,
       customerPurchaseServiceId: lineaConsumeId,
       zonas: [axilaId],
       notes: QA,
@@ -425,7 +439,7 @@ describe("crear un turno de depilación", () => {
         customerId: CUSTOMER_ID,
         serviceId: anclaId,
         providerId: proveedoraId,
-        start: "2026-10-05T17:00:00.000Z",
+        start: `${LUNES[0]}T17:00:00.000Z`,
         customerPurchaseServiceId: lineaRechazoId,
         // Pack B presupuesta 10'; pierna+axila piden 12'.
         zonas: [piernaId, axilaId],
@@ -439,7 +453,7 @@ describe("crear un turno de depilación", () => {
         customerId: CUSTOMER_ID,
         serviceId: anclaId,
         providerId: proveedoraId,
-        start: "2026-10-05T18:00:00.000Z",
+        start: `${LUNES[0]}T18:00:00.000Z`,
         customerPurchaseServiceId: lineaSinZonasId,
         zonas: [],
       }),
@@ -460,7 +474,7 @@ describe("crear un turno de depilación", () => {
         // resolver si el servicio existe.
         serviceId: "11111111-1111-1111-1111-111111111111",
         providerId: proveedoraId,
-        start: "2026-10-05T19:00:00.000Z",
+        start: `${LUNES[0]}T19:00:00.000Z`,
         zonas: [axilaId],
       }),
     ).rejects.toThrow(/depilación/i);
@@ -482,10 +496,10 @@ describe("crear un turno de depilación", () => {
    * (consistente con el nuevo inicio).
    */
   it("reagendar conserva las zonas y la duración del turno", async () => {
-    const reagendado = await rescheduleAppointment(db, turno1Id, "2026-10-12T13:00:00.000Z");
+    const reagendado = await rescheduleAppointment(db, turno1Id, `${LUNES[1]}T13:00:00.000Z`);
     expect(reagendado).not.toBeNull();
     expect(reagendado!.durationMinutes).toBe(12);
-    expect(reagendado!.appointmentEnd).toEqual(new Date("2026-10-12T13:12:00.000Z"));
+    expect(reagendado!.appointmentEnd).toEqual(new Date(`${LUNES[1]}T13:12:00.000Z`));
 
     const zonas = await zonasDelTurno(turno1Id);
     expect(zonas).toHaveLength(2);
@@ -503,17 +517,17 @@ describe("crear un turno de depilación", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-10-05T20:00:00.000Z",
+      start: `${LUNES[0]}T20:00:00.000Z`,
       customerPurchaseServiceId: lineaGrandeId,
       zonas: zonasGrandesIds,
       notes: QA,
     });
     expect(turno.durationMinutes).toBe(36);
 
-    const reagendado = await rescheduleAppointment(db, turno.id, "2026-10-12T20:00:00.000Z");
+    const reagendado = await rescheduleAppointment(db, turno.id, `${LUNES[1]}T20:00:00.000Z`);
     expect(reagendado).not.toBeNull();
     expect(reagendado!.durationMinutes).toBe(36);
-    expect(reagendado!.appointmentEnd).toEqual(new Date("2026-10-12T20:36:00.000Z"));
+    expect(reagendado!.appointmentEnd).toEqual(new Date(`${LUNES[1]}T20:36:00.000Z`));
   });
 
   /**
@@ -541,7 +555,7 @@ describe("crear un turno de depilación", () => {
         customerId: CUSTOMER_ID,
         serviceId: anclaId,
         providerId: proveedoraId,
-        start: "2026-10-05T22:00:00.000Z",
+        start: `${LUNES[0]}T22:00:00.000Z`,
         customerPurchaseServiceId: lineaImpagaId,
         zonas: [piernaId, axilaId],
         status: "scheduled",
@@ -558,7 +572,7 @@ describe("crear un turno de depilación", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-10-05T22:00:00.000Z",
+      start: `${LUNES[0]}T22:00:00.000Z`,
       customerPurchaseServiceId: lineaImpagaId,
       zonas: [piernaId, axilaId],
       status: "reserved",
@@ -596,7 +610,7 @@ describe("puerta de pago al confirmar una reserva (Task 13, ronda 1)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-10-12T15:00:00.000Z",
+      start: `${LUNES[1]}T15:00:00.000Z`,
       customerPurchaseServiceId: lineaId,
       zonas: [piernaId, axilaId],
       status: "reserved",
@@ -646,8 +660,8 @@ describe("puerta de pago al confirmar una reserva (Task 13, ronda 1)", () => {
         customerId: CUSTOMER_ID,
         serviceProviderId: proveedoraId,
         serviceId: servicioNormalId,
-        appointmentStart: new Date("2026-10-12T17:00:00.000Z"),
-        appointmentEnd: new Date("2026-10-12T17:30:00.000Z"),
+        appointmentStart: new Date(`${LUNES[1]}T17:00:00.000Z`),
+        appointmentEnd: new Date(`${LUNES[1]}T17:30:00.000Z`),
         durationMinutes: 30,
         servicePrice: "1000",
         status: "reserved",
@@ -683,7 +697,7 @@ describe("puerta de pago al confirmar una reserva (Task 13, ronda 1)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-10-12T18:00:00.000Z",
+      start: `${LUNES[1]}T18:00:00.000Z`,
       customerPurchaseServiceId: lineaId,
       zonas: [piernaId, axilaId],
       status: "reserved",
@@ -751,7 +765,7 @@ describe("el sexo elegido al agendar (ronda 3)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-10-19T13:00:00.000Z",
+      start: `${LUNES[2]}T13:00:00.000Z`,
       customerPurchaseServiceId: lineaId,
       zonas: [piernaId, axilaId],
       sexo: "hombre",
@@ -759,7 +773,7 @@ describe("el sexo elegido al agendar (ronda 3)", () => {
     });
 
     expect(turno.durationMinutes).toBe(15);
-    expect(turno.appointmentEnd).toEqual(new Date("2026-10-19T13:15:00.000Z"));
+    expect(turno.appointmentEnd).toEqual(new Date(`${LUNES[2]}T13:15:00.000Z`));
 
     const zonas = await zonasDelTurno(turno.id);
     expect(zonas.find((z) => z.bodyZoneId === piernaId)!.minutos).toBe(10);
@@ -772,7 +786,7 @@ describe("el sexo elegido al agendar (ronda 3)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-10-19T15:00:00.000Z",
+      start: `${LUNES[2]}T15:00:00.000Z`,
       customerPurchaseServiceId: lineaId,
       zonas: [piernaId, axilaId],
       notes: QA,
@@ -838,7 +852,7 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-10-19T17:00:00.000Z",
+      start: `${LUNES[2]}T17:00:00.000Z`,
       customerPurchaseServiceId: lineaId,
       zonas: [piernaId, axilaId],
       status: "reserved",
@@ -848,10 +862,10 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
     expect(reserva.status).toBe("reserved");
     expect(reserva.reservationExpiresAt).not.toBeNull();
 
-    const movida = await rescheduleAppointment(db, reserva.id, "2026-10-26T17:00:00.000Z");
+    const movida = await rescheduleAppointment(db, reserva.id, `${LUNES[3]}T17:00:00.000Z`);
     expect(movida).not.toBeNull();
     // Se movió de verdad…
-    expect(movida!.appointmentStart).toEqual(new Date("2026-10-26T17:00:00.000Z"));
+    expect(movida!.appointmentStart).toEqual(new Date(`${LUNES[3]}T17:00:00.000Z`));
     // …pero sigue siendo una reserva, con su vencimiento intacto: si se
     // hubiera ascendido a `scheduled` con `reservationExpiresAt: null`, el
     // `pg_cron` no la cancelaría nunca y la sesión quedaría tomada para
@@ -867,14 +881,14 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-10-19T19:00:00.000Z",
+      start: `${LUNES[2]}T19:00:00.000Z`,
       customerPurchaseServiceId: lineaId,
       zonas: [piernaId, axilaId],
       notes: QA,
     });
     expect(turno.status).toBe("scheduled");
 
-    const movido = await rescheduleAppointment(db, turno.id, "2026-10-26T19:00:00.000Z");
+    const movido = await rescheduleAppointment(db, turno.id, `${LUNES[3]}T19:00:00.000Z`);
     expect(movido!.status).toBe("scheduled");
     expect(movido!.reservationExpiresAt).toBeNull();
   });
@@ -889,7 +903,7 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-10-19T21:00:00.000Z",
+      start: `${LUNES[2]}T21:00:00.000Z`,
       customerPurchaseServiceId: lineaId,
       zonas: [piernaId, axilaId],
       status: "reserved",
@@ -922,7 +936,7 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-10-26T21:00:00.000Z",
+      start: `${LUNES[3]}T21:00:00.000Z`,
       customerPurchaseServiceId: lineaId,
       zonas: [piernaId, axilaId],
       status: "reserved",
@@ -971,7 +985,7 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-11-02T13:00:00.000Z",
+      start: `${LUNES[4]}T13:00:00.000Z`,
       customerPurchaseServiceId: primera,
       zonas: [axilaId],
       notes: QA,
@@ -981,7 +995,7 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-11-02T15:00:00.000Z",
+      start: `${LUNES[4]}T15:00:00.000Z`,
       customerPurchaseServiceId: segunda,
       zonas: [axilaId],
       status: "reserved",
@@ -1013,7 +1027,7 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-11-16T13:00:00.000Z",
+      start: `${LUNES[6]}T13:00:00.000Z`,
       customerPurchaseServiceId: lineaId,
       zonas: [piernaId, axilaId],
       status: "reserved",
@@ -1023,12 +1037,12 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
     await updateAppointmentStatus(db, reserva.id, { status: "cancelled" });
 
     await expect(
-      rescheduleAppointment(db, reserva.id, "2026-11-23T13:00:00.000Z"),
+      rescheduleAppointment(db, reserva.id, `${LUNES[7]}T13:00:00.000Z`),
     ).rejects.toThrow(/se paga entero.*falta \$90000/i);
 
     // Y con la plata en mano, el mismo botón mueve el turno y lo agenda.
     await pagar(compra.id, "90000");
-    const movido = await rescheduleAppointment(db, reserva.id, "2026-11-23T13:00:00.000Z");
+    const movido = await rescheduleAppointment(db, reserva.id, `${LUNES[7]}T13:00:00.000Z`);
     expect(movido!.status).toBe("scheduled");
     expect(movido!.reservationExpiresAt).toBeNull();
   });
@@ -1039,7 +1053,7 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-11-16T15:00:00.000Z",
+      start: `${LUNES[6]}T15:00:00.000Z`,
       customerPurchaseServiceId: lineaId,
       zonas: [piernaId, axilaId],
       status: "reserved",
@@ -1051,7 +1065,7 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
     await updateAppointmentStatus(db, reserva.id, { status: "no_show" });
 
     await expect(
-      rescheduleAppointment(db, reserva.id, "2026-11-23T15:00:00.000Z"),
+      rescheduleAppointment(db, reserva.id, `${LUNES[7]}T15:00:00.000Z`),
     ).rejects.toThrow(/se paga entero.*falta \$90000/i);
   });
 
@@ -1070,7 +1084,7 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-11-16T17:00:00.000Z",
+      start: `${LUNES[6]}T17:00:00.000Z`,
       customerPurchaseServiceId: lineaId,
       zonas: [piernaId, axilaId],
       status: "reserved",
@@ -1084,22 +1098,22 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
       .where(eq(appointments.id, reserva.id));
 
     await expect(
-      rescheduleAppointment(db, reserva.id, "2026-11-23T17:00:00.000Z"),
+      rescheduleAppointment(db, reserva.id, `${LUNES[7]}T17:00:00.000Z`),
     ).rejects.toThrow(/venció/i);
     // El motivo y el monto siguen estando: es la misma puerta, con contexto.
     await expect(
-      rescheduleAppointment(db, reserva.id, "2026-11-23T17:00:00.000Z"),
+      rescheduleAppointment(db, reserva.id, `${LUNES[7]}T17:00:00.000Z`),
     ).rejects.toThrow(/falta \$90000/);
 
     // Nada se movió: sigue en su horario original y sigue reservada.
     const sinMover = await getAppointmentById(db, reserva.id);
-    expect(sinMover!.appointmentStart).toEqual(new Date("2026-11-16T17:00:00.000Z"));
+    expect(sinMover!.appointmentStart).toEqual(new Date(`${LUNES[6]}T17:00:00.000Z`));
     expect(sinMover!.status).toBe("reserved");
 
     // Con el pago al día, reagendarla la AGENDA: nunca queda `reserved` con un
     // vencimiento que ya pasó.
     await pagar(compra.id, "90000");
-    const movida = await rescheduleAppointment(db, reserva.id, "2026-11-23T17:00:00.000Z");
+    const movida = await rescheduleAppointment(db, reserva.id, `${LUNES[7]}T17:00:00.000Z`);
     expect(movida!.status).toBe("scheduled");
     expect(movida!.reservationExpiresAt).toBeNull();
   });
@@ -1128,8 +1142,8 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
           customerId: CUSTOMER_ID,
           serviceProviderId: proveedoraId,
           serviceId: servicioNormalId,
-          appointmentStart: new Date(`2026-11-16T${hora}:00.000Z`),
-          appointmentEnd: new Date(`2026-11-16T${fin}:00.000Z`),
+          appointmentStart: new Date(`${LUNES[6]}T${hora}:00.000Z`),
+          appointmentEnd: new Date(`${LUNES[6]}T${fin}:00.000Z`),
           durationMinutes: 30,
           servicePrice: "1000",
           status: estado,
@@ -1140,7 +1154,7 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
         })
         .returning({ id: appointments.id });
 
-      const movido = await rescheduleAppointment(db, creada!.id, `2026-11-23T${hora}:00.000Z`);
+      const movido = await rescheduleAppointment(db, creada!.id, `${LUNES[7]}T${hora}:00.000Z`);
       expect(movido!.status).toBe("scheduled");
       expect(movido!.reservationExpiresAt).toBeNull();
     },
@@ -1158,8 +1172,8 @@ describe("puerta de pago al reagendar y al restaurar (ronda 3)", () => {
         customerId: CUSTOMER_ID,
         serviceProviderId: proveedoraId,
         serviceId: servicioNormalId,
-        appointmentStart: new Date("2026-10-26T22:00:00.000Z"),
-        appointmentEnd: new Date("2026-10-26T22:30:00.000Z"),
+        appointmentStart: new Date(`${LUNES[3]}T22:00:00.000Z`),
+        appointmentEnd: new Date(`${LUNES[3]}T22:30:00.000Z`),
         durationMinutes: 30,
         servicePrice: "1000",
         status: "cancelled",
@@ -1240,7 +1254,7 @@ describe("el tope de zonas a elección (ronda 3)", () => {
         customerId: CUSTOMER_ID,
         serviceId: anclaId,
         providerId: proveedoraId,
-        start: "2026-11-09T13:00:00.000Z",
+        start: `${LUNES[5]}T13:00:00.000Z`,
         customerPurchaseServiceId: lineaId,
         zonas: [piernaId, ...regalos],
         notes: QA,
@@ -1256,7 +1270,7 @@ describe("el tope de zonas a elección (ronda 3)", () => {
       customerId: CUSTOMER_ID,
       serviceId: anclaId,
       providerId: proveedoraId,
-      start: "2026-11-09T15:00:00.000Z",
+      start: `${LUNES[5]}T15:00:00.000Z`,
       customerPurchaseServiceId: lineaId,
       zonas: [piernaId, regalos[0]!],
       notes: QA,
@@ -1304,7 +1318,7 @@ describe("el tope de zonas a elección (ronda 3)", () => {
         customerId: CUSTOMER_ID,
         serviceId: anclaId,
         providerId: proveedoraId,
-        start: "2026-11-09T17:00:00.000Z",
+        start: `${LUNES[5]}T17:00:00.000Z`,
         customerPurchaseServiceId: lineaId,
         zonas: [piernaId, regalos[0]!],
         notes: QA,
