@@ -27,6 +27,7 @@ import { razonesParaNoBorrarCompra, type ImpactoDeBorrado } from "../lib/compra-
 import { saldoAAcreditar, type ServicioParaSaldo } from "../lib/saldo-de-cancelacion";
 import { planDePagoConSaldo } from "../lib/pago-con-saldo";
 import { vencimientoPara } from "../lib/vencimiento-de-saldo";
+import { mensajePromoAgotada, promoAgotada } from "../lib/promo-vigente";
 import { comprobantesDeDevolucion, repartirDevolucion } from "../lib/devolucion-declarada";
 import { getInvoiceById, updateInvoice } from "./invoices.repo";
 import { vencimientoHeredado } from "../lib/herencia-de-vencimiento";
@@ -121,6 +122,32 @@ const dec = (n: number) => String(n);
  * que una de 0. Un servicio comprado recién pasa a ser una *sesión* cuando
  * se le engancha un turno (spec 2026-09-11 §2).
  */
+/**
+ * El cupo de la promo se controla ACÁ, dentro de la transacción que inserta la
+ * venta, y no sólo en la ruta: leer cuántos usos quedan e insertar como dos
+ * pasos sueltos dejaba pasar dos ventas simultáneas con el cupo en N−1.
+ *
+ * `FOR UPDATE` sobre la fila de la promo pone en fila a las ventas de ESA
+ * promo: la segunda espera a que la primera termine y recién ahí cuenta, ya
+ * viendo el uso que la primera dejó. Ventas de otras promos no se esperan.
+ */
+async function tomarUnUsoDeLaPromo(tx: Db, promotionId: string) {
+  const [p] = await tx
+    .select({ name: promotions.name, usageLimit: promotions.usageLimit })
+    .from(promotions)
+    .where(eq(promotions.id, promotionId))
+    .for("update");
+  if (!p || p.usageLimit == null) return;
+  const [u] = await tx
+    .select({ usos: count() })
+    .from(customerPurchase)
+    .where(and(eq(customerPurchase.promotionId, promotionId), isNull(customerPurchase.cancelledAt)));
+  const usos = Number(u?.usos ?? 0);
+  if (promoAgotada(p.usageLimit, usos)) {
+    throw new Error(mensajePromoAgotada(p.name, usos, p.usageLimit));
+  }
+}
+
 export async function createCompra(db: Db, input: CompraInput) {
   if (input.esPaquete) {
     const sueltos = [input.comboId, input.serviceId, input.depilationComboId, input.trainingId]
@@ -152,6 +179,7 @@ export async function createCompra(db: Db, input: CompraInput) {
   if (input.sessionsTotal < 1) throw new Error("La compra necesita al menos una repetición");
 
   return db.transaction(async (tx) => {
+    if (input.promotionId) await tomarUnUsoDeLaPromo(tx, input.promotionId);
     const filas = await tx
       .insert(customerPurchase)
       .values({

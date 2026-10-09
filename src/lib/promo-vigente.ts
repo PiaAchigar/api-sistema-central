@@ -24,3 +24,9 @@ export function promoAgotada(usageLimit: number | null, usos: number): boolean {
   if (usageLimit == null) return false;
   return usos >= usageLimit;
 }
+
+/** El cartel de "se agotó", el mismo en la cotización y en la venta. */
+export function mensajePromoAgotada(name: string | null, usos: number, usageLimit: number): string {
+  const nombre = name ? `La promo "${name}"` : "Esa promoción";
+  return `${nombre} se agotó: ya se usó ${usos} de ${usageLimit} vez/veces. Cancelar una venta libera un uso.`;
+}

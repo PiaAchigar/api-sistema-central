@@ -20,7 +20,7 @@ import { todayLocal } from "../lib/time";
 import type { ItemVendible, PromoVendible } from "../lib/cotizacion";
 import type { CatalogoDelPaquete } from "../lib/cotizacion-de-paquete";
 import type { DestinoDePromo } from "../lib/promo-aplica";
-import { promoAgotada, promoEstaVigente } from "../lib/promo-vigente";
+import { promoAgotada, promoEstaVigente, mensajePromoAgotada } from "../lib/promo-vigente";
 import { getComboById, listCombos } from "./combos.repo";
 import { leerConfig, listarCombos, obtenerCombo } from "./depilacion.repo";
 
@@ -532,9 +532,7 @@ export async function motivoPromoNoVendible(db: Db, id: string): Promise<string>
     .from(customerPurchase)
     .where(and(eq(customerPurchase.promotionId, id), isNull(customerPurchase.cancelledAt)));
   const usos = Number(usados?.usos ?? 0);
-  if (promoAgotada(p.usageLimit, usos)) {
-    return `${nombre} se agotó: ya se usó ${usos} de ${p.usageLimit} vez/veces. Cancelar una venta libera un uso.`;
-  }
+  if (promoAgotada(p.usageLimit, usos)) return mensajePromoAgotada(p.name, usos, p.usageLimit!);
 
   // Ninguno de los motivos conocidos: algo cambió entre la lectura y esta
   // consulta. Mejor un mensaje vago que uno inventado.
