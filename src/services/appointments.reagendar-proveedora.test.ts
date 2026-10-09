@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq, inArray, like } from "drizzle-orm";
+import { and, eq, inArray, like } from "drizzle-orm";
 import * as schema from "../db/schema";
 import {
   appointments,
@@ -247,6 +247,62 @@ describe("reagendar con proveedora", () => {
     } finally {
       estado.ancla = null;
     }
+  });
+});
+
+describe("reagendar con la MISMA proveedora: la máquina también se revisa", () => {
+  // Antes, sin cambio de proveedora la máquina no se miraba: el turno se movía
+  // con la misma máquina aunque otra clienta la tuviera tomada a esa hora. La
+  // pantalla ofrece el horario si CUALQUIER máquina certificada está libre, así
+  // que se llegaba desde la agenda, no sólo por API.
+
+  /** Ocupa una máquina a las 11 del LUNES_2 con un turno de otra proveedora. */
+  async function ocuparMaquina(machineId: string) {
+    await db.insert(appointments).values({
+      serviceProviderId: provB,
+      serviceId: servicioConMaquinaId,
+      machineId,
+      appointmentStart: new Date(aLas11(LUNES_2)),
+      appointmentEnd: new Date(`${LUNES_2}T14:30:00.000Z`),
+      durationMinutes: 30,
+      status: "scheduled",
+      notes: QA,
+    });
+  }
+
+  it("si su máquina está ocupada en el horario nuevo y no tiene otra, se rechaza", async () => {
+    const t = await turnoDe(servicioConMaquinaId, provA, aLas10(LUNES_1));
+    expect(t.machineId).toBe(maquina1);
+    await ocuparMaquina(maquina1);
+    await expect(rescheduleAppointment(db, t.id, aLas11(LUNES_2))).rejects.toThrow(
+      /no hay máquina disponible/i,
+    );
+    const [despues] = await db.select().from(appointments).where(eq(appointments.id, t.id));
+    expect(despues!.appointmentStart).toEqual(new Date(aLas10(LUNES_1)));
+  });
+
+  it("si su máquina está ocupada pero tiene otra certificada libre, pasa a esa", async () => {
+    await db.insert(serviceProviderMachine).values({ serviceProviderId: provA, machineId: maquina2 });
+    try {
+      const t = await turnoDe(servicioConMaquinaId, provA, aLas10(LUNES_1));
+      expect(t.machineId).toBe(maquina1); // la primaria
+      await ocuparMaquina(maquina1);
+      const movido = await rescheduleAppointment(db, t.id, aLas11(LUNES_2));
+      expect(movido!.serviceProviderId).toBe(provA);
+      expect(movido!.machineId).toBe(maquina2);
+    } finally {
+      await db
+        .delete(serviceProviderMachine)
+        .where(
+          and(eq(serviceProviderMachine.serviceProviderId, provA), eq(serviceProviderMachine.machineId, maquina2)),
+        );
+    }
+  });
+
+  it("si su máquina está libre, se queda con la misma", async () => {
+    const t = await turnoDe(servicioConMaquinaId, provA, aLas10(LUNES_1));
+    const movido = await rescheduleAppointment(db, t.id, aLas11(LUNES_2));
+    expect(movido!.machineId).toBe(maquina1);
   });
 });
 

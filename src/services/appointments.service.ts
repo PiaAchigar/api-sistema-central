@@ -588,16 +588,21 @@ export async function rescheduleAppointment(
   const fits = freeWindows.some((w) => requested.start >= w.start && requested.end <= w.end);
   if (!fits) throw conflict("La proveedora no tiene ese horario disponible");
 
-  // Con otra proveedora cambia con qué máquina se puede hacer (cada una está
-  // certificada en las suyas): se elige la primera certificada y libre, igual
-  // que al crear un turno. Si la proveedora no cambia, la máquina no se toca.
+  // La máquina se revisa SIEMPRE que el servicio la pida, cambie o no la
+  // proveedora: en el horario nuevo la de antes puede estar tomada por otra
+  // clienta. Se queda con la misma si está libre; si no, la primera
+  // certificada y libre (primaria primero), igual que al crear un turno. Con
+  // otra proveedora casi siempre cambia: cada una está certificada en las suyas.
   let machineId = appt.machineId ?? null;
-  if (cambiaProveedora && ctx.requiresMachine) {
+  if (ctx.requiresMachine) {
     const candidatas = ctx.machinesByProvider.get(proveedoraId) ?? [];
-    const libre = candidatas.find((mid) => {
+    const estaLibre = (mid: string) => {
       const huecos = subtractAll(freeWindows, ctx.busyByMachine.get(mid) ?? []);
       return huecos.some((w) => requested.start >= w.start && requested.end <= w.end);
-    });
+    };
+    const laMisma =
+      machineId && candidatas.includes(machineId) && estaLibre(machineId) ? machineId : null;
+    const libre = laMisma ?? candidatas.find(estaLibre);
     if (!libre) throw conflict("No hay máquina disponible en ese horario");
     machineId = libre;
   }
@@ -612,7 +617,7 @@ export async function rescheduleAppointment(
     const realClashes = clashes.filter((c) => c.id !== id);
     if (realClashes.length > 0) throw conflict("El horario acaba de ser tomado por otro turno");
 
-    if (cambiaProveedora && machineId) {
+    if (ctx.requiresMachine && machineId) {
       const machineClashes = await getOverlappingAppointments(tx, { machineId }, startDate, endDate);
       if (machineClashes.some((c) => c.id !== id)) {
         throw conflict("La máquina acaba de ser tomada por otro turno");
@@ -640,7 +645,8 @@ export async function rescheduleAppointment(
       durationMinutes,
       status:                sigueSiendoReserva ? "reserved" : "scheduled",
       reservationExpiresAt:  sigueSiendoReserva ? appt.reservationExpiresAt : null,
-      ...(cambiaProveedora ? { serviceProviderId: proveedoraId, machineId } : {}),
+      ...(cambiaProveedora ? { serviceProviderId: proveedoraId } : {}),
+      ...(ctx.requiresMachine ? { machineId } : {}),
     });
   });
 }
