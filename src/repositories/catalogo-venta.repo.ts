@@ -1,11 +1,13 @@
 import { and, asc, count, eq, inArray, isNull, ne } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
+  categories,
   customerPurchase,
   depilationCombo,
   promotionTarget,
   promotions,
   service,
+  serviceCategory,
   training,
 } from "../db/schema";
 import { precioDeServicio } from "../lib/combo-pricing";
@@ -84,6 +86,56 @@ function comboVendible(c: ComboArmado): ItemVendible {
   };
 }
 
+/** De qué área es un item vendible. `null` = no tiene ninguna cargada. */
+export type AreaDeItem = { id: string; nombre: string } | null;
+
+/**
+ * Los nombres canónicos de dos áreas que NO tienen vínculo en la base con lo
+ * que se vende: el servicio ancla de depilación no cuelga de ninguna
+ * categoría de área, y `training` no tiene columna de categoría (verificado
+ * el 2026-10-16). Son los nombres de la tabla de `kind` en
+ * DOCUMENTACION_BD. Si alguien renombra el área, estos items pasan a "Sin
+ * área" — no se rompe la venta.
+ */
+export const AREA_DEPILACION = "Depilación Definitiva";
+export const AREA_CAPACITACIONES = "Capacitaciones";
+
+/**
+ * Todas las áreas y el área de cada servicio, en dos consultas.
+ *
+ * Sin filtrar por `is_active`: las tres áreas con servicios están
+ * archivadas a propósito (DOCUMENTACION_BD) y siguen siendo su área.
+ */
+async function leerAreas(db: Db) {
+  const [areas, deServicios] = await Promise.all([
+    db.select({ id: categories.id, nombre: categories.name }).from(categories).where(eq(categories.kind, "area")),
+    db
+      .select({ serviceId: serviceCategory.serviceId, id: categories.id, nombre: categories.name })
+      .from(serviceCategory)
+      .innerJoin(categories, eq(categories.id, serviceCategory.categoryId))
+      .where(eq(categories.kind, "area"))
+      // Si un servicio tuviera dos áreas (hoy no pasa), gana la primera por
+      // nombre: así la respuesta no depende del orden físico de las filas.
+      .orderBy(asc(categories.name)),
+  ]);
+  const aArea = (a: { id: string; nombre: string | null }): AreaDeItem => ({ id: a.id, nombre: a.nombre ?? "" });
+  const porId = new Map(areas.map((a) => [a.id, aArea(a)]));
+  const porNombre = (nombre: string): AreaDeItem => {
+    const a = areas.find((x) => x.nombre === nombre);
+    return a ? aArea(a) : null;
+  };
+  const deServicio = new Map<string, AreaDeItem>();
+  for (const r of deServicios) {
+    if (r.serviceId && !deServicio.has(r.serviceId)) deServicio.set(r.serviceId, aArea(r));
+  }
+  return {
+    deServicio: (id: string) => deServicio.get(id) ?? null,
+    deCombo: (areaCategoryId: string | null) => (areaCategoryId ? porId.get(areaCategoryId) ?? null : null),
+    depilacion: porNombre(AREA_DEPILACION),
+    capacitaciones: porNombre(AREA_CAPACITACIONES),
+  };
+}
+
 /** Un item con lo que hace falta para mostrarlo en una lista y elegirlo. */
 export type ItemDeCatalogo = ItemVendible & {
   /** Sesiones que lleva el pack de este item, si es un pack. */
@@ -103,10 +155,12 @@ export type ItemDeCatalogo = ItemVendible & {
    * calcular el precio, así que exponerlas no cuesta ninguna consulta nueva.
    */
   desglose: FilaDeDesglose[];
+  /** De qué área es. Lo usa la agenda para el select de áreas al vender. */
+  area: AreaDeItem;
 };
 
 /** Lo que `aItemDeCatalogo` no puede sacar del `ItemVendible`. */
-type ParaMostrar = { descripcion?: string | null; desglose?: FilaDeDesglose[] };
+type ParaMostrar = { descripcion?: string | null; desglose?: FilaDeDesglose[]; area?: AreaDeItem };
 
 /** Una descripción vacía o en blanco es lo mismo que no tenerla: que el front
  *  no tenga que decidir si `""` se muestra. */
@@ -119,6 +173,7 @@ function aItemDeCatalogo(item: ItemVendible, mostrar: ParaMostrar = {}): ItemDeC
   const comun = {
     descripcion: mostrar.descripcion ?? null,
     desglose: mostrar.desglose ?? [],
+    area: mostrar.area ?? null,
   };
   return item.origen === "combo"
     ? {
@@ -141,7 +196,7 @@ function aItemDeCatalogo(item: ItemVendible, mostrar: ParaMostrar = {}): ItemDeC
 }
 
 export async function listCatalogoVendible(db: Db) {
-  const [genericos, depilacion, servicios, capacitaciones, config] = await Promise.all([
+  const [genericos, depilacion, servicios, capacitaciones, config, areas] = await Promise.all([
     // `includeInactive` para poder RESOLVER, no para mostrar: un pack que
     // repite un combo no tiene renglones propios, y si ese combo está
     // archivado no estaría en la lista y el pack se mostraría sin desglose.
@@ -176,6 +231,7 @@ export async function listCatalogoVendible(db: Db) {
       .where(eq(training.isActive, true))
       .orderBy(asc(training.name)),
     leerConfig(db),
+    leerAreas(db),
   ]);
 
   const global = {
@@ -204,6 +260,7 @@ export async function listCatalogoVendible(db: Db) {
         );
         return aItemDeCatalogo(comboVendible(a), {
           descripcion: texto(a.description),
+          area: areas.deCombo((a.areaCategoryId as string | null) ?? null),
           desglose: desgloseDeCombo(
             lineasPorCombo.get(deDonde) ?? [],
             a.kind === "pack" ? ((a.packSessions as number | null) ?? null) : null,
@@ -225,29 +282,36 @@ export async function listCatalogoVendible(db: Db) {
           {
             descripcion: texto(c.description),
             desglose: desgloseDeDepilacion(c.zonas, c.choiceZoneCount),
+            area: areas.depilacion,
           },
         ),
       ),
     servicios: servicios.map((s) =>
-      aItemDeCatalogo({
-        origen: "servicio",
-        id: s.id,
-        nombre: s.name ?? "Sin nombre",
-        unitario: precioDeServicio(s.unitPriceList, s.unitPriceCash),
-        politica: global,
-      }),
+      aItemDeCatalogo(
+        {
+          origen: "servicio",
+          id: s.id,
+          nombre: s.name ?? "Sin nombre",
+          unitario: precioDeServicio(s.unitPriceList, s.unitPriceCash),
+          politica: global,
+        },
+        { area: areas.deServicio(s.id) },
+      ),
     ),
     // Una capacitación se vende ENTERA: `list_price` es el precio del curso
     // completo, no el de una clase. Por eso su "pack" es de 1 sesión — vender
     // media capacitación no existe.
     capacitaciones: capacitaciones.map((t) =>
-      aItemDeCatalogo({
-        origen: "capacitacion",
-        id: t.id,
-        nombre: t.name ?? "Sin nombre",
-        unitario: precioDeServicio(t.listPrice, t.cashPrice),
-        politica: { sesiones: 1, descuentoPct: 0, redondeo: 1 },
-      }),
+      aItemDeCatalogo(
+        {
+          origen: "capacitacion",
+          id: t.id,
+          nombre: t.name ?? "Sin nombre",
+          unitario: precioDeServicio(t.listPrice, t.cashPrice),
+          politica: { sesiones: 1, descuentoPct: 0, redondeo: 1 },
+        },
+        { area: areas.capacitaciones },
+      ),
     ),
   };
 }
