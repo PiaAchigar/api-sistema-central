@@ -1,7 +1,9 @@
 import { and, count, desc, eq, inArray, isNull, isNotNull, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
+  appointmentBodyZone,
   appointments,
+  bodyZone,
   cashRegister,
   customerCreditMovements,
   customerPurchase,
@@ -11,6 +13,7 @@ import {
   payments,
   service,
   depilationCombo,
+  depilationComboZone,
   training,
   promotionTarget,
   promotions,
@@ -43,6 +46,7 @@ import {
   ordenDeServiciosComprados,
   type LineaDeCombo,
 } from "../lib/servicios-comprados";
+import { desgloseDeDepilacion, type FilaDeDesglose } from "../lib/desglose-de-catalogo";
 import { lineasDelPaquete, type ParteDelPaquete } from "../lib/desglose-de-paquete";
 import { repartirPrecioDelPaquete } from "../lib/reparto-de-paquete";
 import { precioDeServicio } from "../lib/combo-pricing";
@@ -544,6 +548,8 @@ export type ServicioLeido = {
   appointmentStart: Date | null;
   consumedAt: Date | null;
   estado: EstadoSesion;
+  /** Nombres de las zonas del turno de esta línea; null si no hay turno o no tiene zonas. */
+  zonasDelTurno: string[] | null;
 };
 
 /**
@@ -650,6 +656,54 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
       .map((f) => [f.id, f.name]),
   );
 
+  // Las zonas, para que la ficha diga QUÉ trae el pack y qué se hizo en cada
+  // turno. Una consulta por tabla, nunca por compra ni por línea.
+  const comboIdsDeDepilacion = [
+    ...new Set(compras.map((c) => c.depilationComboId).filter((v): v is string => v != null)),
+  ];
+  const turnoIds = [
+    ...new Set(
+      sesiones.map((s) => s.appointmentId).filter((v): v is string => v != null),
+    ),
+  ];
+  const [zonasDePacks, packsConEleccion, zonasDeTurnos] = await Promise.all([
+    comboIdsDeDepilacion.length > 0
+      ? db
+          .select({ comboId: depilationComboZone.comboId, name: bodyZone.name })
+          .from(depilationComboZone)
+          .innerJoin(bodyZone, eq(bodyZone.id, depilationComboZone.zoneId))
+          .where(inArray(depilationComboZone.comboId, comboIdsDeDepilacion))
+          .orderBy(bodyZone.name)
+      : [],
+    comboIdsDeDepilacion.length > 0
+      ? db
+          .select({ id: depilationCombo.id, choiceZoneCount: depilationCombo.choiceZoneCount })
+          .from(depilationCombo)
+          .where(inArray(depilationCombo.id, comboIdsDeDepilacion))
+      : [],
+    turnoIds.length > 0
+      ? db
+          .select({ appointmentId: appointmentBodyZone.appointmentId, name: bodyZone.name })
+          .from(appointmentBodyZone)
+          .innerJoin(bodyZone, eq(bodyZone.id, appointmentBodyZone.bodyZoneId))
+          .where(inArray(appointmentBodyZone.appointmentId, turnoIds))
+          .orderBy(bodyZone.name)
+      : [],
+  ]);
+  const desglosePorPack = new Map<string, FilaDeDesglose[]>(
+    packsConEleccion.map((p) => [
+      p.id,
+      desgloseDeDepilacion(
+        zonasDePacks.filter((z) => z.comboId === p.id),
+        p.choiceZoneCount,
+      ),
+    ]),
+  );
+  const zonasPorTurno = new Map<string, string[]>();
+  for (const z of zonasDeTurnos) {
+    zonasPorTurno.set(z.appointmentId, [...(zonasPorTurno.get(z.appointmentId) ?? []), z.name]);
+  }
+
   // Notas de crédito todavía en borrador. La emite Laura desde el facturador,
   // pero el CRM tiene que poder decir que falta: si la clienta llama
   // preguntando por su devolución, quien atiende no debería abrir otra app.
@@ -704,6 +758,8 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
       devuelta: misDevoluciones.length > 0,
       devuelto,
       ...resumen,
+      /** Qué zonas trae el pack de depilación; null si la compra no es de depilación. */
+      zonasDelPack: c.depilationComboId ? (desglosePorPack.get(c.depilationComboId) ?? []) : null,
       servicios: mias
         // Vuelta por vuelta y, dentro de cada vuelta, por `orden` con
         // desempate estable: es como la ficha los agrupa, así no hay que
@@ -727,6 +783,7 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
             appointmentStart: conTurno ? s.appointmentStart : null,
             consumedAt: s.consumedAt,
             estado,
+            zonasDelTurno: conTurno && s.appointmentId ? (zonasPorTurno.get(s.appointmentId) ?? null) : null,
           };
         }),
     };
