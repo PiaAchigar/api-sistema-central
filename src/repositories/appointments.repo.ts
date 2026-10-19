@@ -199,6 +199,9 @@ export async function listAppointmentsByRange(
       // dos veces a la clienta. Uno solo por turno lo garantiza el índice
       // `ux_cpsv_turno`, así que el join no multiplica filas.
       customerPurchaseServiceId: customerPurchaseService.id,
+      // La compra de ese servicio comprado: con ella la agenda pregunta cuánto
+      // se debe. Null si el turno no sale de una compra.
+      customerPurchaseId: customerPurchaseService.customerPurchaseId,
     })
     .from(appointments)
     .leftJoin(customerPurchaseService, eq(customerPurchaseService.appointmentId, appointments.id))

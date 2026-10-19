@@ -1251,3 +1251,29 @@ export async function getPagadoDeCompra(db: Db, id: string): Promise<number> {
     .where(and(eq(payments.customerPurchaseId, id), eq(payments.status, "confirmed")));
   return Number(fila?.total ?? 0);
 }
+
+/**
+ * Cuánto se debe de cada compra (sin cancelar): final_amount menos lo
+ * confirmado, nunca negativo. Una sola consulta para cualquier cantidad de
+ * compras. Las canceladas y las que no existen no aparecen en el mapa.
+ */
+export async function getDeudasDeCompras(db: Db, compraIds: string[]): Promise<Map<string, number>> {
+  const mapa = new Map<string, number>();
+  if (compraIds.length === 0) return mapa;
+
+  const filas = await db
+    .select({
+      id: customerPurchase.id,
+      deuda: sql<string>`greatest(0, coalesce(${customerPurchase.finalAmount}, 0) - coalesce(sum(${payments.amount}), 0))`,
+    })
+    .from(customerPurchase)
+    .leftJoin(
+      payments,
+      and(eq(payments.customerPurchaseId, customerPurchase.id), eq(payments.status, "confirmed")),
+    )
+    .where(and(inArray(customerPurchase.id, compraIds), isNull(customerPurchase.cancelledAt)))
+    .groupBy(customerPurchase.id);
+
+  for (const f of filas) mapa.set(f.id, Number(f.deuda));
+  return mapa;
+}

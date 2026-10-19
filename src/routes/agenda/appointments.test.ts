@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appointmentsRouter, comboPendientesQuery, createBody, rescheduleBody } from "./appointments";
+import { appointmentsRouter, comboPendientesQuery, listQuery, createBody, rescheduleBody } from "./appointments";
 
 describe("el cuerpo del turno nuevo", () => {
   /**
@@ -126,5 +126,30 @@ describe("rescheduleBody — reagendar con proveedora", () => {
 
   it("rechaza un providerId que no es uuid", () => {
     expect(rescheduleBody.safeParse({ ...base, providerId: "gabi" }).success).toBe(false);
+  });
+});
+
+describe("el query del listado de turnos", () => {
+  it("acepta un día", () => {
+    expect(listQuery.safeParse({ date: "2026-10-20" }).success).toBe(true);
+  });
+  it("acepta un rango", () => {
+    expect(listQuery.safeParse({ from: "2026-10-19", to: "2026-10-24" }).success).toBe(true);
+  });
+  it("rechaza sin date ni rango", () => {
+    expect(listQuery.safeParse({}).success).toBe(false);
+  });
+  it("rechaza from sin to", () => {
+    expect(listQuery.safeParse({ from: "2026-10-19" }).success).toBe(false);
+  });
+  it("rechaza from posterior a to", () => {
+    expect(listQuery.safeParse({ from: "2026-10-24", to: "2026-10-19" }).success).toBe(false);
+  });
+  it("rechaza más de 42 días y acepta justo 42", () => {
+    expect(listQuery.safeParse({ from: "2026-10-01", to: "2026-11-12" }).success).toBe(false);
+    expect(listQuery.safeParse({ from: "2026-10-01", to: "2026-11-11" }).success).toBe(true);
+  });
+  it("rechaza date junto con from", () => {
+    expect(listQuery.safeParse({ date: "2026-10-20", from: "2026-10-19", to: "2026-10-24" }).success).toBe(false);
   });
 });

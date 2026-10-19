@@ -315,7 +315,21 @@ export async function listAppointmentsByDay(
   date: string,
   filters: { providerId?: string; status?: string },
 ) {
-  return listAppointmentsByRange(db, localDayRangeUtc(date), filters);
+  return listAppointmentsByDays(db, date, date, filters);
+}
+
+/** Turnos de los días `from`..`to` (ambos inclusive, hora local). */
+export async function listAppointmentsByDays(
+  db: Db,
+  from: string,
+  to: string,
+  filters: { providerId?: string; status?: string },
+) {
+  return listAppointmentsByRange(
+    db,
+    { start: localDayRangeUtc(from).start, end: localDayRangeUtc(to).end },
+    filters,
+  );
 }
 
 const VALID_STATUSES = ["reserved", "scheduled", "completed", "cancelled", "no_show"];

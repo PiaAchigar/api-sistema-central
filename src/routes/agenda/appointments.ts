@@ -6,13 +6,14 @@ import { createDb } from "../../db/client";
 import {
   computeProviderEarning,
   createAppointment,
-  listAppointmentsByDay,
+  listAppointmentsByDays,
   rescheduleAppointment,
   updateAppointmentStatus,
 } from "../../services/appointments.service";
 import { hermanosDelCombo, queSeDescuenta } from "../../repositories/consumo.repo";
 import { listReschedules } from "../../repositories/appointment-reschedule.repo";
 import { getAppointmentById, getAppointmentDetail } from "../../repositories/appointments.repo";
+import { getDeudasDeCompras } from "../../repositories/compras.repo";
 import { getDealByAppointmentId } from "../../repositories/deals.repo";
 import { requireAuth } from "../../middleware/auth";
 import { notFound } from "../../lib/errors";
@@ -20,20 +21,50 @@ import type { AppBindings, Variables } from "../../env";
 
 const appointmentsRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 
-const listQuery = z.object({
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  providerId: z.string().uuid().optional(),
-  status: z.enum(["scheduled", "completed", "cancelled", "no_show"]).optional(),
-});
+const FECHA = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+/** Tope del rango: seis semanas, lo más que muestra la agenda de una vez. */
+const MAX_DIAS_RANGO = 42;
+const MS_POR_DIA = 24 * 60 * 60 * 1000;
+
+/**
+ * Exportado para validarlo con `.safeParse()` directo (ver `comboPendientesQuery`).
+ * Un día (`date`) o un rango inclusive (`from` + `to`), nunca los dos.
+ */
+export const listQuery = z
+  .object({
+    date: FECHA.optional(),
+    from: FECHA.optional(),
+    to: FECHA.optional(),
+    providerId: z.string().uuid().optional(),
+    status: z.enum(["scheduled", "completed", "cancelled", "no_show"]).optional(),
+  })
+  .superRefine((q, ctx) => {
+    const error = (message: string) => ctx.addIssue({ code: "custom", message });
+    const hayRango = q.from !== undefined || q.to !== undefined;
+    if (q.date && hayRango) return error("Pasá `date` o `from`/`to`, no las dos");
+    if (!q.date && !hayRango) return error("Falta `date` o `from`/`to`");
+    if (!q.date) {
+      if (!q.from || !q.to) return error("El rango necesita `from` y `to`");
+      if (q.from > q.to) return error("`from` no puede ser posterior a `to`");
+      const dias = (Date.parse(q.to) - Date.parse(q.from)) / MS_POR_DIA + 1;
+      if (dias > MAX_DIAS_RANGO) return error(`El rango no puede pasar de ${MAX_DIAS_RANGO} días`);
+    }
+  });
 
 appointmentsRouter.get("/", requireAuth, zValidator("query", listQuery), async (c) => {
   const db = createDb(c.env);
-  const { date, ...filters } = c.req.valid("query");
-  const rows = await listAppointmentsByDay(db, date, filters);
+  const { date, from, to, ...filters } = c.req.valid("query");
+  const rows = await listAppointmentsByDays(db, date ?? from!, date ?? to!, filters);
+  // Una sola consulta para la deuda de todas las compras del rango.
+  const deudas = await getDeudasDeCompras(
+    db,
+    [...new Set(rows.map((r) => r.customerPurchaseId).filter((id): id is string => !!id))],
+  );
   return c.json(
     rows.map((r) => ({
       ...r,
       servicePrice: r.servicePrice != null ? Number(r.servicePrice) : null,
+      deudaDeLaCompra: r.customerPurchaseId ? (deudas.get(r.customerPurchaseId) ?? null) : null,
     })),
   );
 });
