@@ -202,7 +202,8 @@ export async function listClassesForRange(
       r.starts_at_utc,
       r.capacity,
       -- Inscriptas: todo turno que no esté cancelado (scheduled, reserved,
-      -- completed, no_show). Es la misma regla del cupo y de la lista de anotadas.
+      -- completed, no_show). Es la misma regla del cupo y de la lista de anotadas:
+      -- actividad + inicio + máquina (dos máquinas a la misma hora son dos clases).
       COALESCE(enr.enrolled_count, 0)::int AS enrolled_count,
       COALESCE(att.attended_count, 0)::int AS attended_count,
       anot.anotadas
@@ -213,7 +214,8 @@ export async function listClassesForRange(
       WHERE ap.status <> 'cancelled'
         AND (
           (r.kind = 'activity' AND ap.activity_id = r.subject_id
-             AND ap.appointment_start = r.starts_at_utc)
+             AND ap.appointment_start = r.starts_at_utc
+             AND ap.machine_id IS NOT DISTINCT FROM r.machine_id)
           OR
           (r.kind = 'training' AND ap.training_session_id = r.session_id)
         )
@@ -271,7 +273,8 @@ export async function listClassesForRange(
       WHERE ap.status <> 'cancelled'
         AND (
           (r.kind = 'activity' AND ap.activity_id = r.subject_id
-             AND ap.appointment_start = r.starts_at_utc)
+             AND ap.appointment_start = r.starts_at_utc
+             AND ap.machine_id IS NOT DISTINCT FROM r.machine_id)
           OR
           (r.kind = 'training' AND ap.training_session_id = r.session_id)
         )
