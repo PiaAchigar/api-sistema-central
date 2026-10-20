@@ -285,6 +285,16 @@ describe("listClassesForRange", () => {
     expect(cuenta.n).toBeLessThanOrEqual(4);
   });
 
+  it("enrolledCount cuenta todo turno no cancelado (completed y no_show incluidos), igual que las anotadas", async () => {
+    const hoy = await crearClienta("FEDE");
+    const otra = await crearClienta("GINA");
+    await anotarEnClase(hoy, "2027-03-15", "completed");
+    await anotarEnClase(otra, "2027-03-15", "no_show");
+    const clase = delQA(await listClassesForRange(db, "2027-03-15", "2027-03-15"))[0]!;
+    expect(clase.anotadas).toHaveLength(3);
+    expect(clase.enrolled_count).toBe(clase.anotadas.length);
+  });
+
   it("listClassesForDate es el rango de un día", async () => {
     const a = await listClassesForDate(db, "2027-03-22");
     const b = await listClassesForRange(db, "2027-03-22", "2027-03-22");
@@ -299,6 +309,10 @@ describe("classesQuery (date XOR from+to)", () => {
   });
   it("rechaza date junto con from/to", () => {
     expect(classesQuery.safeParse({ date: "2027-03-22", from: "2027-03-01", to: "2027-03-02" }).success).toBe(false);
+  });
+  it("rechaza fechas inexistentes como 2027-02-31", () => {
+    expect(classesQuery.safeParse({ date: "2027-02-31" }).success).toBe(false);
+    expect(classesQuery.safeParse({ from: "2027-02-31", to: "2027-03-02" }).success).toBe(false);
   });
   it("rechaza 43 días, from > to, rango incompleto y nada", () => {
     expect(classesQuery.safeParse({ from: "2027-03-01", to: "2027-04-12" }).success).toBe(false);

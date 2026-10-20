@@ -3,14 +3,6 @@ import type { Db } from "../db/client";
 import { getDeudasDeCompras } from "./compras.repo";
 import { debeDeCicloSql } from "./cuotas.repo";
 
-/**
- * Una clase que se dicta en una fecha concreta, tal como sale de Postgres.
- *
- * "Clase" acá es el EVENTO (la clase de Pilates del martes 10:00), no la
- * inscripción de una clienta. Existe aunque no se haya anotado nadie — que es
- * justamente lo que no se podía representar cuando la Agenda dibujaba una card
- * por appointment.
- */
 /** Una clienta anotada a una clase (turno no cancelado). */
 export type AnotadaRow = {
   appointment_id: string;
@@ -22,6 +14,14 @@ export type AnotadaRow = {
   debe: number;
 };
 
+/**
+ * Una clase que se dicta en una fecha concreta, tal como sale de Postgres.
+ *
+ * "Clase" acá es el EVENTO (la clase de Pilates del martes 10:00), no la
+ * inscripción de una clienta. Existe aunque no se haya anotado nadie — que es
+ * justamente lo que no se podía representar cuando la Agenda dibujaba una card
+ * por appointment.
+ */
 export type ClassOccurrenceRow = {
   /** Id sintético y estable: identifica la ocurrencia, no una fila de tabla */
   occurrence_id: string;
@@ -196,8 +196,8 @@ export async function listClassesForRange(
       r.end_time,
       r.starts_at_utc,
       r.capacity,
-      -- Inscriptas: los turnos que ocupan lugar. 'reserved' cuenta porque
-      -- retiene el cupo hasta que expire; 'cancelled' y 'no_show' no.
+      -- Inscriptas: todo turno que no esté cancelado (scheduled, reserved,
+      -- completed, no_show). Es la misma regla del cupo y de la lista de anotadas.
       COALESCE(enr.enrolled_count, 0)::int AS enrolled_count,
       COALESCE(att.attended_count, 0)::int AS attended_count,
       anot.anotadas
@@ -205,7 +205,7 @@ export async function listClassesForRange(
     LEFT JOIN LATERAL (
       SELECT COUNT(*)::int AS enrolled_count
       FROM appointments ap
-      WHERE ap.status IN ('scheduled', 'reserved')
+      WHERE ap.status <> 'cancelled'
         AND (
           (r.kind = 'activity' AND ap.activity_id = r.subject_id
              AND ap.appointment_start = r.starts_at_utc)
@@ -247,6 +247,7 @@ export async function listClassesForRange(
           AND s.customer_id = ap.customer_id
           AND s.activity_id = ap.activity_id
           AND s.status = 'active'
+        ORDER BY s.subscription_start_date DESC NULLS LAST, s.id DESC
         LIMIT 1
       ) ts ON true
       LEFT JOIN subscription_billing_cycles cy

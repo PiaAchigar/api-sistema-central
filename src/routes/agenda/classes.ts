@@ -74,7 +74,11 @@ function toClassOccurrence(row: ClassOccurrenceRow): ClassOccurrence {
   };
 }
 
-const FECHA = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD");
+const FECHA = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD")
+  // 2027-02-31 pasa el regex pero no existe: Date lo corre a marzo, así que no vuelve igual.
+  .refine((f) => new Date(`${f}T00:00:00Z`).toISOString().slice(0, 10) === f, "fecha inexistente");
 /** Mismo tope que el listado de turnos: seis semanas. */
 const MAX_DIAS_RANGO = 42;
 const MS_POR_DIA = 24 * 60 * 60 * 1000;
