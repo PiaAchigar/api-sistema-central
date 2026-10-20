@@ -16,6 +16,7 @@ import {
   editarEncuentro,
   generarEncuentros,
   listEncuentros,
+  listInscriptas,
 } from "../../repositories/training-sessions.repo";
 import {
   capacidadSchema,
@@ -198,6 +199,12 @@ trainings.get(
     return c.json(rows);
   },
 );
+
+// Quiénes compraron la capacitación y cuánto deben (una fila por compra viva).
+trainings.get("/:id/inscriptas", auth, requireAuth, requirePermission("catalogo", "view"), async (c) => {
+  const db = createDb(c.env);
+  return c.json(await listInscriptas(db, c.req.param("id")));
+});
 
 trainings.post(
   "/:id/sessions/generar",

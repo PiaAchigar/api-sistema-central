@@ -1,7 +1,16 @@
-import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { appointments, serviceProviders, training, trainingSessions } from "../db/schema";
+import {
+  appointments,
+  contacts,
+  customerPurchase,
+  customers,
+  serviceProviders,
+  training,
+  trainingSessions,
+} from "../db/schema";
 import { conflict, notFound } from "../lib/errors";
+import { getDeudasDeCompras } from "./compras.repo";
 
 // Encuentros de una capacitación (training_sessions). Las horas son LOCALES
 // del negocio (ART), "HH:MM:SS", igual que activity_schedules.
@@ -225,4 +234,76 @@ export async function generarEncuentros(
   }));
   await db.insert(trainingSessions).values(filas);
   return listEncuentros(db, trainingId, {});
+}
+
+export type Inscripta = {
+  customerPurchaseId: string;
+  customerId: string;
+  nombre: string;
+  /** ISO de purchased_at (cae en created_at si la compra no lo trae). */
+  compradaEl: string;
+  debe: number;
+  /** Encuentros activos de la capacitación en que tiene un turno no cancelado. */
+  encuentrosAnotada: number;
+  encuentrosTotales: number;
+};
+
+/**
+ * Quiénes compraron la capacitación: compras vivas (sin cancelar), por nombre.
+ * Tres consultas fijas sin importar cuántas inscriptas haya: compras, deudas
+ * (getDeudasDeCompras) y conteos de turnos por clienta.
+ */
+export async function listInscriptas(db: Db, trainingId: string): Promise<Inscripta[]> {
+  const compras = await db
+    .select({
+      customerPurchaseId: customerPurchase.id,
+      customerId: customerPurchase.customerId,
+      nombre: contacts.name,
+      purchasedAt: customerPurchase.purchasedAt,
+      createdAt: customerPurchase.createdAt,
+    })
+    .from(customerPurchase)
+    .leftJoin(customers, eq(customers.id, customerPurchase.customerId))
+    .leftJoin(contacts, eq(contacts.id, customers.contactId))
+    .where(and(eq(customerPurchase.trainingId, trainingId), isNull(customerPurchase.cancelledAt)))
+    .orderBy(asc(contacts.name), asc(customerPurchase.purchasedAt));
+  if (compras.length === 0) return [];
+
+  const deudas = await getDeudasDeCompras(db, compras.map((c) => c.customerPurchaseId));
+
+  // Los encuentros desactivados no cuentan ni en el total ni en lo anotado.
+  const [totales] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(trainingSessions)
+    .where(and(eq(trainingSessions.trainingId, trainingId), eq(trainingSessions.isActive, true)));
+  const encuentrosTotales = totales?.n ?? 0;
+
+  const clientaIds = [...new Set(compras.map((c) => c.customerId).filter((x): x is string => !!x))];
+  const anotadas = new Map<string, number>();
+  if (clientaIds.length > 0) {
+    const filas = await db
+      .select({ customerId: appointments.customerId, n: sql<number>`count(distinct ${appointments.trainingSessionId})::int` })
+      .from(appointments)
+      .innerJoin(trainingSessions, eq(trainingSessions.id, appointments.trainingSessionId))
+      .where(
+        and(
+          eq(trainingSessions.trainingId, trainingId),
+          eq(trainingSessions.isActive, true),
+          ne(appointments.status, "cancelled"),
+          inArray(appointments.customerId, clientaIds),
+        ),
+      )
+      .groupBy(appointments.customerId);
+    for (const f of filas) anotadas.set(f.customerId as string, f.n);
+  }
+
+  return compras.map((c) => ({
+    customerPurchaseId: c.customerPurchaseId,
+    customerId: c.customerId as string,
+    nombre: c.nombre ?? "",
+    compradaEl: (c.purchasedAt ?? c.createdAt)?.toISOString() ?? "",
+    debe: deudas.get(c.customerPurchaseId) ?? 0,
+    encuentrosAnotada: anotadas.get(c.customerId as string) ?? 0,
+    encuentrosTotales,
+  }));
 }
