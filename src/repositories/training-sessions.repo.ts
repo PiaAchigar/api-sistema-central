@@ -77,6 +77,15 @@ async function contarAnotadas(db: Db, ids: string[]): Promise<Map<string, number
   return new Map(filas.map((f) => [f.id as string, f.n]));
 }
 
+/** Violación del índice único (training_id, session_number): 23505 de Postgres. */
+function esNumeroRepetido(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string } };
+  return e?.code === "23505" || e?.cause?.code === "23505";
+}
+
+const mensajeNumeroRepetido = (n: number | undefined) =>
+  `Ya hay un encuentro N.º ${n} en esta capacitación`;
+
 export async function listEncuentros(
   db: Db,
   trainingId: string,
@@ -108,7 +117,9 @@ async function getEncuentro(db: Db, id: string): Promise<Encuentro> {
 export async function crearEncuentro(db: Db, trainingId: string, input: EncuentroInput): Promise<Encuentro> {
   const [cap] = await db.select({ id: training.id }).from(training).where(eq(training.id, trainingId));
   if (!cap) throw notFound("Training");
-  const [creado] = await db
+  let creado: { id: string } | undefined;
+  try {
+    [creado] = await db
     .insert(trainingSessions)
     .values({
       trainingId,
@@ -121,6 +132,11 @@ export async function crearEncuentro(db: Db, trainingId: string, input: Encuentr
       capacity: input.capacity ?? null,
     })
     .returning({ id: trainingSessions.id });
+  } catch (err) {
+    // El índice único cuenta también los encuentros inactivos.
+    if (esNumeroRepetido(err)) throw conflict(mensajeNumeroRepetido(input.sessionNumber));
+    throw err;
+  }
   return getEncuentro(db, creado!.id);
 }
 
@@ -140,11 +156,17 @@ export async function editarEncuentro(
   if (input.isActive !== undefined) cambios.isActive = input.isActive;
 
   if (Object.keys(cambios).length > 0) {
-    const r = await db
-      .update(trainingSessions)
-      .set({ ...cambios, updatedAt: new Date() })
-      .where(eq(trainingSessions.id, id))
-      .returning({ id: trainingSessions.id });
+    let r: { id: string }[];
+    try {
+      r = await db
+        .update(trainingSessions)
+        .set({ ...cambios, updatedAt: new Date() })
+        .where(eq(trainingSessions.id, id))
+        .returning({ id: trainingSessions.id });
+    } catch (err) {
+      if (esNumeroRepetido(err)) throw conflict(mensajeNumeroRepetido(input.sessionNumber));
+      throw err;
+    }
     if (r.length === 0) throw notFound("Encuentro");
   }
   return getEncuentro(db, id);
@@ -180,7 +202,9 @@ export async function generarEncuentros(
     .where(eq(training.id, trainingId));
   if (!cap) throw notFound("Training");
 
-  const existentes = await listEncuentros(db, trainingId, {});
+  // Cualquier encuentro cuenta, también los inactivos: el índice único
+  // (training_id, session_number) los incluye y el 1..N chocaría.
+  const existentes = await listEncuentros(db, trainingId, { incluirInactivos: true });
   if (existentes.length > 0) {
     throw conflict("Esta capacitación ya tiene encuentros: editalos uno por uno");
   }

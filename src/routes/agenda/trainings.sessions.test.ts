@@ -15,7 +15,9 @@ describe("encuentroBody", () => {
     }
   });
   it("rechaza capacity < 1", () => {
-    expect(encuentroBody.safeParse({ ...base, capacity: 0 }).success).toBe(false);
+    const r = encuentroBody.safeParse({ ...base, capacity: 0 });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]!.path).toEqual(["capacity"]);
   });
 });
 
@@ -34,5 +36,11 @@ describe("generarBody", () => {
   it("rechaza endTime <= startTime y día fuera de 0..6", () => {
     expect(generarBody.safeParse({ desde: "2026-11-02", diaDeLaSemana: 3, startTime: "10:00:00", endTime: "09:00:00" }).success).toBe(false);
     expect(generarBody.safeParse({ desde: "2026-11-02", diaDeLaSemana: 7, startTime: "10:00:00", endTime: "11:00:00" }).success).toBe(false);
+  });
+
+  it("rechaza cantidad < 1", () => {
+    const ok = { desde: "2026-11-02", diaDeLaSemana: 3, startTime: "10:00:00", endTime: "11:00:00" };
+    expect(generarBody.safeParse({ ...ok, cantidad: 0 }).success).toBe(false);
+    expect(generarBody.safeParse({ ...ok, cantidad: 2 }).success).toBe(true);
   });
 });

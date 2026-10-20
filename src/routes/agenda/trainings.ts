@@ -184,14 +184,12 @@ export const generarBody = z
   })
   .refine(finPosteriorAInicio, errorOrdenHoras);
 
-// Rutas con segmentos fijos ("sessions/...") van antes que "/:id/..." no hace
-// falta: Hono distingue por la cantidad de segmentos.
 trainings.get(
   "/:id/sessions",
   auth,
   requireAuth,
   requirePermission("catalogo", "view"),
-  zValidator("query", z.object({ incluirInactivos: z.string().optional() })),
+  zValidator("query", z.object({ incluirInactivos: z.enum(["true", "false"]).optional() })),
   async (c) => {
     const db = createDb(c.env);
     const rows = await listEncuentros(db, c.req.param("id"), {
