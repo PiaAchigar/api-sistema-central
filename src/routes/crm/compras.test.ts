@@ -8,6 +8,10 @@ import { contacts, customers, depilationCombo } from "../../db/schema";
 import type { Db } from "../../db/client";
 import type { AppBindings, Variables } from "../../env";
 import { compraBody, comprasRouter } from "./compras";
+import { usarConfigDeDepilacionDeTest } from "../../test-support/depilation-config";
+
+// La config de depilación la edita Laura: el archivo arma la suya (ver test-support).
+usarConfigDeDepilacionDeTest();
 
 describe("el body de POST /purchases", () => {
   const base = {
