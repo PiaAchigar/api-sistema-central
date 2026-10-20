@@ -3,7 +3,18 @@ import { z } from "zod";
 import { AppError } from "../lib/errors";
 import { zv } from "../lib/validator";
 import { trainingSubscriptionsService } from "../services/trainingSubscriptionsService";
-import { requireAdmin, requireAuth, requirePermission } from "../middleware/auth";
+import { auth, requireAdmin, requireAuth, requirePermission } from "../middleware/auth";
+import { createDb } from "../db/client";
+import { resolveArcaConfig } from "../arca/factory";
+import { badRequest, notFound } from "../lib/errors";
+import { checkout } from "../services/checkout.service";
+import {
+  asegurarCicloDelMes,
+  getCuotaDelMes,
+  mensajeMontoSuperaDebe,
+} from "../repositories/cuotas.repo";
+import { activities, trainingSubscriptions } from "../db/schema";
+import { eq } from "drizzle-orm";
 import type { AppBindings, Variables } from "../env";
 
 const trainingSubscriptionsRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
@@ -171,6 +182,101 @@ trainingSubscriptionsRouter.get(
       }
       throw err;
     }
+  }
+);
+
+const MES_SCHEMA = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "mes debe tener el formato YYYY-MM");
+
+/**
+ * GET /api/training-subscriptions/:id/cuota?mes=YYYY-MM
+ * Cuánto cuesta, cuánto se pagó y cuánto se debe de un mes. No crea el ciclo.
+ */
+trainingSubscriptionsRouter.get(
+  "/training-subscriptions/:id/cuota",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "view"),
+  zv("query", z.object({ mes: MES_SCHEMA })),
+  async (c) => {
+    const db = createDb(c.env);
+    const { mes } = c.req.valid("query");
+    return c.json(await getCuotaDelMes(db, c.req.param("id"), mes));
+  }
+);
+
+/**
+ * POST /api/training-subscriptions/:id/cobrar
+ * Cobra (total o parcial) la cuota de un mes reutilizando el MISMO `checkout()`
+ * del mostrador y de las compras: pago, factura si lleva, línea de detalle y
+ * movimiento de caja si es efectivo. El ítem es un concepto libre
+ * "<actividad> — <mes> <año>": una cuota no es un service ni un product.
+ *
+ * Permiso de agenda/edit: es lo mismo que cobrar un turno desde la agenda.
+ */
+trainingSubscriptionsRouter.post(
+  "/training-subscriptions/:id/cobrar",
+  auth,
+  requireAuth,
+  requirePermission("agenda", "edit"),
+  zv(
+    "json",
+    z.object({
+      mes: MES_SCHEMA,
+      amount: z.number().positive(),
+      method: z.enum(["cash", "bank_transfer", "mercadopago", "debit_card", "credit_card"]),
+      wantsInvoice: z.boolean(),
+      issuerId: z.string().uuid().nullish(),
+    })
+  ),
+  async (c) => {
+    const db = createDb(c.env);
+    const id = c.req.param("id");
+    const b = c.req.valid("json");
+
+    const [sub] = await db
+      .select({
+        status: trainingSubscriptions.status,
+        customerId: trainingSubscriptions.customerId,
+        activityName: activities.name,
+      })
+      .from(trainingSubscriptions)
+      .leftJoin(activities, eq(activities.id, trainingSubscriptions.activityId))
+      .where(eq(trainingSubscriptions.id, id))
+      .limit(1);
+    if (!sub) throw notFound("Subscription");
+    if (sub.status === "cancelled") throw badRequest("La suscripción está cancelada");
+    if (!sub.customerId) throw badRequest("La suscripción no tiene clienta");
+
+    // Se valida ANTES de crear el ciclo para no dejar ciclos vacíos por un
+    // cobro rechazado. checkout() lo vuelve a verificar bajo lock.
+    const antes = await getCuotaDelMes(db, id, b.mes);
+    if (b.amount > antes.debe) throw badRequest(mensajeMontoSuperaDebe(antes.debe));
+
+    const arca = await resolveArcaConfig(db, c.env, b.issuerId ?? undefined);
+    const ciclo = await asegurarCicloDelMes(db, id, b.mes);
+
+    // Mes en letras en UTC: "2026-11" es el 1/11 UTC y en ART sería el 31/10.
+    const [anio, mesNum] = b.mes.split("-").map(Number) as [number, number];
+    const mesEnLetras = new Date(Date.UTC(anio, mesNum - 1, 1)).toLocaleDateString("es-AR", {
+      month: "long",
+      timeZone: "UTC",
+    });
+
+    const resultado = await checkout(db, arca, {
+      customerId: sub.customerId,
+      subscriptionBillingCycleId: ciclo,
+      issuerId: b.issuerId ?? undefined,
+      items: [
+        {
+          description: `${sub.activityName ?? "Actividad"} — ${mesEnLetras} ${anio}`,
+          quantity: 1,
+          unitPrice: b.amount,
+        },
+      ],
+      payment: { method: b.method, amount: b.amount, wantsInvoice: b.wantsInvoice },
+    });
+
+    return c.json({ ...resultado, cuota: await getCuotaDelMes(db, id, b.mes) }, 201);
   }
 );
 

@@ -62,6 +62,10 @@ export interface SubscriptionWithAttendance {
   classesRemainingThisMonth: number;
   paidDate: string | null;
   paidStatus: "paid" | "pending" | "overdue";
+  /** Cuota del mes actual (ART): amount_due del ciclo, o monthly_amount si no hay ciclo */
+  cuotaDelMes: number;
+  /** Lo que falta cobrar del mes actual: 0 si el ciclo está is_paid; si no, cuota − pagos confirmados vinculados */
+  debeDelMes: number;
 }
 
 /**
@@ -593,6 +597,8 @@ export class TrainingSubscriptionsService {
       classesRemainingThisMonth,
       paidDate,
       paidStatus: this.computePaidStatus(paidDate),
+      cuotaDelMes: Number(row.cuota_del_mes) || 0,
+      debeDelMes: Number(row.debe_del_mes) || 0,
     };
   }
 

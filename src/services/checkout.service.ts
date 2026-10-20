@@ -9,6 +9,12 @@ import { insertCashMovement } from "../repositories/cash.repo";
 import { getCustomerById } from "../repositories/customers.repo";
 import { insertInvoice, insertLineItems } from "../repositories/invoices.repo";
 import { insertPayment } from "../repositories/payments.repo";
+import {
+  bloquearCiclo,
+  getCuotaDeCiclo,
+  marcarMesSiCorresponde,
+  mensajeMontoSuperaDebe,
+} from "../repositories/cuotas.repo";
 import { computeProviderEarning } from "./appointments.service";
 import { resolveItems, type DraftItemInput } from "./invoicing.service";
 
@@ -21,6 +27,10 @@ export type CheckoutInput = {
   /** Compra que se está cobrando. Queda en los pagos y en las líneas, y es lo
    *  que hace que el saldo de la compra baje solo. */
   customerPurchaseId?: string;
+  /** Ciclo mensual de una suscripción a una actividad que se está cobrando (1.59.0).
+   *  Excluyente con `customerPurchaseId`. Va en cada pago y, al final de la
+   *  misma transacción, marca el mes pagado si el Debe quedó en cero. */
+  subscriptionBillingCycleId?: string;
   items: DraftItemInput[];
   payment: {
     // débito y crédito exigidos por la regla 5.10: un pack se paga con tarjeta
@@ -75,8 +85,22 @@ export async function checkout(db: Db, arca: ArcaConfig, input: CheckoutInput) {
       appt.status === "completed" ? {} : await computeProviderEarning(db, appt);
   }
 
+  if (input.subscriptionBillingCycleId && input.customerPurchaseId) {
+    throw badRequest("Un cobro paga una compra o una cuota, no las dos");
+  }
+
   const now = new Date();
   return db.transaction(async (tx) => {
+    // Cuota mensual: se bloquea el ciclo y se re-verifica el Debe ADENTRO de la
+    // transacción. La ruta ya avisó antes, pero entre ese chequeo y este insert
+    // pudo entrar otro cobro del mismo mes.
+    if (input.subscriptionBillingCycleId) {
+      await bloquearCiclo(tx, input.subscriptionBillingCycleId);
+      const cuota = await getCuotaDeCiclo(tx, input.subscriptionBillingCycleId);
+      if (!cuota) throw notFound("Ciclo de facturación");
+      if (input.payment.amount > cuota.debe) throw badRequest(mensajeMontoSuperaDebe(cuota.debe));
+    }
+
     let invoice = null;
     if (wantsInvoice) {
       const subtotal = billableItems.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
@@ -107,6 +131,7 @@ export async function checkout(db: Db, arca: ArcaConfig, input: CheckoutInput) {
         amount: amount.toFixed(2),
         paymentMethod: input.payment.method,
         customerPurchaseId: input.customerPurchaseId ?? null,
+        subscriptionBillingCycleId: input.subscriptionBillingCycleId ?? null,
         status: "confirmed",
         paymentDate: now,
         isDeclared: declared,
@@ -181,6 +206,11 @@ export async function checkout(db: Db, arca: ArcaConfig, input: CheckoutInput) {
         status: "completed",
         ...appointmentSnapshot,
       });
+    }
+
+    // Ya están insertados los pagos de esta cobranza: el Debe se recalcula con ellos.
+    if (input.subscriptionBillingCycleId) {
+      await marcarMesSiCorresponde(tx, input.subscriptionBillingCycleId);
     }
 
     return {

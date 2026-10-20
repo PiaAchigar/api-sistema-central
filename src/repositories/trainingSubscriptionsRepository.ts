@@ -29,6 +29,10 @@ export type SubscriptionWithAttendanceRow = {
   /** Clases agendadas vigentes del mes: appointments.status = 'scheduled' */
   scheduled_this_month: number;
   paid_date: string | null;
+  /** Cuota del mes actual: amount_due del ciclo o, sin ciclo, monthly_amount (numeric como string) */
+  cuota_del_mes: string;
+  /** Debe del mes actual: 0 si el ciclo is_paid; si no, cuota − Σ pagos confirmados vinculados */
+  debe_del_mes: string;
 };
 
 /**
@@ -265,7 +269,14 @@ export class TrainingSubscriptionsRepository {
         ts.notes,
         COALESCE(att.attended_count, 0)::int AS attended_this_month,
         COALESCE(sch.scheduled_count, 0)::int AS scheduled_this_month,
-        sbc.payment_date AS paid_date
+        sbc.payment_date AS paid_date,
+        COALESCE(sbc.amount_due, ts.monthly_amount) AS cuota_del_mes,
+        -- Misma regla de Debe que cuotas.repo.ts: el flag is_paid es la verdad
+        -- histórica (los pagos viejos no están vinculados al ciclo).
+        (CASE
+          WHEN sbc.is_paid IS TRUE THEN 0
+          ELSE GREATEST(0, COALESCE(sbc.amount_due, ts.monthly_amount) - COALESCE(pg.pagado, 0))
+        END) AS debe_del_mes
       FROM training_subscriptions ts
       JOIN activities a ON a.id = ts.activity_id
       -- El nombre del cliente vive en CONTACTS (customers.contact_id -> contacts.name),
@@ -304,6 +315,12 @@ export class TrainingSubscriptionsRepository {
       LEFT JOIN subscription_billing_cycles sbc
         ON sbc.training_subscription_id = ts.id
         AND sbc.billing_month = cm.billing_month
+      LEFT JOIN LATERAL (
+        SELECT SUM(p.amount) AS pagado
+        FROM payments p
+        WHERE p.subscription_billing_cycle_id = sbc.id
+          AND p.status = 'confirmed'
+      ) pg ON true
       ${whereClause}
       ORDER BY ts.created_at DESC
     `);
