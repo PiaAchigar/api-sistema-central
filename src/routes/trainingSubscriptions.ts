@@ -3,7 +3,7 @@ import { z } from "zod";
 import { AppError } from "../lib/errors";
 import { zv } from "../lib/validator";
 import { trainingSubscriptionsService } from "../services/trainingSubscriptionsService";
-import { auth, requireAdmin, requireAuth, requirePermission } from "../middleware/auth";
+import { auth, requireAdmin, requireAnyPermission, requireAuth, requirePermission } from "../middleware/auth";
 import { createDb } from "../db/client";
 import { resolveArcaConfig } from "../arca/factory";
 import { badRequest, notFound } from "../lib/errors";
@@ -196,7 +196,7 @@ trainingSubscriptionsRouter.get(
   "/training-subscriptions/:id/cuota",
   auth,
   requireAuth,
-  requirePermission("catalogo", "view"),
+  requireAnyPermission(["agenda", "view"], ["catalogo", "view"]),
   zv("query", z.object({ mes: MES_SCHEMA })),
   async (c) => {
     const db = createDb(c.env);

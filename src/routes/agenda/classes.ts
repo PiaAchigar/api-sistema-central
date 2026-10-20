@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createDb } from "../../db/client";
 import { listClassesForRange, type ClassOccurrenceRow } from "../../repositories/classes.repo";
 import { requireAuth, requirePermission } from "../../middleware/auth";
-import { anotarACapacitacion, anotarAClase, anotarAlMes, opcionesParaAnotar } from "../../services/anotar.service";
+import { anotarACapacitacion, anotarAClase, anotarAlMes, opcionesDeCapacitacion, opcionesParaAnotar } from "../../services/anotar.service";
 import { zv } from "../../lib/validator";
 import type { AppBindings, Variables } from "../../env";
 
@@ -15,6 +15,8 @@ export type ClassOccurrence = {
   kind: "activity" | "training";
   subjectId: string;
   sessionId: string | null;
+  /** activity_schedules.id — null en encuentros de capacitación */
+  scheduleId: string | null;
   name: string;
   activityType: "class" | "machine" | null;
   sessionNumber: number | null;
@@ -35,7 +37,17 @@ export type ClassOccurrence = {
   capacity: number | null;
   enrolledCount: number;
   attendedCount: number;
-  anotadas: { appointmentId: string; customerId: string | null; nombre: string | null; prueba: boolean; debe: number }[];
+  anotadas: {
+    appointmentId: string;
+    customerId: string | null;
+    nombre: string | null;
+    prueba: boolean;
+    debe: number;
+    /** Suscripción cuyo ciclo da el Debe; null en prueba y en capacitación */
+    subscriptionId: string | null;
+    /** Compra viva de la capacitación; null en actividades */
+    compraId: string | null;
+  }[];
 };
 
 /** "HH:MM:SS" → "HH:MM" (a la Agenda no le sirven los segundos). */
@@ -49,6 +61,7 @@ function toClassOccurrence(row: ClassOccurrenceRow): ClassOccurrence {
     kind: row.kind,
     subjectId: row.subject_id,
     sessionId: row.session_id,
+    scheduleId: row.schedule_id,
     name: row.name,
     activityType: (row.activity_type as "class" | "machine" | null) ?? null,
     sessionNumber: row.session_number,
@@ -71,6 +84,8 @@ function toClassOccurrence(row: ClassOccurrenceRow): ClassOccurrence {
       nombre: a.nombre,
       prueba: a.prueba,
       debe: a.debe,
+      subscriptionId: a.subscription_id ?? null,
+      compraId: a.compra_id ?? null,
     })),
   };
 }
@@ -159,6 +174,7 @@ const anotarAClaseBody = z.object({
   startsAt: z.string().datetime({ offset: true }),
   customerId: z.string().uuid(),
   prueba: z.boolean().optional(),
+  scheduleId: z.string().uuid().optional(),
 });
 
 /**
@@ -209,9 +225,26 @@ const opcionesQuery = z.object({
 });
 
 /** GET /api/agenda/classes/opciones — qué se le puede ofrecer a la clienta en esa actividad (spec §3.1). */
-classesRouter.get("/opciones", requireAuth, zv("query", opcionesQuery), async (c) => {
+classesRouter.get("/opciones", requireAuth, requirePermission("agenda", "view"), zv("query", opcionesQuery), async (c) => {
   const db = createDb(c.env);
   return c.json({ success: true, data: await opcionesParaAnotar(db, c.req.valid("query")) });
 });
+
+const opcionesCapacitacionQuery = z.object({
+  trainingId: z.string().uuid(),
+  customerId: z.string().uuid(),
+});
+
+/** GET /api/agenda/classes/opciones-capacitacion — compra viva, deuda y encuentros que quedan. */
+classesRouter.get(
+  "/opciones-capacitacion",
+  requireAuth,
+  requirePermission("agenda", "view"),
+  zv("query", opcionesCapacitacionQuery),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json({ success: true, data: await opcionesDeCapacitacion(db, c.req.valid("query")) });
+  },
+);
 
 export { classesRouter };

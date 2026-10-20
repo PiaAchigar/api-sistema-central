@@ -117,3 +117,14 @@ export const requirePermission =
     }
     await next();
   };
+
+/** Pasa si el rol cumple ALGUNO de los pares [sección, capacidad]. Mismo 403 que `requirePermission`. */
+export const requireAnyPermission =
+  (...pares: [Section, Capability][]): MiddlewareHandler<HonoCtx> =>
+  async (c, next) => {
+    const role = c.get("userRole") as Role | null;
+    if (!pares.some(([section, cap]) => can(role, section, cap))) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+    await next();
+  };

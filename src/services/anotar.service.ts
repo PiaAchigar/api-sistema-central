@@ -14,6 +14,7 @@ import {
 } from "../db/schema";
 import { asegurarCicloDelMes, bloquearCiclo } from "../repositories/cuotas.repo";
 import { listClassesForRange } from "../repositories/classes.repo";
+import { getDeudasDeCompras } from "../repositories/compras.repo";
 
 export type AnotarAlMesInput = {
   activityId: string;
@@ -69,6 +70,14 @@ async function lugaresOcupados(t: Db, activityId: string, inicio: Date, machineI
   return fila!.n;
 }
 
+/** Clases de UNA actividad en todo `mes` (YYYY-MM): la misma lógica de vigencia que la grilla. */
+async function clasesDeActividadDelMes(t: Db, activityId: string, mes: string) {
+  const [anio, nMes] = mes.split("-").map(Number);
+  const ultimo = new Date(Date.UTC(anio!, nMes!, 0)).getUTCDate();
+  const todas = await listClassesForRange(t, `${mes}-01`, `${mes}-${String(ultimo).padStart(2, "0")}`);
+  return todas.filter((c) => c.kind === "activity" && c.subject_id === activityId && c.schedule_id !== null);
+}
+
 function minutos(hhmmss: string): number {
   const [h, m] = hhmmss.split(":").map(Number);
   return h! * 60 + m!;
@@ -111,15 +120,8 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
       const actividad = await bloquearActividad(t, activityId);
 
       // Clases del mes entero de la actividad (la misma lógica de vigencia que la grilla).
-      const [anio, nMes] = mes.split("-").map(Number);
-      const ultimo = new Date(Date.UTC(anio!, nMes!, 0)).getUTCDate();
-      const todas = await listClassesForRange(t, `${mes}-01`, `${mes}-${String(ultimo).padStart(2, "0")}`);
-      const delMes = todas.filter(
-        (c) =>
-          c.kind === "activity" &&
-          c.subject_id === activityId &&
-          c.schedule_id !== null &&
-          scheduleIds.includes(c.schedule_id),
+      const delMes = (await clasesDeActividadDelMes(t, activityId, mes)).filter((c) =>
+        scheduleIds.includes(c.schedule_id!),
       );
       const vigentes = new Set(delMes.map((c) => c.schedule_id));
       const faltantes = scheduleIds.filter((id) => !vigentes.has(id));
@@ -322,6 +324,8 @@ export type AnotarAClaseInput = {
   startsAt: string;
   customerId: string;
   prueba?: boolean;
+  /** Si viene, la única candidata es la clase de ese horario (no se prueba otra máquina). */
+  scheduleId?: string;
   /** Sólo para tests: la ruta no lo expone. */
   ahora?: Date;
 };
@@ -379,7 +383,8 @@ export async function anotarAClase(db: Db, input: AnotarAClaseInput): Promise<{ 
           c.kind === "activity" &&
           c.subject_id === activityId &&
           c.schedule_id !== null &&
-          new Date(c.starts_at_utc).getTime() === inicio.getTime(),
+          new Date(c.starts_at_utc).getTime() === inicio.getTime() &&
+          (input.scheduleId === undefined || c.schedule_id === input.scheduleId),
       );
       if (candidatas.length === 0) throw sinClase();
       if (inicio.getTime() <= ahora.getTime()) throw badRequest("Esa clase ya pasó");
@@ -415,7 +420,7 @@ export async function anotarAClase(db: Db, input: AnotarAClaseInput): Promise<{ 
         .limit(1);
       if (ya.length > 0) throw conflict("Ya está anotada en esa clase");
 
-      // Si hay dos máquinas a la misma hora, la primera con lugar.
+      // Si hay dos máquinas a la misma hora, la primera con lugar (con `scheduleId` hay una sola candidata).
       let elegida: (typeof candidatas)[number] | undefined;
       for (const c of candidatas) {
         const [h] = await t
@@ -458,7 +463,22 @@ export async function anotarAClase(db: Db, input: AnotarAClaseInput): Promise<{ 
 // Qué se le puede ofrecer a una clienta en una actividad (spec §3.1)
 // ---------------------------------------------------------------------------
 
+export type HorarioParaAnotar = {
+  scheduleId: string;
+  /** "Lun 10:00" */
+  etiqueta: string;
+  maquina: string | null;
+  /** Cuántas clases de este horario quedan en el mes y todavía no pasaron */
+  clases: number;
+};
+
 export type OpcionesParaAnotar = {
+  /** La suscripción activa (o la pausada si no hay activa) */
+  subscriptionId: string | null;
+  /** activities.classes_per_month */
+  clasesDelPlan: number | null;
+  /** Horarios activos y vigentes en algún día del mes, por día y hora */
+  horarios: HorarioParaAnotar[];
   anotadaAlMes: boolean;
   suscripcion: "activa" | "pausada" | null;
   puedePrueba: boolean;
@@ -469,9 +489,10 @@ export type OpcionesParaAnotar = {
 
 export async function opcionesParaAnotar(
   db: Db,
-  input: { activityId: string; customerId: string; mes: string },
+  input: { activityId: string; customerId: string; mes: string; /** Sólo para tests */ ahora?: Date },
 ): Promise<OpcionesParaAnotar> {
   const { activityId, customerId, mes } = input;
+  const ahora = input.ahora ?? new Date();
   const subs = await db
     .select({ id: trainingSubscriptions.id, status: trainingSubscriptions.status, monthlyAmount: trainingSubscriptions.monthlyAmount })
     .from(trainingSubscriptions)
@@ -481,6 +502,34 @@ export async function opcionesParaAnotar(
 
   const elegidos = activa ? await horariosElegidosDelMes(db, activa.id, mes) : [];
   const horariosDelMes = formatearHorarios(elegidos);
+
+  // Horarios del mes: las mismas ocurrencias que usa `anotarAlMes` para crear turnos (las que no pasaron).
+  const ocurrencias = await clasesDeActividadDelMes(db, activityId, mes);
+  const porHorario = new Map<string, { dow: number; hora: string; maquina: string | null; clases: number }>();
+  for (const c of ocurrencias) {
+    const h = porHorario.get(c.schedule_id!) ?? {
+      dow: new Date(`${c.the_date}T00:00:00Z`).getUTCDay(),
+      hora: c.start_time,
+      maquina: c.machine_name,
+      clases: 0,
+    };
+    if (new Date(c.starts_at_utc).getTime() > ahora.getTime()) h.clases++;
+    porHorario.set(c.schedule_id!, h);
+  }
+  const horarios: HorarioParaAnotar[] = [...porHorario.entries()]
+    .sort(([, a], [, b]) => ((a.dow + 6) % 7) - ((b.dow + 6) % 7) || a.hora.localeCompare(b.hora))
+    .map(([scheduleId, h]) => ({
+      scheduleId,
+      etiqueta: formatearHorarios([{ dayOfWeek: h.dow, startTime: h.hora }])[0]!,
+      maquina: h.maquina,
+      clases: h.clases,
+    }));
+
+  const [plan] = await db
+    .select({ clases: activities.classesPerMonth })
+    .from(activities)
+    .where(eq(activities.id, activityId))
+    .limit(1);
 
   let cuotaSugerida: number;
   const suya = activa ?? pausada;
@@ -495,6 +544,9 @@ export async function opcionesParaAnotar(
   }
 
   return {
+    subscriptionId: suya?.id ?? null,
+    clasesDelPlan: plan?.clases ?? null,
+    horarios,
     anotadaAlMes: horariosDelMes.length > 0,
     suscripcion: activa ? "activa" : pausada ? "pausada" : null,
     puedePrueba: subs.length === 0 && !(await tuvoPrueba(db, customerId, activityId)),
@@ -624,4 +676,50 @@ export async function anotarACapacitacion(
 
     return { anotada, yaEstaba, sinLugar };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Qué se le puede ofrecer a una clienta en una capacitación
+// ---------------------------------------------------------------------------
+
+export type OpcionesDeCapacitacion = {
+  /** Compra viva (no cancelada) más reciente de esa capacitación */
+  compraId: string | null;
+  /** Lo que debe de esa compra (0 sin compra) */
+  debe: number;
+  /** Encuentros activos que no pasaron y en los que tiene turno no cancelado */
+  encuentrosAnotada: number;
+  /** Encuentros activos que todavía no pasaron */
+  encuentrosQueQuedan: number;
+};
+
+export async function opcionesDeCapacitacion(
+  db: Db,
+  input: { trainingId: string; customerId: string; ahora?: Date },
+): Promise<OpcionesDeCapacitacion> {
+  const ahora = input.ahora ?? new Date();
+  const { trainingId, customerId } = input;
+
+  const [compra] = (await db.execute(sql`
+    SELECT id FROM customer_purchase
+    WHERE customer_id = ${customerId}::uuid AND training_id = ${trainingId}::uuid AND cancelled_at IS NULL
+    ORDER BY purchased_at DESC NULLS LAST
+    LIMIT 1
+  `)) as unknown as { id: string }[];
+  const compraId = compra?.id ?? null;
+  const debe = compraId ? ((await getDeudasDeCompras(db, [compraId])).get(compraId) ?? 0) : 0;
+
+  const [fila] = (await db.execute(sql`
+    SELECT COUNT(*)::int AS quedan,
+           COUNT(*) FILTER (WHERE EXISTS (
+             SELECT 1 FROM appointments ap
+             WHERE ap.training_session_id = ts.id AND ap.customer_id = ${customerId}::uuid AND ap.status <> 'cancelled'
+           ))::int AS anotada
+    FROM training_sessions ts
+    WHERE ts.training_id = ${trainingId}::uuid
+      AND ts.is_active
+      AND ((ts.session_date + ts.start_time) AT TIME ZONE 'America/Argentina/Buenos_Aires') > ${ahora.toISOString()}::timestamptz
+  `)) as unknown as { quedan: number; anotada: number }[];
+
+  return { compraId, debe, encuentrosAnotada: fila!.anotada, encuentrosQueQuedan: fila!.quedan };
 }

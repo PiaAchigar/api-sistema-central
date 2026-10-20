@@ -128,6 +128,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   const cuIds = [clientaId, otraClientaId];
   await db.delete(appointments).where(inArray(appointments.customerId, cuIds));
+  await db.delete(appointments).where(eq(appointments.activityId, actId)); // incluye las de clientas sueltas de un test
   const subs = await db
     .select({ id: trainingSubscriptions.id })
     .from(trainingSubscriptions)
@@ -218,6 +219,27 @@ describe("anotarAClase (pase libre)", () => {
       .rejects.toMatchObject({ status: 409, message: "La clase está llena" });
   });
 
+  it("con scheduleId anota en la máquina de ese horario aunque la otra tenga lugar", async () => {
+    await alMes();
+    const r = await anotarAClase(db, { activityId: actId, startsAt: VIE9_23, customerId: clientaId, scheduleId: schMaqB, ahora: AHORA });
+    const [t] = await db.select().from(appointments).where(eq(appointments.id, r.appointmentId));
+    expect(t!.machineId).toBe(maqB);
+  });
+
+  it("con scheduleId de un horario lleno: 409 aunque la otra máquina tenga lugar", async () => {
+    await alMes();
+    await ocupar(otraClientaId, VIE9_23, maqB);
+    await expect(anotarAClase(db, { activityId: actId, startsAt: VIE9_23, customerId: clientaId, scheduleId: schMaqB, ahora: AHORA }))
+      .rejects.toMatchObject({ status: 409, message: "La clase está llena" });
+    expect((await turnos(clientaId)).filter((t) => t.appointmentStart!.toISOString() === VIE9_23)).toHaveLength(0);
+  });
+
+  it("con scheduleId que no coincide con el inicio: 400", async () => {
+    await alMes();
+    await expect(anotarAClase(db, { activityId: actId, startsAt: VIE9_23, customerId: clientaId, scheduleId: schJue18, ahora: AHORA }))
+      .rejects.toMatchObject({ status: 400, message: `No hay clase de ${QA}_Pilates en ese horario` });
+  });
+
   it("ya anotada en esa clase: 409", async () => {
     await alMes();
     await anotarAClase(db, { activityId: actId, startsAt: MAR12_HOY, customerId: clientaId, ahora: AHORA });
@@ -278,12 +300,12 @@ describe("opcionesParaAnotar", () => {
   const op = (customerId = clientaId) => opcionesParaAnotar(db, { activityId: actId, customerId, mes: MES });
 
   it("sin nada: puede prueba, cuota sugerida = precio base de la actividad", async () => {
-    expect(await op()).toEqual({ anotadaAlMes: false, suscripcion: null, puedePrueba: true, cuotaSugerida: 8000, horariosDelMes: [] });
+    expect(await op()).toMatchObject({ anotadaAlMes: false, suscripcion: null, puedePrueba: true, cuotaSugerida: 8000, horariosDelMes: [], subscriptionId: null, clasesDelPlan: 4 });
   });
 
   it("anotada al mes: horarios formateados y ordenados, cuota de su suscripción, sin prueba", async () => {
     await anotarAlMes(db, { activityId: actId, customerId: clientaId, mes: MES, scheduleIds: [schJue18, schMar12, schMar10], cuota: 9000, ahora: AHORA });
-    expect(await op()).toEqual({
+    expect(await op()).toMatchObject({
       anotadaAlMes: true, suscripcion: "activa", puedePrueba: false, cuotaSugerida: 9000,
       horariosDelMes: ["Mar 10:00", "Mar 12:00", "Jue 18:00"],
     });
@@ -302,8 +324,37 @@ describe("opcionesParaAnotar", () => {
     expect(r).toMatchObject({ anotadaAlMes: false, suscripcion: "pausada", puedePrueba: false, cuotaSugerida: 9000 });
   });
 
+  it("subscriptionId: la activa; la pausada si sólo hay pausada; null si nada", async () => {
+    expect((await op()).subscriptionId).toBeNull();
+    await alMes();
+    const [sub] = await db.select({ id: trainingSubscriptions.id }).from(trainingSubscriptions).where(eq(trainingSubscriptions.customerId, clientaId));
+    expect((await op()).subscriptionId).toBe(sub!.id);
+    await db.update(trainingSubscriptions).set({ status: "paused" }).where(eq(trainingSubscriptions.customerId, clientaId));
+    expect((await op()).subscriptionId).toBe(sub!.id);
+  });
+
   it("ya tuvo prueba: no puede otra", async () => {
     await ocupar(clientaId, MAR12_HOY, null, { isTrial: true });
     expect(await op()).toMatchObject({ suscripcion: null, puedePrueba: false, cuotaSugerida: 8000 });
+  });
+});
+
+describe("opcionesParaAnotar: horarios del mes", () => {
+  it("trae los activos y vigentes en el mes, por día y hora, con las clases que quedan", async () => {
+    const [a] = await db
+      .insert(activities)
+      .values({ name: `${QA}_Horarios`, activityType: "class", classesPerMonth: 8, monthlyBasePrice: "5000", isActive: true })
+      .returning({ id: activities.id });
+    const id = a!.id;
+    const mie = await horario(id, 3, "18:30:00", "19:30:00", { machineId: maqA }); // 21 y 28
+    const lun = await horario(id, 1, "09:00:00", "10:00:00"); // 5, 12, 19 pasaron; queda el 26
+    await horario(id, 5, "10:00:00", "11:00:00", { isActive: false });
+    await horario(id, 2, "10:00:00", "11:00:00", { validUntil: "2026-09-30" });
+    const r = await opcionesParaAnotar(db, { activityId: id, customerId: clientaId, mes: MES, ahora: AHORA });
+    expect(r.clasesDelPlan).toBe(8);
+    expect(r.horarios).toEqual([
+      { scheduleId: lun, etiqueta: "Lun 09:00", maquina: null, clases: 1 },
+      { scheduleId: mie, etiqueta: "Mié 18:30", maquina: `${QA}_MaqA`, clases: 2 },
+    ]);
   });
 });

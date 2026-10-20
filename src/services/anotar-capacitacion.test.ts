@@ -5,7 +5,7 @@ import { eq, inArray, like, sql } from "drizzle-orm";
 import * as schema from "../db/schema";
 import { appointments, contacts, customers } from "../db/schema";
 import type { Db } from "../db/client";
-import { anotarACapacitacion } from "./anotar.service";
+import { anotarACapacitacion, opcionesDeCapacitacion } from "./anotar.service";
 
 const URL = "postgresql://piubella:piubella@localhost:5499/piubella";
 const pg = postgres(URL, { max: 2, fetch_types: false, prepare: false });
@@ -40,9 +40,11 @@ async function sesion(n: number, fecha: string, hora: string, extra: { activo?: 
 }
 
 async function compra(customerId: string, cancelada = false) {
-  await db.execute(sql`
+  const [r] = (await db.execute(sql`
     INSERT INTO customer_purchase (customer_id, training_id, description, sessions_total, base_amount, discounted_amount, final_amount, cancelled_at, notes)
-    VALUES (${customerId}, ${trainingId}, ${QA}, 1, 100, 0, 100, ${cancelada ? sql`now()` : sql`NULL`}, ${QA})`);
+    VALUES (${customerId}, ${trainingId}, ${QA}, 1, 100, 0, 100, ${cancelada ? sql`now()` : sql`NULL`}, ${QA})
+    RETURNING id`)) as unknown as { id: string }[];
+  return r!.id;
 }
 
 async function limpiar() {
@@ -131,5 +133,39 @@ describe("anotarACapacitacion", () => {
     await expect(anotarACapacitacion(db, { trainingId, customerId: sinCompraId, ahora: AHORA })).rejects.toMatchObject({
       message: "No compró esta capacitación",
     });
+  });
+});
+
+describe("opcionesDeCapacitacion", () => {
+  const op = (customerId = clientaId) => opcionesDeCapacitacion(db, { trainingId, customerId, ahora: AHORA });
+  const turno = (customerId: string, sesionId: string, inicio: string) =>
+    db.insert(appointments).values({
+      customerId, trainingSessionId: sesionId, status: "scheduled",
+      appointmentStart: new Date(inicio), appointmentEnd: new Date(new Date(inicio).getTime() + 7200_000), durationMinutes: 120,
+    });
+
+  it("sin compra: sin id y sin deuda; igual cuenta los encuentros que quedan", async () => {
+    // activos que no pasaron: futura1, futura2 y la llena (la pasada y la de baja no)
+    expect(await op(sinCompraId)).toEqual({ compraId: null, debe: 0, encuentrosAnotada: 0, encuentrosQueQuedan: 3 });
+  });
+
+  it("con compra viva y deuda: su id y lo que debe", async () => {
+    const id = await compra(clientaId);
+    expect(await op()).toMatchObject({ compraId: id, debe: 100 });
+  });
+
+  it("una compra cancelada no cuenta", async () => {
+    await compra(clientaId, true);
+    expect(await op()).toMatchObject({ compraId: null, debe: 0 });
+  });
+
+  it("encuentrosAnotada cuenta sólo turnos no cancelados de encuentros que quedan", async () => {
+    await compra(clientaId);
+    await turno(clientaId, sesFutura1, "2026-10-20T18:00:00Z");
+    await turno(clientaId, sesFutura2, "2026-10-27T13:00:00Z").then(() =>
+      db.update(appointments).set({ status: "cancelled" }).where(eq(appointments.trainingSessionId, sesFutura2)),
+    );
+    await turno(clientaId, sesPasada, "2026-10-20T12:00:00Z");
+    expect(await op()).toMatchObject({ encuentrosAnotada: 1, encuentrosQueQuedan: 3 });
   });
 });

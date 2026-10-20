@@ -12,6 +12,10 @@ export type AnotadaRow = {
   prueba: boolean;
   /** Plata que debe: cuota del mes (actividad) o saldo de su compra (capacitación) */
   debe: number;
+  /** Suscripción activa cuyo ciclo da el Debe. null en prueba y en capacitación. */
+  subscription_id: string | null;
+  /** Compra viva de la capacitación. null en actividades. */
+  compra_id: string | null;
 };
 
 /**
@@ -78,7 +82,7 @@ export async function listClassesForDate(
 
 /** Fila cruda de la consulta: las anotadas llegan como JSON y sin la deuda de capacitaciones. */
 type FilaCruda = Omit<ClassOccurrenceRow, "anotadas"> & {
-  anotadas: string | (Omit<AnotadaRow, "debe"> & { debe: number; compra_id: string | null })[];
+  anotadas: string | AnotadaRow[];
 };
 
 /**
@@ -242,6 +246,7 @@ export async function listClassesForRange(
         -- aparte con getDeudasDeCompras a partir de compra_id.
         'debe', CASE WHEN r.kind = 'activity' AND NOT ap.is_trial
                      THEN COALESCE(${debeDeCicloSql("cy", "ts")}, 0) ELSE 0 END,
+        'subscription_id', CASE WHEN r.kind = 'activity' AND NOT ap.is_trial THEN ts.id ELSE NULL END,
         'compra_id', pur.id
       ) ORDER BY ct.name, ap.id), '[]'::json) AS anotadas
       FROM appointments ap
@@ -299,11 +304,9 @@ export async function listClassesForRange(
 
   return crudas.map((f) => ({
     ...f,
-    anotadas: (f.anotadas as { compra_id: string | null; debe: number }[]).map(
-      ({ compra_id, debe, ...a }) => ({
-        ...(a as Omit<AnotadaRow, "debe">),
-        debe: f.kind === "training" ? (compra_id ? (deudas.get(compra_id) ?? 0) : 0) : Number(debe),
-      }),
-    ),
+    anotadas: (f.anotadas as AnotadaRow[]).map((a) => ({
+      ...a,
+      debe: f.kind === "training" ? (a.compra_id ? (deudas.get(a.compra_id) ?? 0) : 0) : Number(a.debe),
+    })),
   })) as ClassOccurrenceRow[];
 }
