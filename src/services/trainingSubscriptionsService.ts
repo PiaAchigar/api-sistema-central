@@ -54,6 +54,8 @@ export interface SubscriptionWithAttendance {
   cuotaDelMes: number;
   /** Lo que falta cobrar del mes actual: 0 si el ciclo está is_paid; si no, cuota − pagos confirmados vinculados */
   debeDelMes: number;
+  /** Horarios del ciclo del mes actual: "Lun 10:00", de lunes a domingo y por hora */
+  horariosDelMes: string[];
 }
 
 /**
@@ -587,6 +589,7 @@ export class TrainingSubscriptionsService {
       paidStatus: this.computePaidStatus(paidDate),
       cuotaDelMes: Number(row.cuota_del_mes) || 0,
       debeDelMes: Number(row.debe_del_mes) || 0,
+      horariosDelMes: row.horarios_del_mes ?? [],
     };
   }
 

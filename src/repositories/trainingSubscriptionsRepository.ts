@@ -1,6 +1,7 @@
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { todayLocal } from "../lib/time";
+import { formatearHorarios } from "../services/anotar.service";
 import {
   trainingSubscriptions,
   activityAttendance,
@@ -33,6 +34,8 @@ export type SubscriptionWithAttendanceRow = {
   cuota_del_mes: string;
   /** Debe del mes actual: 0 si el ciclo is_paid; si no, cuota − Σ pagos confirmados vinculados */
   debe_del_mes: string;
+  /** "Lun 10:00" del ciclo del mes actual, de lunes a domingo y por hora */
+  horarios_del_mes: string[];
 };
 
 /**
@@ -325,7 +328,27 @@ export class TrainingSubscriptionsRepository {
       ORDER BY ts.created_at DESC
     `);
 
-    return rows as unknown as SubscriptionWithAttendanceRow[];
+    const filas = rows as unknown as Array<Omit<SubscriptionWithAttendanceRow, "horarios_del_mes">>;
+
+    // Los horarios del mes actual (ART) de TODAS las filas en una sola consulta, sin N+1.
+    const ids = filas.map((f) => f.id);
+    const porSuscripcion = new Map<string, Array<{ dayOfWeek: number | null; startTime: string | null }>>();
+    if (ids.length > 0) {
+      const horarios = await db.execute<{ subscription_id: string; day_of_week: number | null; start_time: string | null }>(sql`
+        SELECT sbc.training_subscription_id AS subscription_id, asch.day_of_week, asch.start_time
+        FROM subscription_billing_cycles sbc
+        JOIN subscription_month_schedules sms ON sms.billing_cycle_id = sbc.id
+        JOIN activity_schedules asch ON asch.id = sms.activity_schedule_id
+        WHERE sbc.billing_month = to_char((now() AT TIME ZONE 'America/Argentina/Buenos_Aires'), 'YYYY-MM')
+          AND sbc.training_subscription_id IN (${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)})
+      `);
+      for (const h of horarios as unknown as Array<{ subscription_id: string; day_of_week: number | null; start_time: string | null }>) {
+        const lista = porSuscripcion.get(h.subscription_id) ?? [];
+        lista.push({ dayOfWeek: h.day_of_week, startTime: h.start_time });
+        porSuscripcion.set(h.subscription_id, lista);
+      }
+    }
+    return filas.map((f) => ({ ...f, horarios_del_mes: formatearHorarios(porSuscripcion.get(f.id) ?? []) }));
   }
 
   /**

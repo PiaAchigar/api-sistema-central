@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { badRequest, conflict } from "../lib/errors";
+import { badRequest, conflict, notFound } from "../lib/errors";
 import { isUniqueViolation } from "../lib/db-errors";
 import { utcToLocalDateString } from "../lib/time";
 import {
@@ -249,6 +249,55 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
   }
 }
 
+/** Mes anterior de un YYYY-MM. */
+function mesAnterior(mes: string): string {
+  const [a, m] = mes.split("-").map(Number);
+  return m === 1 ? `${a! - 1}-12` : `${a}-${String(m! - 1).padStart(2, "0")}`;
+}
+
+/**
+ * Renueva el mes de una suscripción: repite los horarios del ciclo del mes anterior y cobra
+ * `monthly_amount`. No reimplementa nada: es `anotarAlMes` (con su lock, cupo y reglas) con los datos
+ * de la suscripción; la validación de pausada/ya anotada sigue siendo la suya.
+ */
+export async function renovar(
+  db: Db,
+  input: { subscriptionId: string; mes: string; ahora?: Date },
+): Promise<ResultadoAlMes> {
+  const [sub] = await db
+    .select({
+      activityId: trainingSubscriptions.activityId,
+      customerId: trainingSubscriptions.customerId,
+      monthlyAmount: trainingSubscriptions.monthlyAmount,
+    })
+    .from(trainingSubscriptions)
+    .where(eq(trainingSubscriptions.id, input.subscriptionId))
+    .limit(1);
+  if (!sub) throw notFound("Subscription");
+  if (!sub.customerId || !sub.activityId) throw badRequest("La suscripción no tiene clienta o actividad");
+
+  const previos = await db
+    .select({ id: subscriptionMonthSchedules.activityScheduleId })
+    .from(subscriptionBillingCycles)
+    .innerJoin(subscriptionMonthSchedules, eq(subscriptionMonthSchedules.billingCycleId, subscriptionBillingCycles.id))
+    .where(
+      and(
+        eq(subscriptionBillingCycles.trainingSubscriptionId, input.subscriptionId),
+        eq(subscriptionBillingCycles.billingMonth, mesAnterior(input.mes)),
+      ),
+    );
+  if (previos.length === 0) throw badRequest("No tiene horarios del mes anterior para repetir");
+
+  return anotarAlMes(db, {
+    activityId: sub.activityId,
+    customerId: sub.customerId,
+    mes: input.mes,
+    scheduleIds: previos.map((p) => p.id),
+    cuota: Number(sub.monthlyAmount ?? 0),
+    ahora: input.ahora,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Sumar a UNA clase: pase libre (anotada al mes) o clase de prueba
 // ---------------------------------------------------------------------------
@@ -397,6 +446,14 @@ export async function anotarAClase(db: Db, input: AnotarAClaseInput): Promise<{ 
 
 const DIAS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
+/** "Lun 10:00", de lunes a domingo y por hora. Lo comparten las opciones para anotar y el listado de suscripciones. */
+export function formatearHorarios(horarios: Array<{ dayOfWeek: number | null; startTime: string | null }>): string[] {
+  return horarios
+    .map((h) => ({ dia: h.dayOfWeek ?? 0, hora: (h.startTime ?? "00:00:00").slice(0, 5) }))
+    .sort((a, b) => ((a.dia + 6) % 7) - ((b.dia + 6) % 7) || a.hora.localeCompare(b.hora))
+    .map((h) => `${DIAS[h.dia]} ${h.hora}`);
+}
+
 export type OpcionesParaAnotar = {
   anotadaAlMes: boolean;
   suscripcion: "activa" | "pausada" | null;
@@ -419,10 +476,7 @@ export async function opcionesParaAnotar(
   const pausada = subs.find((s) => s.status === "paused");
 
   const elegidos = activa ? await horariosElegidosDelMes(db, activa.id, mes) : [];
-  const horariosDelMes = elegidos
-    .map((h) => ({ dia: h.dayOfWeek ?? 0, hora: (h.startTime ?? "00:00:00").slice(0, 5) }))
-    .sort((a, b) => ((a.dia + 6) % 7) - ((b.dia + 6) % 7) || a.hora.localeCompare(b.hora))
-    .map((h) => `${DIAS[h.dia]} ${h.hora}`);
+  const horariosDelMes = formatearHorarios(elegidos);
 
   let cuotaSugerida: number;
   const suya = activa ?? pausada;

@@ -7,6 +7,7 @@ import { auth, requireAdmin, requireAuth, requirePermission } from "../middlewar
 import { createDb } from "../db/client";
 import { resolveArcaConfig } from "../arca/factory";
 import { badRequest, notFound } from "../lib/errors";
+import { renovar } from "../services/anotar.service";
 import { checkout } from "../services/checkout.service";
 import {
   asegurarCicloDelMes,
@@ -201,6 +202,23 @@ trainingSubscriptionsRouter.get(
     const db = createDb(c.env);
     const { mes } = c.req.valid("query");
     return c.json(await getCuotaDelMes(db, c.req.param("id"), mes));
+  }
+);
+
+/**
+ * POST /api/training-subscriptions/:id/renovar  { mes }
+ * Repite los horarios del mes anterior en `mes` y crea los turnos (ver `renovar`).
+ */
+trainingSubscriptionsRouter.post(
+  "/training-subscriptions/:id/renovar",
+  auth,
+  requireAuth,
+  requirePermission("agenda", "edit"),
+  zv("json", z.object({ mes: MES_SCHEMA })),
+  async (c) => {
+    const db = createDb(c.env);
+    const { mes } = c.req.valid("json");
+    return c.json(await renovar(db, { subscriptionId: c.req.param("id"), mes }), 201);
   }
 );
 
