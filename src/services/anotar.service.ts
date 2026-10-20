@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { isUniqueViolation } from "../lib/db-errors";
@@ -24,6 +24,8 @@ export type AnotarAlMesInput = {
   cuota: number;
   /** Sólo para tests: la ruta no lo expone. */
   ahora?: Date;
+  /** Lo pone `renovar`: si un horario ya no está vigente, el error dice cuál. */
+  renovando?: boolean;
 };
 
 export type ResultadoAlMes = {
@@ -120,10 +122,22 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
           scheduleIds.includes(c.schedule_id),
       );
       const vigentes = new Set(delMes.map((c) => c.schedule_id));
-      if (!scheduleIds.every((id) => vigentes.has(id))) {
+      const faltantes = scheduleIds.filter((id) => !vigentes.has(id));
+      if (faltantes.length > 0) {
+        if (input.renovando) {
+          // Se repiten los horarios del mes anterior: nombrarlos para que se sepa
+          // cuál cambió (Laura mueve la grilla a fin de mes).
+          const filas = await t
+            .select({ dayOfWeek: activitySchedules.dayOfWeek, startTime: activitySchedules.startTime })
+            .from(activitySchedules)
+            .where(inArray(activitySchedules.id, faltantes));
+          const nombres = formatearHorarios(filas);
+          throw badRequest(
+            `${nombres.length === 1 ? "El horario" : "Los horarios"} ${nombres.join(", ")} ya no ${nombres.length === 1 ? "está vigente" : "están vigentes"}: anotala al mes eligiendo los horarios`,
+          );
+        }
         throw badRequest("Ese horario no es de esta actividad o no está vigente");
       }
-
 
       // Suscripción activa; si sólo hay una pausada, no se anota.
       const subs = await t
@@ -294,6 +308,7 @@ export async function renovar(
     scheduleIds: previos.map((p) => p.id),
     cuota: Number(sub.monthlyAmount ?? 0),
     ahora: input.ahora,
+    renovando: true,
   });
 }
 
@@ -442,7 +457,6 @@ export async function anotarAClase(db: Db, input: AnotarAClaseInput): Promise<{ 
 // ---------------------------------------------------------------------------
 // Qué se le puede ofrecer a una clienta en una actividad (spec §3.1)
 // ---------------------------------------------------------------------------
-
 
 export type OpcionesParaAnotar = {
   anotadaAlMes: boolean;
