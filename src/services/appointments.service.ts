@@ -357,6 +357,17 @@ export async function updateAppointmentStatus(
     if (appt.status === "completed" && changes.status !== "completed") {
       throw conflict("Un turno completado no puede cambiar de estado");
     }
+    // Un turno de clase (actividad o encuentro) cancelado NO se restaura por acá:
+    // reactivarlo ocuparía un lugar sin pasar por el lock ni el conteo de cupo de
+    // anotar (y podría chocar con el índice único si la reanotaron). Se vuelve a
+    // anotar con Anotar.
+    if (
+      appt.status === "cancelled" &&
+      changes.status !== "cancelled" &&
+      (appt.activityId || appt.trainingSessionId)
+    ) {
+      throw badRequest("Ese turno de clase está cancelado: para volver a anotarla usá Anotar");
+    }
 
     // La puerta de pago (Task 13) también aplica acá. `createAppointment`
     // sólo la evalúa al CREAR el turno, pero un turno de depilación puede
