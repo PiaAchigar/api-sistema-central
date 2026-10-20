@@ -277,6 +277,24 @@ describe("POST /training-subscriptions/:id/cobrar", () => {
   it("monto no positivo: 400", async () => {
     expect((await cobrar({ amount: 0 })).status).toBe(400);
   });
+
+  it("monto que redondeado a centavos da 0: 400 con mensaje claro y sin pagos", async () => {
+    const res = await cobrar({ amount: 0.004 });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "El monto mínimo es $0,01" });
+    expect(await db.select().from(payments).where(eq(payments.customerId, clientaId))).toHaveLength(0);
+  });
+
+  it("el monto se compara redondeado: 8000.004 cobra 8000 y 8000.006 supera lo que debe", async () => {
+    const pasa = await cobrar({ amount: 8000.004 });
+    expect(pasa.status).toBe(201);
+    const [pago] = await db.select().from(payments).where(eq(payments.customerId, clientaId));
+    expect(Number(pago!.amount)).toBe(8000);
+    await limpiarCobros();
+    await db.delete(subscriptionBillingCycles).where(eq(subscriptionBillingCycles.trainingSubscriptionId, subId));
+    const rechaza = await cobrar({ amount: 8000.006 });
+    expect(rechaza.status).toBe(400);
+  });
 });
 
 describe("GET /training-subscriptions/admin/list", () => {

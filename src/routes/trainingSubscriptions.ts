@@ -233,6 +233,12 @@ trainingSubscriptionsRouter.post(
     const id = c.req.param("id");
     const b = c.req.valid("json");
 
+    // La plata se maneja en centavos: se redondea acá y todo lo de abajo (la
+    // comparación contra el Debe y el cobro) usa el monto ya redondeado, así
+    // 0.004 no se cuela como un pago de $0.
+    const monto = Math.round(b.amount * 100) / 100;
+    if (monto < 0.01) throw badRequest("El monto mínimo es $0,01");
+
     const [sub] = await db
       .select({
         status: trainingSubscriptions.status,
@@ -250,7 +256,7 @@ trainingSubscriptionsRouter.post(
     // Se valida ANTES de crear el ciclo para no dejar ciclos vacíos por un
     // cobro rechazado. checkout() lo vuelve a verificar bajo lock.
     const antes = await getCuotaDelMes(db, id, b.mes);
-    if (b.amount > antes.debe) throw badRequest(mensajeMontoSuperaDebe(antes.debe));
+    if (monto > antes.debe) throw badRequest(mensajeMontoSuperaDebe(antes.debe));
 
     const arca = await resolveArcaConfig(db, c.env, b.issuerId ?? undefined);
     const ciclo = await asegurarCicloDelMes(db, id, b.mes);
@@ -270,10 +276,10 @@ trainingSubscriptionsRouter.post(
         {
           description: `${sub.activityName ?? "Actividad"} — ${mesEnLetras} ${anio}`,
           quantity: 1,
-          unitPrice: b.amount,
+          unitPrice: monto,
         },
       ],
-      payment: { method: b.method, amount: b.amount, wantsInvoice: b.wantsInvoice },
+      payment: { method: b.method, amount: monto, wantsInvoice: b.wantsInvoice },
     });
 
     return c.json({ ...resultado, cuota: await getCuotaDelMes(db, id, b.mes) }, 201);

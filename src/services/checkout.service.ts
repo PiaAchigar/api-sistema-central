@@ -98,7 +98,7 @@ export async function checkout(db: Db, arca: ArcaConfig, input: CheckoutInput) {
       await bloquearCiclo(tx, input.subscriptionBillingCycleId);
       const cuota = await getCuotaDeCiclo(tx, input.subscriptionBillingCycleId);
       if (!cuota) throw notFound("Ciclo de facturación");
-      if (input.payment.amount > cuota.debe) throw badRequest(mensajeMontoSuperaDebe(cuota.debe));
+      if (Math.round(input.payment.amount * 100) / 100 > cuota.debe) throw badRequest(mensajeMontoSuperaDebe(cuota.debe));
     }
 
     let invoice = null;
