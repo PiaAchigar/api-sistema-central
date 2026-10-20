@@ -227,12 +227,24 @@ export async function listClassesForRange(
     -- Asistencias ya registradas. Sólo aplica a actividades: la asistencia de
     -- capacitaciones todavía no tiene dónde guardarse (ver planning/agenda_asistencia.md).
     LEFT JOIN LATERAL (
+      -- activity_attendance sólo guarda (suscripción, fecha): no distingue hora ni máquina.
+      -- La clase se identifica como en el roster: la suscripción lleva a la clienta y ésta tiene
+      -- un turno no cancelado en ESTA clase (misma actividad, inicio y máquina, como enr).
       SELECT COUNT(*)::int AS attended_count
       FROM activity_attendance aa
+      JOIN training_subscriptions tsa ON tsa.id = aa.subscription_id
       WHERE r.kind = 'activity'
         AND aa.activity_id = r.subject_id
         AND aa.class_date = r.the_date
         AND aa.attended = true
+        AND EXISTS (
+          SELECT 1 FROM appointments apa
+          WHERE apa.customer_id = tsa.customer_id
+            AND apa.status <> 'cancelled'
+            AND apa.activity_id = r.subject_id
+            AND apa.appointment_start = r.starts_at_utc
+            AND apa.machine_id IS NOT DISTINCT FROM r.machine_id
+        )
     ) att ON true
     -- Anotadas: los turnos no cancelados de la clase, con su Debe.
     LEFT JOIN LATERAL (

@@ -245,6 +245,10 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
         anotadas++;
       }
 
+      // Todas las clases que quedaban estaban llenas: no se cobra ni se anota nada (rollback de la transacción).
+      // Si no quedaban clases por el mes (sinLugar vacío) se conserva el comportamiento de siempre.
+      if (anotadas === 0 && sinLugar.length > 0) throw conflict("No hay lugar en ninguna de esas clases");
+
       const clasesDelMes = delMes.length;
       const plan = actividad?.classesPerMonth ?? 0;
       return {

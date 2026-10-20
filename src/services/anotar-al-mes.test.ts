@@ -194,6 +194,25 @@ describe("anotarAlMes", () => {
     expect(r.anotadas).toBe(1 + 1);
   });
 
+  it("todas las clases llenas: 409 y no crea suscripción, ciclo ni horarios", async () => {
+    // schSolo = jueves 29 a las 20:00 ART (23:00Z), cupo 1, única clase: la otra clienta ya la ocupa.
+    await db.insert(appointments).values({
+      customerId: otraClientaId, activityId: actId, status: "scheduled",
+      appointmentStart: new Date("2026-10-29T23:00:00Z"), appointmentEnd: new Date("2026-10-30T00:00:00Z"),
+      durationMinutes: 60,
+    });
+    const ciclosAntes = (await db.select().from(subscriptionBillingCycles)).length;
+    await expect(anotarAlMes(db, { ...base(), scheduleIds: [schSolo] })).rejects.toMatchObject({
+      status: 409,
+      message: "No hay lugar en ninguna de esas clases",
+    });
+    expect(await db.select().from(trainingSubscriptions).where(eq(trainingSubscriptions.customerId, clientaId))).toHaveLength(0);
+    expect((await db.select().from(subscriptionBillingCycles)).length).toBe(ciclosAntes);
+    const hs = await db.select().from(subscriptionMonthSchedules).where(eq(subscriptionMonthSchedules.activityScheduleId, schSolo));
+    expect(hs).toHaveLength(0);
+    expect(await turnos(clientaId)).toHaveLength(0);
+  });
+
   it("segunda vez el mismo mes: 409 y no duplica turnos", async () => {
     await anotarAlMes(db, { ...base(), scheduleIds: [schMar12] });
     await expect(anotarAlMes(db, { ...base(), scheduleIds: [schMar12] })).rejects.toMatchObject({
@@ -279,12 +298,16 @@ describe("anotarAlMes", () => {
   });
 
   it("CONCURRENCIA: dos clientas a la última plaza de una clase, entra una sola", async () => {
-    const [r1, r2] = await Promise.all([
+    const res = await Promise.allSettled([
       anotarAlMes(db, { ...base(), customerId: clientaId, scheduleIds: [schSolo] }),
       anotarAlMes(db2, { ...base(), customerId: otraClientaId, scheduleIds: [schSolo] }),
     ]);
-    expect(r1.anotadas + r2.anotadas).toBe(1);
-    expect(r1.sinLugar.length + r2.sinLugar.length).toBe(1);
+    // Entra una sola; la otra se queda sin lugar en su única clase: 409 y no se crea nada.
+    const ok = res.filter((x) => x.status === "fulfilled");
+    const mal = res.filter((x) => x.status === "rejected") as PromiseRejectedResult[];
+    expect(ok).toHaveLength(1);
+    expect(mal).toHaveLength(1);
+    expect(mal[0]!.reason).toMatchObject({ status: 409, message: "No hay lugar en ninguna de esas clases" });
     const filas = await db
       .select()
       .from(appointments)
@@ -321,9 +344,7 @@ describe("anotarAlMes", () => {
     expect(termino).toBe(false); // sigue esperando el lock de la actividad
     liberar();
     await otra;
-    const r = await mia;
-    expect(r.anotadas).toBe(0);
-    expect(r.sinLugar).toEqual(["2026-10-29T23:00:00.000Z"]);
+    await expect(mia).rejects.toMatchObject({ status: 409, message: "No hay lugar en ninguna de esas clases" });
   });
 
   it("dos máquinas a la misma hora son dos clases distintas, cada una con su cupo", async () => {
@@ -335,9 +356,10 @@ describe("anotarAlMes", () => {
     // y la máquina A ya está llena para una tercera clienta
     const [ct] = await db.insert(contacts).values({ name: `${QA}_TERCERA` }).returning({ id: contacts.id });
     const [cu] = await db.insert(customers).values({ contactId: ct!.id }).returning({ id: customers.id });
-    const r3 = await anotarAlMes(db, { ...base(), customerId: cu!.id, scheduleIds: [schMaqA] });
-    expect(r3.anotadas).toBe(0);
-    expect(r3.sinLugar).toHaveLength(1);
+    await expect(anotarAlMes(db, { ...base(), customerId: cu!.id, scheduleIds: [schMaqA] })).rejects.toMatchObject({
+      status: 409,
+      message: "No hay lugar en ninguna de esas clases",
+    });
   });
 
   it("dos anotaciones en paralelo de la misma clienta con ciclo ya existente y horarios distintos: una sola entra", async () => {
