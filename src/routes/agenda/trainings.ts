@@ -11,6 +11,19 @@ import {
   setTrainingActive,
   updateTraining,
 } from "../../repositories/trainings.repo";
+import {
+  crearEncuentro,
+  editarEncuentro,
+  generarEncuentros,
+  listEncuentros,
+} from "../../repositories/training-sessions.repo";
+import {
+  capacidadSchema,
+  errorOrdenHoras,
+  finPosteriorAInicio,
+  finPosteriorAInicioOpcional,
+  horaSchema,
+} from "../../lib/horario-schema";
 import type { AppBindings } from "../../env";
 
 const trainings = new Hono<{ Bindings: AppBindings }>();
@@ -130,5 +143,98 @@ trainings.post("/:id/restore", auth, requireAuth, requirePermission("catalogo", 
   if (!restaurada) return c.json({ error: "Training not found" }, 404);
   return c.json(serializePrices(restaurada));
 });
+
+// ── Encuentros ───────────────────────────────────────────────────────────
+// Horas locales ART "HH:MM:SS"; mismas reglas y mensajes que los horarios de
+// actividades (src/lib/horario-schema.ts).
+const encuentroCampos = {
+  sessionNumber: z.number().int().min(1),
+  sessionDate: z.string().date(),
+  startTime: horaSchema,
+  endTime: horaSchema,
+  serviceProviderId: z.string().uuid().nullable().optional(),
+  location: z.string().max(255).nullable().optional(),
+  capacity: capacidadSchema.optional(),
+};
+
+// Exportados para testearlos sin base (trainings.sessions.test.ts).
+export const encuentroBody = z.object(encuentroCampos).refine(finPosteriorAInicio, errorOrdenHoras);
+
+export const encuentroPatchBody = z
+  .object({
+    sessionNumber: encuentroCampos.sessionNumber.optional(),
+    sessionDate: encuentroCampos.sessionDate.optional(),
+    startTime: horaSchema.optional(),
+    endTime: horaSchema.optional(),
+    serviceProviderId: encuentroCampos.serviceProviderId,
+    location: encuentroCampos.location,
+    capacity: capacidadSchema.optional(),
+    isActive: z.boolean().optional(),
+  })
+  .refine(finPosteriorAInicioOpcional, errorOrdenHoras);
+
+export const generarBody = z
+  .object({
+    desde: z.string().date(),
+    diaDeLaSemana: z.number().int().min(0).max(6),
+    startTime: horaSchema,
+    endTime: horaSchema,
+    serviceProviderId: z.string().uuid().nullable().optional(),
+    cantidad: z.number().int().min(1).optional(),
+  })
+  .refine(finPosteriorAInicio, errorOrdenHoras);
+
+// Rutas con segmentos fijos ("sessions/...") van antes que "/:id/..." no hace
+// falta: Hono distingue por la cantidad de segmentos.
+trainings.get(
+  "/:id/sessions",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "view"),
+  zValidator("query", z.object({ incluirInactivos: z.string().optional() })),
+  async (c) => {
+    const db = createDb(c.env);
+    const rows = await listEncuentros(db, c.req.param("id"), {
+      incluirInactivos: c.req.valid("query").incluirInactivos === "true",
+    });
+    return c.json(rows);
+  },
+);
+
+trainings.post(
+  "/:id/sessions/generar",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "edit"),
+  zValidator("json", generarBody),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json(await generarEncuentros(db, c.req.param("id"), c.req.valid("json")), 201);
+  },
+);
+
+trainings.post(
+  "/:id/sessions",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "edit"),
+  zValidator("json", encuentroBody),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json(await crearEncuentro(db, c.req.param("id"), c.req.valid("json")), 201);
+  },
+);
+
+trainings.patch(
+  "/sessions/:sessionId",
+  auth,
+  requireAuth,
+  requirePermission("catalogo", "edit"),
+  zValidator("json", encuentroPatchBody),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json(await editarEncuentro(db, c.req.param("sessionId"), c.req.valid("json")));
+  },
+);
 
 export { trainings };

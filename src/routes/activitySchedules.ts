@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { AppError } from "../lib/errors";
+import { capacidadSchema, errorOrdenHoras, finPosteriorAInicio, finPosteriorAInicioOpcional, horaSchema } from "../lib/horario-schema";
 import { activitySchedulesService } from "../services/activitySchedulesService";
 import { requireAuth, requirePermission } from "../middleware/auth";
 import type { AppBindings, Variables } from "../env";
@@ -10,10 +11,14 @@ const activitySchedulesRouter = new Hono<{ Bindings: AppBindings; Variables: Var
 
 // Horarios de actividades = catálogo, mismos permisos que las actividades.
 
-const horaRegex = /^\d{2}:\d{2}:\d{2}$/;
-const mensajeOrdenHoras = "La hora de fin tiene que ser posterior a la de inicio";
-// Cupo del horario: entero ≥ 1, o null = sin límite declarado (columna capacity).
-const capacidadSchema = z.number().int().min(1).nullable();
+// GET: por defecto solo activos; ?includeInactive=true trae también los pausados
+// (la pantalla de Pausar/Reactivar los necesita para reactivar).
+export const horarioListQuery = z.object({
+  includeInactive: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+});
 
 // Exportados para testearlos sin base (src/routes/activitySchedules.test.ts).
 // En el POST las dos horas son obligatorias, así que el refine siempre aplica.
@@ -21,59 +26,60 @@ export const horarioBody = z
   .object({
     machineId: z.string().uuid().nullable().optional(),
     dayOfWeek: z.number().int().min(0).max(6),
-    startTime: z.string().regex(horaRegex, "Format must be HH:MM:SS"),
-    endTime: z.string().regex(horaRegex, "Format must be HH:MM:SS"),
+    startTime: horaSchema,
+    endTime: horaSchema,
     validFrom: z.string().date().nullable().optional(),
     validUntil: z.string().date().nullable().optional(),
     capacity: capacidadSchema.optional(),
   })
-  .refine((h) => h.endTime > h.startTime, {
-    message: mensajeOrdenHoras,
-    path: ["endTime"],
-  });
+  .refine(finPosteriorAInicio, errorOrdenHoras);
 
 // En el PATCH todo es opcional: el orden de horas solo se valida si vienen las dos.
 export const horarioPatchBody = z
   .object({
     machineId: z.string().uuid().nullable().optional(),
     dayOfWeek: z.number().int().min(0).max(6).optional(),
-    startTime: z.string().regex(horaRegex, "Format must be HH:MM:SS").optional(),
-    endTime: z.string().regex(horaRegex, "Format must be HH:MM:SS").optional(),
+    startTime: horaSchema.optional(),
+    endTime: horaSchema.optional(),
     validFrom: z.string().date().nullable().optional(),
     validUntil: z.string().date().nullable().optional(),
     capacity: capacidadSchema.optional(),
     isActive: z.boolean().optional(),
   })
-  .refine((h) => h.startTime === undefined || h.endTime === undefined || h.endTime > h.startTime, {
-    message: mensajeOrdenHoras,
-    path: ["endTime"],
-  });
+  .refine(finPosteriorAInicioOpcional, errorOrdenHoras);
 
 /**
- * GET /api/activities/:activityId/schedules
- * List all active schedules for an activity
+ * GET /api/activities/:activityId/schedules?includeInactive=true|false
+ * List schedules for an activity (solo activos por defecto)
  */
-activitySchedulesRouter.get("/activities/:activityId/schedules", requireAuth, requirePermission("catalogo", "view"), async (c) => {
-  try {
-    const activityId = c.req.param("activityId");
-    const schedules = await activitySchedulesService.listSchedules(activityId);
-    return c.json({
-      success: true,
-      data: schedules,
-    });
-  } catch (err) {
-    if (err instanceof AppError) {
-      return c.json(
-        {
-          success: false,
-          error: err.message,
-        },
-        err.status
-      );
+activitySchedulesRouter.get(
+  "/activities/:activityId/schedules",
+  requireAuth,
+  requirePermission("catalogo", "view"),
+  zValidator("query", horarioListQuery),
+  async (c) => {
+    try {
+      const activityId = c.req.param("activityId");
+      const { includeInactive } = c.req.valid("query");
+      const schedules = await activitySchedulesService.listSchedules(activityId, includeInactive);
+      return c.json({
+        success: true,
+        data: schedules,
+      });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return c.json(
+          {
+            success: false,
+            error: err.message,
+          },
+          err.status
+        );
+      }
+      throw err;
     }
-    throw err;
   }
-});
+);
 
 /**
  * POST /api/activities/:activityId/schedules
