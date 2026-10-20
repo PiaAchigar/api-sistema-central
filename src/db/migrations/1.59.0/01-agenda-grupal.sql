@@ -6,8 +6,8 @@
 -- así que o corre entera o no corre. Idempotente (se puede volver a aplicar).
 --
 --   · subscription_billing_cycles.amount_due: lo que se le debe cobrar ese mes
---     (monthly_amount × cantidad de horarios elegidos). Los ciclos anteriores
---     quedan con amount_due = amount_paid (o el monthly_amount si nunca se pagó).
+--     (monthly_amount × cantidad de horarios elegidos). Los ciclos pagados
+--     quedan con amount_due = amount_paid; los impagos, con monthly_amount.
 --   · subscription_month_schedules: qué horarios semanales eligió la alumna ese mes.
 --   · payments.subscription_billing_cycle_id: un pago puede ser de una cuota,
 --     pero nunca de una cuota Y de una compra a la vez.
@@ -41,9 +41,17 @@ BEGIN
   CREATE INDEX IF NOT EXISTS ix_payments_billing_cycle
     ON payments (subscription_billing_cycle_id);
 
-  -- 2. Backfill: los ciclos viejos quedan "sin deuda" (debido = lo pagado) ----
+  -- 2. Backfill. Regla de "Debe del mes": 0 si is_paid = true; si no,
+  --    amount_due − Σ pagos confirmados vinculados al ciclo. Los pagos viejos NO
+  --    están vinculados (columna nueva), por eso:
+  --      · ciclo pagado  -> amount_due = amount_paid (o monthly_amount si no hay)
+  --      · ciclo impago  -> amount_due = monthly_amount (un amount_paid parcial
+  --                         cargado a mano no cuenta)
+  --    Ciclos sin training_subscription_id (legacy `subscription_id`) NO son de
+  --    actividades: quedan con amount_due NULL a propósito.
   UPDATE subscription_billing_cycles c
-     SET amount_due = COALESCE(c.amount_paid, ts.monthly_amount)
+     SET amount_due = CASE WHEN c.is_paid THEN COALESCE(c.amount_paid, ts.monthly_amount)
+                           ELSE ts.monthly_amount END
     FROM training_subscriptions ts
    WHERE ts.id = c.training_subscription_id
      AND c.amount_due IS NULL;
@@ -77,7 +85,8 @@ BEGIN
     ON appointments (customer_id, training_session_id)
     WHERE training_session_id IS NOT NULL AND status <> 'cancelled';
 
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_payments_compra_o_cuota') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_payments_compra_o_cuota'
+                                         AND conrelid = 'payments'::regclass) THEN
     ALTER TABLE payments
       ADD CONSTRAINT ck_payments_compra_o_cuota
       CHECK (customer_purchase_id IS NULL OR subscription_billing_cycle_id IS NULL);
@@ -88,5 +97,6 @@ BEGIN
 END $$;
 
 -- Verificación (correr aparte):
--- SELECT count(*) FROM subscription_billing_cycles WHERE amount_due IS NULL;
+-- Debe dar 0 (los ciclos sin training_subscription_id quedan NULL a propósito):
+-- SELECT count(*) FROM subscription_billing_cycles WHERE amount_due IS NULL AND training_subscription_id IS NOT NULL;
 -- SELECT indexname FROM pg_indexes WHERE indexname IN ('ux_appt_clase_actividad','ux_appt_encuentro');
