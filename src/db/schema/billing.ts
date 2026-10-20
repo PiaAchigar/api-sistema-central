@@ -111,6 +111,9 @@ export const payments = pgTable("payments", {
   /** Compra que paga este cobro (1.45.0). Con esto el saldo tiene UNA sola
    *  definición: final_amount − Σ amount de los pagos confirmados. */
   customerPurchaseId: uuid("customer_purchase_id"),
+  /** Cuota mensual que paga este cobro (1.59.0). Excluyente con customerPurchaseId
+   *  (CHECK ck_payments_compra_o_cuota). */
+  subscriptionBillingCycleId: uuid("subscription_billing_cycle_id"),
   confirmedByUserId: uuid("confirmed_by_user_id"),
   confirmedAt: timestamp("confirmed_at"),
   createdAt: createdAt(),

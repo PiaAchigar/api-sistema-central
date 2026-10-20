@@ -6,6 +6,7 @@ import {
   jsonb,
   numeric,
   pgTable,
+  primaryKey,
   text,
   time,
   timestamp,
@@ -298,6 +299,7 @@ export const appointments = pgTable("appointments", {
   dealId: uuid("deal_id"),
   activityId: uuid("activity_id"), // For activity-based bookings (Pilates, Thermo Bike)
   trainingSessionId: uuid("training_session_id"), // Inscripción a un encuentro de capacitación (1.24.0)
+  isTrial: boolean("is_trial").notNull().default(false), // Clase de prueba: no cuenta como cuota (1.59.0)
   appointmentStart: timestamp("appointment_start"),
   appointmentEnd: timestamp("appointment_end"),
   durationMinutes: integer("duration_minutes"),
@@ -428,6 +430,9 @@ export const subscriptionBillingCycles = pgTable("subscription_billing_cycles", 
   paymentDate: timestamp("payment_date"),
   paymentMethod: varchar("payment_method", { length: 50 }),
   amountPaid: decimal("amount_paid", { precision: 10, scale: 2 }),
+  /** Lo que se debe cobrar ese mes: monthly_amount × horarios elegidos (1.59.0).
+   *  Los ciclos anteriores quedaron con amount_due = amount_paid. */
+  amountDue: decimal("amount_due", { precision: 10, scale: 2 }),
   isOverdue: boolean("is_overdue").default(false),
   paymentReminderSentAt: timestamp("payment_reminder_sent_at"),
   invoiceLineItemId: uuid("invoice_line_item_id"),
@@ -435,6 +440,17 @@ export const subscriptionBillingCycles = pgTable("subscription_billing_cycles", 
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
+
+// Horarios semanales que la alumna eligió para un mes (1.59.0). Se borran con el ciclo.
+export const subscriptionMonthSchedules = pgTable(
+  "subscription_month_schedules",
+  {
+    billingCycleId: uuid("billing_cycle_id").notNull(),
+    activityScheduleId: uuid("activity_schedule_id").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.billingCycleId, t.activityScheduleId] })],
+);
 
 // Actividades recurrentes ofrecidas a clientes finales — Migración 1.21.0
 // Diferenciadas de TRAINING (capacitaciones profesionales)
