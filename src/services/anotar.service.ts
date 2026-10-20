@@ -35,6 +35,37 @@ export type ResultadoAlMes = {
   clasesDelMes: number;
 };
 
+function nombreDelMes(mes: string): string {
+  return new Date(`${mes}-01T00:00:00Z`).toLocaleDateString("es-AR", { month: "long", timeZone: "UTC" });
+}
+
+/** Lo primero de toda anotación: serializa con cualquier otra a la misma actividad. Una sola fila, sin deadlocks. */
+async function bloquearActividad(t: Db, activityId: string) {
+  const [actividad] = await t
+    .select({
+      name: activities.name,
+      classesPerMonth: activities.classesPerMonth,
+      providerId: activities.serviceProviderId,
+    })
+    .from(activities)
+    .where(eq(activities.id, activityId))
+    .for("update")
+    .limit(1);
+  return actividad;
+}
+
+/** Lugares ocupados de UNA clase: misma actividad, mismo inicio y misma máquina (NULL con NULL). */
+async function lugaresOcupados(t: Db, activityId: string, inicio: Date, machineId: string | null): Promise<number> {
+  const [fila] = (await t.execute(sql`
+    SELECT COUNT(*)::int AS n FROM appointments
+    WHERE activity_id = ${activityId}
+      AND appointment_start = ${inicio.toISOString()}::timestamptz
+      AND machine_id IS NOT DISTINCT FROM ${machineId}::uuid
+      AND status <> 'cancelled'
+  `)) as unknown as { n: number }[];
+  return fila!.n;
+}
+
 function minutos(hhmmss: string): number {
   const [h, m] = hhmmss.split(":").map(Number);
   return h! * 60 + m!;
@@ -74,15 +105,7 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
       const t = tx as unknown as Db;
 
       // Lo primero: serializar con cualquier otra anotación a esta actividad.
-      const [actividad] = await t
-        .select({
-          classesPerMonth: activities.classesPerMonth,
-          providerId: activities.serviceProviderId,
-        })
-        .from(activities)
-        .where(eq(activities.id, activityId))
-        .for("update")
-        .limit(1);
+      const actividad = await bloquearActividad(t, activityId);
 
       // Clases del mes entero de la actividad (la misma lógica de vigencia que la grilla).
       const [anio, nMes] = mes.split("-").map(Number);
@@ -133,11 +156,7 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
         .where(eq(subscriptionMonthSchedules.billingCycleId, billingCycleId))
         .limit(1);
       if (yaAnotada.length > 0) {
-        const nombreMes = new Date(`${mes}-01T00:00:00Z`).toLocaleDateString("es-AR", {
-          month: "long",
-          timeZone: "UTC",
-        });
-        throw conflict(`Ya está anotada a ${nombreMes}`);
+        throw conflict(`Ya está anotada a ${nombreDelMes(mes)}`);
       }
       // Un ciclo que ya existía impago toma la cuota nueva; uno pagado no se toca.
       await t
@@ -188,14 +207,7 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
         // Lugares ocupados de ESTA clase: misma actividad, mismo inicio y misma máquina (NULL con NULL).
         const capacidad = cupoDe.get(clase.schedule_id!) ?? null;
         if (capacidad !== null) {
-          const [fila] = (await t.execute(sql`
-            SELECT COUNT(*)::int AS n FROM appointments
-            WHERE activity_id = ${activityId}
-              AND appointment_start = ${inicio.toISOString()}::timestamptz
-              AND machine_id IS NOT DISTINCT FROM ${clase.machine_id}::uuid
-              AND status <> 'cancelled'
-          `)) as unknown as { n: number }[];
-          if (fila!.n >= capacidad) {
+          if ((await lugaresOcupados(t, activityId, inicio, clase.machine_id)) >= capacidad) {
             sinLugar.push(inicio.toISOString());
             continue;
           }
@@ -235,4 +247,200 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
     }
     throw err;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Sumar a UNA clase: pase libre (anotada al mes) o clase de prueba
+// ---------------------------------------------------------------------------
+
+export type AnotarAClaseInput = {
+  activityId: string;
+  /** Instante de inicio de la clase (ISO), tal como lo expone `classes` en `startsAt`. */
+  startsAt: string;
+  customerId: string;
+  prueba?: boolean;
+  /** Sólo para tests: la ruta no lo expone. */
+  ahora?: Date;
+};
+
+/** ¿Tiene turno de prueba (no cancelado) en esta actividad? */
+async function tuvoPrueba(t: Db, customerId: string, activityId: string): Promise<boolean> {
+  const r = await t
+    .select({ id: appointments.id })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.customerId, customerId),
+        eq(appointments.activityId, activityId),
+        eq(appointments.isTrial, true),
+        sql`${appointments.status} <> 'cancelled'`,
+      ),
+    )
+    .limit(1);
+  return r.length > 0;
+}
+
+/** El ciclo del mes de su suscripción ACTIVA tiene al menos un horario elegido. */
+async function horariosElegidosDelMes(t: Db, subscriptionId: string, mes: string) {
+  return t
+    .select({ dayOfWeek: activitySchedules.dayOfWeek, startTime: activitySchedules.startTime })
+    .from(subscriptionBillingCycles)
+    .innerJoin(subscriptionMonthSchedules, eq(subscriptionMonthSchedules.billingCycleId, subscriptionBillingCycles.id))
+    .innerJoin(activitySchedules, eq(activitySchedules.id, subscriptionMonthSchedules.activityScheduleId))
+    .where(and(eq(subscriptionBillingCycles.trainingSubscriptionId, subscriptionId), eq(subscriptionBillingCycles.billingMonth, mes)));
+}
+
+/**
+ * Suma a una clienta a una clase puntual. Sin `prueba` es el "pase libre": tiene que estar anotada al
+ * mes de esa clase. Con `prueba` es su clase de prueba (una sola por actividad, y sólo si nunca fue suscriptora).
+ * Misma serialización que `anotarAlMes`: primero la fila de la actividad con FOR UPDATE.
+ */
+export async function anotarAClase(db: Db, input: AnotarAClaseInput): Promise<{ appointmentId: string }> {
+  const ahora = input.ahora ?? new Date();
+  const { activityId, customerId } = input;
+  const inicio = new Date(input.startsAt);
+  if (Number.isNaN(inicio.getTime())) throw badRequest("Fecha de clase inválida");
+
+  try {
+    return await db.transaction(async (tx) => {
+      const t = tx as unknown as Db;
+      const actividad = await bloquearActividad(t, activityId);
+      if (!actividad) throw badRequest("No hay clase en ese horario");
+      const sinClase = () => badRequest(`No hay clase de ${actividad.name} en ese horario`);
+
+      // La clase tiene que existir: misma lógica de vigencia que la grilla, inicio exacto.
+      const fecha = utcToLocalDateString(inicio);
+      const delDia = await listClassesForRange(t, fecha, fecha);
+      const candidatas = delDia.filter(
+        (c) =>
+          c.kind === "activity" &&
+          c.subject_id === activityId &&
+          c.schedule_id !== null &&
+          new Date(c.starts_at_utc).getTime() === inicio.getTime(),
+      );
+      if (candidatas.length === 0) throw sinClase();
+      if (inicio.getTime() <= ahora.getTime()) throw badRequest("Esa clase ya pasó");
+
+      const mes = fecha.slice(0, 7);
+      const subs = await t
+        .select({ id: trainingSubscriptions.id, status: trainingSubscriptions.status })
+        .from(trainingSubscriptions)
+        .where(and(eq(trainingSubscriptions.customerId, customerId), eq(trainingSubscriptions.activityId, activityId)));
+
+      if (input.prueba) {
+        if (subs.length > 0) throw conflict(`Ya está suscripta a ${actividad.name}: sumala con el pase libre`);
+        if (await tuvoPrueba(t, customerId, activityId)) throw conflict(`Ya tuvo su clase de prueba de ${actividad.name}`);
+      } else {
+        const activa = subs.find((s) => s.status === "active");
+        const elegidos = activa ? await horariosElegidosDelMes(t, activa.id, mes) : [];
+        if (elegidos.length === 0) {
+          throw badRequest(`No está anotada a ${nombreDelMes(mes)}: anotala al mes o como prueba`);
+        }
+      }
+
+      const ya = await t
+        .select({ id: appointments.id })
+        .from(appointments)
+        .where(
+          and(
+            eq(appointments.customerId, customerId),
+            eq(appointments.activityId, activityId),
+            eq(appointments.appointmentStart, inicio),
+            sql`${appointments.status} <> 'cancelled'`,
+          ),
+        )
+        .limit(1);
+      if (ya.length > 0) throw conflict("Ya está anotada en esa clase");
+
+      // Si hay dos máquinas a la misma hora, la primera con lugar.
+      let elegida: (typeof candidatas)[number] | undefined;
+      for (const c of candidatas) {
+        const [h] = await t
+          .select({ capacity: activitySchedules.capacity })
+          .from(activitySchedules)
+          .where(eq(activitySchedules.id, c.schedule_id!))
+          .limit(1);
+        const capacidad = h?.capacity ?? null;
+        if (capacidad === null || (await lugaresOcupados(t, activityId, inicio, c.machine_id)) < capacidad) {
+          elegida = c;
+          break;
+        }
+      }
+      if (!elegida) throw conflict("La clase está llena");
+
+      const duracion = minutos(elegida.end_time) - minutos(elegida.start_time);
+      const [turno] = await t
+        .insert(appointments)
+        .values({
+          customerId,
+          activityId,
+          serviceProviderId: actividad.providerId ?? null,
+          machineId: elegida.machine_id,
+          appointmentStart: inicio,
+          appointmentEnd: new Date(inicio.getTime() + duracion * 60_000),
+          durationMinutes: duracion,
+          status: "scheduled",
+          isTrial: input.prueba === true,
+        })
+        .returning({ id: appointments.id });
+      return { appointmentId: turno!.id };
+    });
+  } catch (err) {
+    if (isUniqueViolation(err, "ux_appt_clase_actividad")) throw conflict("Ya está anotada en esa clase");
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Qué se le puede ofrecer a una clienta en una actividad (spec §3.1)
+// ---------------------------------------------------------------------------
+
+const DIAS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+
+export type OpcionesParaAnotar = {
+  anotadaAlMes: boolean;
+  suscripcion: "activa" | "pausada" | null;
+  puedePrueba: boolean;
+  cuotaSugerida: number;
+  /** "Lun 10:00", de lunes a domingo y por hora */
+  horariosDelMes: string[];
+};
+
+export async function opcionesParaAnotar(
+  db: Db,
+  input: { activityId: string; customerId: string; mes: string },
+): Promise<OpcionesParaAnotar> {
+  const { activityId, customerId, mes } = input;
+  const subs = await db
+    .select({ id: trainingSubscriptions.id, status: trainingSubscriptions.status, monthlyAmount: trainingSubscriptions.monthlyAmount })
+    .from(trainingSubscriptions)
+    .where(and(eq(trainingSubscriptions.customerId, customerId), eq(trainingSubscriptions.activityId, activityId)));
+  const activa = subs.find((s) => s.status === "active");
+  const pausada = subs.find((s) => s.status === "paused");
+
+  const elegidos = activa ? await horariosElegidosDelMes(db, activa.id, mes) : [];
+  const horariosDelMes = elegidos
+    .map((h) => ({ dia: h.dayOfWeek ?? 0, hora: (h.startTime ?? "00:00:00").slice(0, 5) }))
+    .sort((a, b) => ((a.dia + 6) % 7) - ((b.dia + 6) % 7) || a.hora.localeCompare(b.hora))
+    .map((h) => `${DIAS[h.dia]} ${h.hora}`);
+
+  let cuotaSugerida: number;
+  const suya = activa ?? pausada;
+  if (suya?.monthlyAmount != null) cuotaSugerida = Number(suya.monthlyAmount);
+  else {
+    const [a] = await db
+      .select({ precio: activities.monthlyBasePrice })
+      .from(activities)
+      .where(eq(activities.id, activityId))
+      .limit(1);
+    cuotaSugerida = a?.precio != null ? Number(a.precio) : 0;
+  }
+
+  return {
+    anotadaAlMes: horariosDelMes.length > 0,
+    suscripcion: activa ? "activa" : pausada ? "pausada" : null,
+    puedePrueba: subs.length === 0 && !(await tuvoPrueba(db, customerId, activityId)),
+    cuotaSugerida,
+    horariosDelMes,
+  };
 }

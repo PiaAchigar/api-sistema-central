@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createDb } from "../../db/client";
 import { listClassesForRange, type ClassOccurrenceRow } from "../../repositories/classes.repo";
 import { requireAuth, requirePermission } from "../../middleware/auth";
-import { anotarAlMes } from "../../services/anotar.service";
+import { anotarAClase, anotarAlMes, opcionesParaAnotar } from "../../services/anotar.service";
 import { zv } from "../../lib/validator";
 import type { AppBindings, Variables } from "../../env";
 
@@ -153,5 +153,42 @@ classesRouter.post(
     return c.json({ success: true, data: resultado }, 201);
   },
 );
+
+const anotarAClaseBody = z.object({
+  activityId: z.string().uuid(),
+  startsAt: z.string().datetime({ offset: true }),
+  customerId: z.string().uuid(),
+  prueba: z.boolean().optional(),
+});
+
+/**
+ * POST /api/agenda/classes/anotar-a-clase
+ *
+ * Suma a una clienta a UNA clase: pase libre (tiene que estar anotada al mes) o,
+ * con `prueba: true`, su clase de prueba.
+ */
+classesRouter.post(
+  "/anotar-a-clase",
+  requireAuth,
+  requirePermission("agenda", "edit"),
+  zv("json", anotarAClaseBody),
+  async (c) => {
+    const db = createDb(c.env);
+    const r = await anotarAClase(db, c.req.valid("json"));
+    return c.json({ success: true, data: r }, 201);
+  },
+);
+
+const opcionesQuery = z.object({
+  activityId: z.string().uuid(),
+  customerId: z.string().uuid(),
+  mes: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "mes must be YYYY-MM"),
+});
+
+/** GET /api/agenda/classes/opciones — qué se le puede ofrecer a la clienta en esa actividad (spec §3.1). */
+classesRouter.get("/opciones", requireAuth, zv("query", opcionesQuery), async (c) => {
+  const db = createDb(c.env);
+  return c.json({ success: true, data: await opcionesParaAnotar(db, c.req.valid("query")) });
+});
 
 export { classesRouter };
