@@ -313,6 +313,9 @@ describe("classesQuery (date XOR from+to)", () => {
   it("rechaza fechas inexistentes como 2027-02-31", () => {
     expect(classesQuery.safeParse({ date: "2027-02-31" }).success).toBe(false);
     expect(classesQuery.safeParse({ from: "2027-02-31", to: "2027-03-02" }).success).toBe(false);
+    // Pasan el regex pero Date da Invalid Date: antes tiraba RangeError (500).
+    expect(classesQuery.safeParse({ date: "2027-13-01" }).success).toBe(false);
+    expect(classesQuery.safeParse({ date: "2027-00-10" }).success).toBe(false);
   });
   it("rechaza 43 días, from > to, rango incompleto y nada", () => {
     expect(classesQuery.safeParse({ from: "2027-03-01", to: "2027-04-12" }).success).toBe(false);

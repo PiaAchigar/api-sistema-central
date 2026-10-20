@@ -78,7 +78,11 @@ const FECHA = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD")
   // 2027-02-31 pasa el regex pero no existe: Date lo corre a marzo, así que no vuelve igual.
-  .refine((f) => new Date(`${f}T00:00:00Z`).toISOString().slice(0, 10) === f, "fecha inexistente");
+  .refine((f) => {
+    const d = new Date(`${f}T00:00:00Z`);
+    // Mes 13 o 00: Invalid Date, y toISOString tiraría RangeError (500).
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === f;
+  }, "fecha inexistente");
 /** Mismo tope que el listado de turnos: seis semanas. */
 const MAX_DIAS_RANGO = 42;
 const MS_POR_DIA = 24 * 60 * 60 * 1000;
