@@ -1,5 +1,7 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
+import { getDeudasDeCompras } from "./compras.repo";
+import { debeDeCicloSql } from "./cuotas.repo";
 
 /**
  * Una clase que se dicta en una fecha concreta, tal como sale de Postgres.
@@ -9,6 +11,17 @@ import type { Db } from "../db/client";
  * justamente lo que no se podía representar cuando la Agenda dibujaba una card
  * por appointment.
  */
+/** Una clienta anotada a una clase (turno no cancelado). */
+export type AnotadaRow = {
+  appointment_id: string;
+  customer_id: string | null;
+  nombre: string | null;
+  /** Clase de prueba: no cuenta como cuota */
+  prueba: boolean;
+  /** Plata que debe: cuota del mes (actividad) o saldo de su compra (capacitación) */
+  debe: number;
+};
+
 export type ClassOccurrenceRow = {
   /** Id sintético y estable: identifica la ocurrencia, no una fila de tabla */
   occurrence_id: string;
@@ -27,6 +40,8 @@ export type ClassOccurrenceRow = {
   machine_id: string | null;
   machine_name: string | null;
   location: string | null;
+  /** Fecha de la clase YYYY-MM-DD (hora local del negocio) */
+  the_date: string;
   /** Hora local ART "HH:MM:SS" */
   start_time: string;
   end_time: string;
@@ -35,6 +50,8 @@ export type ClassOccurrenceRow = {
   capacity: number | null;
   enrolled_count: number;
   attended_count: number;
+  /** Ordenadas por nombre */
+  anotadas: AnotadaRow[];
 };
 
 /**
@@ -54,11 +71,33 @@ export async function listClassesForDate(
   db: Db,
   dateStr: string,
 ): Promise<ClassOccurrenceRow[]> {
-  const rows = await db.execute<ClassOccurrenceRow>(sql`
+  return listClassesForRange(db, dateStr, dateStr);
+}
+
+/** Fila cruda de la consulta: las anotadas llegan como JSON y sin la deuda de capacitaciones. */
+type FilaCruda = Omit<ClassOccurrenceRow, "anotadas"> & {
+  anotadas: string | (Omit<AnotadaRow, "debe"> & { debe: number; compra_id: string | null })[];
+};
+
+/**
+ * Lo mismo para un rango inclusive de fechas (YYYY-MM-DD), con las anotadas de
+ * cada clase. Orden: fecha, hora, nombre.
+ *
+ * Son DOS consultas sin importar cuántos días ni cuántas clases haya: la de
+ * las clases (con sus anotadas agrupadas en JSON y el Debe de las actividades
+ * resuelto en SQL) y una para las deudas de las compras de capacitaciones.
+ */
+export async function listClassesForRange(
+  db: Db,
+  from: string,
+  to: string,
+): Promise<ClassOccurrenceRow[]> {
+  const rows = await db.execute<FilaCruda>(sql`
     WITH target AS (
       SELECT
-        ${dateStr}::date AS the_date,
-        EXTRACT(DOW FROM ${dateStr}::date)::int AS dow
+        d::date AS the_date,
+        EXTRACT(DOW FROM d)::int AS dow
+      FROM generate_series(${from}::date, ${to}::date, interval '1 day') d
     ),
 
     -- ── Actividades: ocurrencias del patrón semanal en esta fecha ──
@@ -119,7 +158,7 @@ export async function listClassesForDate(
       LEFT JOIN service_providers sp ON sp.id = tsx.service_provider_id
       WHERE tsx.is_active = true
         AND tr.is_active = true
-        AND tsx.session_date = ${dateStr}::date
+        AND tsx.session_date BETWEEN ${from}::date AND ${to}::date
     ),
 
     all_classes AS (
@@ -152,6 +191,7 @@ export async function listClassesForDate(
       r.machine_id,
       r.machine_name,
       r.location,
+      r.the_date::text AS the_date,
       r.start_time,
       r.end_time,
       r.starts_at_utc,
@@ -159,7 +199,8 @@ export async function listClassesForDate(
       -- Inscriptas: los turnos que ocupan lugar. 'reserved' cuenta porque
       -- retiene el cupo hasta que expire; 'cancelled' y 'no_show' no.
       COALESCE(enr.enrolled_count, 0)::int AS enrolled_count,
-      COALESCE(att.attended_count, 0)::int AS attended_count
+      COALESCE(att.attended_count, 0)::int AS attended_count,
+      anot.anotadas
     FROM resolved r
     LEFT JOIN LATERAL (
       SELECT COUNT(*)::int AS enrolled_count
@@ -182,8 +223,78 @@ export async function listClassesForDate(
         AND aa.class_date = r.the_date
         AND aa.attended = true
     ) att ON true
-    ORDER BY r.start_time, r.name
+    -- Anotadas: los turnos no cancelados de la clase, con su Debe.
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(json_agg(json_build_object(
+        'appointment_id', ap.id,
+        'customer_id', ap.customer_id,
+        'nombre', ct.name,
+        'prueba', ap.is_trial,
+        -- Actividad: Debe del ciclo del MES DE LA CLASE de su suscripción activa
+        -- (0 si no hay ciclo o si es clase de prueba). Capacitación: se completa
+        -- aparte con getDeudasDeCompras a partir de compra_id.
+        'debe', CASE WHEN r.kind = 'activity' AND NOT ap.is_trial
+                     THEN COALESCE(${debeDeCicloSql("cy", "ts")}, 0) ELSE 0 END,
+        'compra_id', pur.id
+      ) ORDER BY ct.name, ap.id), '[]'::json) AS anotadas
+      FROM appointments ap
+      LEFT JOIN customers cu ON cu.id = ap.customer_id
+      LEFT JOIN contacts ct ON ct.id = cu.contact_id
+      LEFT JOIN LATERAL (
+        SELECT s.id, s.monthly_amount
+        FROM training_subscriptions s
+        WHERE r.kind = 'activity'
+          AND s.customer_id = ap.customer_id
+          AND s.activity_id = ap.activity_id
+          AND s.status = 'active'
+        LIMIT 1
+      ) ts ON true
+      LEFT JOIN subscription_billing_cycles cy
+        ON cy.training_subscription_id = ts.id
+       AND cy.billing_month = to_char(r.the_date, 'YYYY-MM')
+      LEFT JOIN LATERAL (
+        SELECT cp.id
+        FROM customer_purchase cp
+        WHERE r.kind = 'training'
+          AND cp.customer_id = ap.customer_id
+          AND cp.training_id = r.subject_id
+          AND cp.cancelled_at IS NULL
+        ORDER BY cp.purchased_at DESC NULLS LAST
+        LIMIT 1
+      ) pur ON true
+      WHERE ap.status <> 'cancelled'
+        AND (
+          (r.kind = 'activity' AND ap.activity_id = r.subject_id
+             AND ap.appointment_start = r.starts_at_utc)
+          OR
+          (r.kind = 'training' AND ap.training_session_id = r.session_id)
+        )
+    ) anot ON true
+    ORDER BY r.the_date, r.start_time, r.name
   `);
 
-  return rows as unknown as ClassOccurrenceRow[];
+  // El driver puede entregar el JSON ya parseado o como texto.
+  const crudas = (rows as unknown as FilaCruda[]).map((f) => ({
+    ...f,
+    anotadas: typeof f.anotadas === "string" ? JSON.parse(f.anotadas) : f.anotadas,
+  }));
+
+  const compraIds = new Set<string>();
+  for (const f of crudas) {
+    if (f.kind !== "training") continue;
+    for (const a of f.anotadas as { compra_id: string | null }[]) {
+      if (a.compra_id) compraIds.add(a.compra_id);
+    }
+  }
+  const deudas = await getDeudasDeCompras(db, [...compraIds]);
+
+  return crudas.map((f) => ({
+    ...f,
+    anotadas: (f.anotadas as { compra_id: string | null; debe: number }[]).map(
+      ({ compra_id, debe, ...a }) => ({
+        ...(a as Omit<AnotadaRow, "debe">),
+        debe: f.kind === "training" ? (compra_id ? (deudas.get(compra_id) ?? 0) : 0) : Number(debe),
+      }),
+    ),
+  })) as ClassOccurrenceRow[];
 }

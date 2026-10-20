@@ -25,6 +25,27 @@ export type CuotaDelMes = {
   isPaid: boolean;
 };
 
+/**
+ * La MISMA regla de Debe, como fragmento SQL para consultas que resuelven
+ * muchas cuotas de una (la grilla de clases). `ciclo` y `suscripcion` son los
+ * alias de `subscription_billing_cycles` y de `training_subscriptions` (con
+ * `monthly_amount`). NULL si no hay ciclo. Si cambia la regla de arriba,
+ * cambia también acá.
+ */
+export function debeDeCicloSql(ciclo: string, suscripcion: string) {
+  const c = sql.raw(ciclo);
+  const s = sql.raw(suscripcion);
+  return sql`(CASE
+    WHEN ${c}.id IS NULL THEN NULL
+    WHEN ${c}.is_paid = true THEN 0
+    ELSE GREATEST(0, ROUND((
+      COALESCE(${c}.amount_due, ${s}.monthly_amount, 0)
+      - COALESCE((SELECT SUM(p.amount) FROM payments p
+                  WHERE p.subscription_billing_cycle_id = ${c}.id AND p.status = 'confirmed'), 0)
+    )::numeric, 2))
+  END)::float8`;
+}
+
 const MES_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
 
 /** Plata con 2 decimales: evita que 0.1 + 0.2 deje un Debe de 0.30000000000000004. */

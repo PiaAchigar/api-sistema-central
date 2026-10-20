@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { createDb } from "../../db/client";
-import { listClassesForDate, type ClassOccurrenceRow } from "../../repositories/classes.repo";
+import { listClassesForRange, type ClassOccurrenceRow } from "../../repositories/classes.repo";
 import { requireAuth } from "../../middleware/auth";
 import { zv } from "../../lib/validator";
 import type { AppBindings, Variables } from "../../env";
@@ -26,12 +26,15 @@ export type ClassOccurrence = {
   /** "HH:MM" en hora local del negocio */
   startTime: string;
   endTime: string;
+  /** Fecha de la clase YYYY-MM-DD (necesaria cuando se pide un rango) */
+  date: string;
   /** Instante UTC de inicio (ISO). Clave para abrir las asistencias. */
   startsAt: string;
   /** null = sin cupo declarado */
   capacity: number | null;
   enrolledCount: number;
   attendedCount: number;
+  anotadas: { appointmentId: string; customerId: string | null; nombre: string | null; prueba: boolean; debe: number }[];
 };
 
 /** "HH:MM:SS" → "HH:MM" (a la Agenda no le sirven los segundos). */
@@ -60,13 +63,42 @@ function toClassOccurrence(row: ClassOccurrenceRow): ClassOccurrence {
     capacity: row.capacity === null ? null : Number(row.capacity),
     enrolledCount: Number(row.enrolled_count),
     attendedCount: Number(row.attended_count),
+    date: row.the_date,
+    anotadas: row.anotadas.map((a) => ({
+      appointmentId: a.appointment_id,
+      customerId: a.customer_id,
+      nombre: a.nombre,
+      prueba: a.prueba,
+      debe: a.debe,
+    })),
   };
 }
 
+const FECHA = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD");
+/** Mismo tope que el listado de turnos: seis semanas. */
+const MAX_DIAS_RANGO = 42;
+const MS_POR_DIA = 24 * 60 * 60 * 1000;
+
+/** Un día (`date`) o un rango inclusive (`from` + `to`), nunca los dos. Mismo patrón que `listQuery` de turnos. */
+export const classesQuery = z
+  .object({ date: FECHA.optional(), from: FECHA.optional(), to: FECHA.optional() })
+  .superRefine((q, ctx) => {
+    const error = (message: string) => ctx.addIssue({ code: "custom", message });
+    const hayRango = q.from !== undefined || q.to !== undefined;
+    if (q.date && hayRango) return error("Pasá `date` o `from`/`to`, no las dos");
+    if (!q.date && !hayRango) return error("Falta `date` o `from`/`to`");
+    if (!q.date) {
+      if (!q.from || !q.to) return error("El rango necesita `from` y `to`");
+      if (q.from > q.to) return error("`from` no puede ser posterior a `to`");
+      const dias = (Date.parse(q.to) - Date.parse(q.from)) / MS_POR_DIA + 1;
+      if (dias > MAX_DIAS_RANGO) return error(`El rango no puede pasar de ${MAX_DIAS_RANGO} días`);
+    }
+  });
+
 /**
- * GET /api/agenda/classes?date=YYYY-MM-DD
+ * GET /api/agenda/classes?date=YYYY-MM-DD  (o ?from=...&to=..., hasta 42 días)
  *
- * Clases que se dictan ese día: actividades (derivadas del patrón semanal de
+ * Clases que se dictan ese día o rango, con sus anotadas: actividades (derivadas del patrón semanal de
  * activity_schedules) y capacitaciones (training_sessions), en una sola lista.
  *
  * Devuelve UNA fila por clase, no una por inscripta — es lo que permite que la
@@ -76,11 +108,11 @@ function toClassOccurrence(row: ClassOccurrenceRow): ClassOccurrence {
 classesRouter.get(
   "/",
   requireAuth,
-  zv("query", z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD") })),
+  zv("query", classesQuery),
   async (c) => {
     const db = createDb(c.env);
-    const { date } = c.req.valid("query");
-    const rows = await listClassesForDate(db, date);
+    const { date, from, to } = c.req.valid("query");
+    const rows = await listClassesForRange(db, date ?? from!, date ?? to!);
     return c.json({ success: true, data: rows.map(toClassOccurrence) });
   },
 );
