@@ -42,6 +42,7 @@ export class ActivitySchedulesRepository {
     endTime: string;
     validFrom?: string | null;
     validUntil?: string | null;
+    capacity?: number | null;
   }) {
     const db = this.getDb();
     // createdAt/updatedAt son `timestamp()` en modo Date: drizzle les llama
@@ -61,6 +62,8 @@ export class ActivitySchedulesRepository {
         endTime: data.endTime,
         validFrom: data.validFrom ?? null,
         validUntil: data.validUntil ?? null,
+        // Cupo del horario: null = sin límite declarado.
+        capacity: data.capacity ?? null,
         isActive: true,
         createdAt: now,
         updatedAt: now,
@@ -119,6 +122,8 @@ export class ActivitySchedulesRepository {
       endTime?: string;
       validFrom?: string | null;
       validUntil?: string | null;
+      capacity?: number | null;
+      isActive?: boolean;
     }
   ) {
     const db = this.getDb();
@@ -130,6 +135,8 @@ export class ActivitySchedulesRepository {
     if (data.endTime !== undefined) updateData.endTime = data.endTime;
     if (data.validFrom !== undefined) updateData.validFrom = data.validFrom;
     if (data.validUntil !== undefined) updateData.validUntil = data.validUntil;
+    if (data.capacity !== undefined) updateData.capacity = data.capacity;
+    if (data.isActive !== undefined) updateData.isActive = data.isActive;
     updateData.updatedAt = new Date();
 
     const rows = await db

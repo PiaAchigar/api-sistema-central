@@ -10,6 +10,45 @@ const activitySchedulesRouter = new Hono<{ Bindings: AppBindings; Variables: Var
 
 // Horarios de actividades = catálogo, mismos permisos que las actividades.
 
+const horaRegex = /^\d{2}:\d{2}:\d{2}$/;
+const mensajeOrdenHoras = "La hora de fin tiene que ser posterior a la de inicio";
+// Cupo del horario: entero ≥ 1, o null = sin límite declarado (columna capacity).
+const capacidadSchema = z.number().int().min(1).nullable();
+
+// Exportados para testearlos sin base (src/routes/activitySchedules.test.ts).
+// En el POST las dos horas son obligatorias, así que el refine siempre aplica.
+export const horarioBody = z
+  .object({
+    machineId: z.string().uuid().nullable().optional(),
+    dayOfWeek: z.number().int().min(0).max(6),
+    startTime: z.string().regex(horaRegex, "Format must be HH:MM:SS"),
+    endTime: z.string().regex(horaRegex, "Format must be HH:MM:SS"),
+    validFrom: z.string().date().nullable().optional(),
+    validUntil: z.string().date().nullable().optional(),
+    capacity: capacidadSchema.optional(),
+  })
+  .refine((h) => h.endTime > h.startTime, {
+    message: mensajeOrdenHoras,
+    path: ["endTime"],
+  });
+
+// En el PATCH todo es opcional: el orden de horas solo se valida si vienen las dos.
+export const horarioPatchBody = z
+  .object({
+    machineId: z.string().uuid().nullable().optional(),
+    dayOfWeek: z.number().int().min(0).max(6).optional(),
+    startTime: z.string().regex(horaRegex, "Format must be HH:MM:SS").optional(),
+    endTime: z.string().regex(horaRegex, "Format must be HH:MM:SS").optional(),
+    validFrom: z.string().date().nullable().optional(),
+    validUntil: z.string().date().nullable().optional(),
+    capacity: capacidadSchema.optional(),
+    isActive: z.boolean().optional(),
+  })
+  .refine((h) => h.startTime === undefined || h.endTime === undefined || h.endTime > h.startTime, {
+    message: mensajeOrdenHoras,
+    path: ["endTime"],
+  });
+
 /**
  * GET /api/activities/:activityId/schedules
  * List all active schedules for an activity
@@ -48,23 +87,14 @@ activitySchedulesRouter.get("/activities/:activityId/schedules", requireAuth, re
  *   endTime: string (HH:MM:SS)
  *   validFrom?: string | null (ISO 8601 date)
  *   validUntil?: string | null (ISO 8601 date)
+ *   capacity?: number | null (entero ≥ 1, o null = sin límite)
  * }
  */
 activitySchedulesRouter.post(
   "/activities/:activityId/schedules",
   requireAuth,
   requirePermission("catalogo", "manage"),
-  zValidator(
-    "json",
-    z.object({
-      machineId: z.string().uuid().nullable().optional(),
-      dayOfWeek: z.number().int().min(0).max(6),
-      startTime: z.string().regex(/^\d{2}:\d{2}:\d{2}$/, "Format must be HH:MM:SS"),
-      endTime: z.string().regex(/^\d{2}:\d{2}:\d{2}$/, "Format must be HH:MM:SS"),
-      validFrom: z.string().date().nullable().optional(),
-      validUntil: z.string().date().nullable().optional(),
-    })
-  ),
+  zValidator("json", horarioBody),
   async (c) => {
     try {
       const activityId = c.req.param("activityId");
@@ -77,6 +107,7 @@ activitySchedulesRouter.post(
         endTime: body.endTime,
         validFrom: body.validFrom || null,
         validUntil: body.validUntil || null,
+        capacity: body.capacity ?? null,
       });
       return c.json(
         {
@@ -112,23 +143,15 @@ activitySchedulesRouter.post(
  *   endTime?: string (HH:MM:SS)
  *   validFrom?: string | null (ISO 8601 date)
  *   validUntil?: string | null (ISO 8601 date)
+ *   capacity?: number | null (entero ≥ 1, o null = sin límite)
+ *   isActive?: boolean (false = pausado; true = reactivado)
  * }
  */
 activitySchedulesRouter.patch(
   "/activities/schedules/:scheduleId",
   requireAuth,
   requirePermission("catalogo", "edit"),
-  zValidator(
-    "json",
-    z.object({
-      machineId: z.string().uuid().nullable().optional(),
-      dayOfWeek: z.number().int().min(0).max(6).optional(),
-      startTime: z.string().regex(/^\d{2}:\d{2}:\d{2}$/, "Format must be HH:MM:SS").optional(),
-      endTime: z.string().regex(/^\d{2}:\d{2}:\d{2}$/, "Format must be HH:MM:SS").optional(),
-      validFrom: z.string().date().nullable().optional(),
-      validUntil: z.string().date().nullable().optional(),
-    })
-  ),
+  zValidator("json", horarioPatchBody),
   async (c) => {
     try {
       const scheduleId = c.req.param("scheduleId");

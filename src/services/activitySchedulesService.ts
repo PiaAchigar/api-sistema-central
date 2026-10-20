@@ -85,6 +85,7 @@ export class ActivitySchedulesService {
     endTime: string;
     validFrom?: string | null;
     validUntil?: string | null;
+    capacity?: number | null;
   }) {
     // Validate day of week
     this.validateDayOfWeek(data.dayOfWeek);
@@ -159,6 +160,8 @@ export class ActivitySchedulesService {
       endTime?: string;
       validFrom?: string | null;
       validUntil?: string | null;
+      capacity?: number | null;
+      isActive?: boolean;
     }
   ) {
     // Verify schedule exists
