@@ -444,3 +444,126 @@ export async function opcionesParaAnotar(
     horariosDelMes,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Anotar a una capacitación: un turno en cada encuentro que todavía no pasó
+// ---------------------------------------------------------------------------
+
+export type ResultadoACapacitacion = {
+  anotada: number;
+  yaEstaba: number;
+  /** session_number de los encuentros que no tenían lugar */
+  sinLugar: number[];
+};
+
+/**
+ * Anota a una clienta que compró la capacitación en todos los encuentros activos que quedan.
+ *
+ * Misma serialización que las otras anotaciones: lo primero es bloquear la fila de la CAPACITACIÓN
+ * (`FOR UPDATE`), así dos anotaciones a la misma capacitación se ven los lugares una a la otra y no
+ * se pasa el cupo. Una sola fila por operación, sin deadlocks. Los encuentros pasados o dados de baja
+ * se saltean; los llenos no frenan nada: vuelven en `sinLugar`.
+ */
+export async function anotarACapacitacion(
+  db: Db,
+  input: { trainingId: string; customerId: string; ahora?: Date },
+): Promise<ResultadoACapacitacion> {
+  const ahora = input.ahora ?? new Date();
+  const { trainingId, customerId } = input;
+
+  return await db.transaction(async (tx) => {
+    const t = tx as unknown as Db;
+
+    // Lo primero: serializar con cualquier otra anotación a esta capacitación.
+    const capacitacion = (await t.execute(sql`
+      SELECT max_participants FROM training WHERE id = ${trainingId}::uuid FOR UPDATE
+    `)) as unknown as { max_participants: number | null }[];
+    if (capacitacion.length === 0) throw badRequest("No existe esa capacitación");
+
+    const compra = (await t.execute(sql`
+      SELECT 1 AS ok FROM customer_purchase
+      WHERE customer_id = ${customerId}::uuid AND training_id = ${trainingId}::uuid AND cancelled_at IS NULL
+      LIMIT 1
+    `)) as unknown as unknown[];
+    if (compra.length === 0) throw badRequest("No compró esta capacitación");
+
+    // El inicio del encuentro es hora local ART; "ya pasó" se compara contra el instante real.
+    const encuentros = (await t.execute(sql`
+      SELECT ts.id, ts.session_number, ts.service_provider_id,
+             ts.start_time::text AS start_time, ts.end_time::text AS end_time,
+             ((ts.session_date + ts.start_time) AT TIME ZONE 'America/Argentina/Buenos_Aires') AS inicio,
+             COALESCE(ts.capacity, ${capacitacion[0]!.max_participants}::int) AS cupo
+      FROM training_sessions ts
+      WHERE ts.training_id = ${trainingId}::uuid
+        AND ts.is_active
+        AND ((ts.session_date + ts.start_time) AT TIME ZONE 'America/Argentina/Buenos_Aires') > ${ahora.toISOString()}::timestamptz
+      ORDER BY ts.session_number
+    `)) as unknown as {
+      id: string;
+      session_number: number | null;
+      service_provider_id: string | null;
+      start_time: string;
+      end_time: string;
+      inicio: Date | string;
+      cupo: number | null;
+    }[];
+
+    let anotada = 0;
+    let yaEstaba = 0;
+    const sinLugar: number[] = [];
+
+    for (const e of encuentros) {
+      const ya = await t
+        .select({ id: appointments.id })
+        .from(appointments)
+        .where(
+          and(
+            eq(appointments.customerId, customerId),
+            eq(appointments.trainingSessionId, e.id),
+            sql`${appointments.status} <> 'cancelled'`,
+          ),
+        )
+        .limit(1);
+      if (ya.length > 0) {
+        yaEstaba++;
+        continue;
+      }
+
+      if (e.cupo !== null) {
+        const [fila] = (await t.execute(sql`
+          SELECT COUNT(*)::int AS n FROM appointments
+          WHERE training_session_id = ${e.id}::uuid AND status <> 'cancelled'
+        `)) as unknown as { n: number }[];
+        if (fila!.n >= e.cupo) {
+          sinLugar.push(e.session_number ?? 1);
+          continue;
+        }
+      }
+
+      const inicio = new Date(e.inicio);
+      const duracion = minutos(e.end_time) - minutos(e.start_time);
+      try {
+        // Savepoint: si el índice único salta, la transacción entera sigue viva.
+        await t.transaction(async (sp) => {
+          await (sp as unknown as Db).insert(appointments).values({
+            customerId,
+            trainingSessionId: e.id,
+            serviceProviderId: e.service_provider_id,
+            appointmentStart: inicio,
+            appointmentEnd: new Date(inicio.getTime() + duracion * 60_000),
+            durationMinutes: duracion,
+            status: "scheduled",
+            isTrial: false,
+          });
+        });
+        anotada++;
+      } catch (err) {
+        // Doble anotación que se coló: ya estaba, no es un error.
+        if (!isUniqueViolation(err, "ux_appt_encuentro")) throw err;
+        yaEstaba++;
+      }
+    }
+
+    return { anotada, yaEstaba, sinLugar };
+  });
+}

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createDb } from "../../db/client";
 import { listClassesForRange, type ClassOccurrenceRow } from "../../repositories/classes.repo";
 import { requireAuth, requirePermission } from "../../middleware/auth";
-import { anotarAClase, anotarAlMes, opcionesParaAnotar } from "../../services/anotar.service";
+import { anotarACapacitacion, anotarAClase, anotarAlMes, opcionesParaAnotar } from "../../services/anotar.service";
 import { zv } from "../../lib/validator";
 import type { AppBindings, Variables } from "../../env";
 
@@ -175,6 +175,29 @@ classesRouter.post(
   async (c) => {
     const db = createDb(c.env);
     const r = await anotarAClase(db, c.req.valid("json"));
+    return c.json({ success: true, data: r }, 201);
+  },
+);
+
+const anotarACapacitacionBody = z.object({
+  trainingId: z.string().uuid(),
+  customerId: z.string().uuid(),
+});
+
+/**
+ * POST /api/agenda/classes/anotar-a-capacitacion
+ *
+ * Anota a una clienta que compró la capacitación en todos los encuentros que quedan.
+ * Los llenos vuelven en `sinLugar` (número de encuentro); los que ya tenía, en `yaEstaba`.
+ */
+classesRouter.post(
+  "/anotar-a-capacitacion",
+  requireAuth,
+  requirePermission("agenda", "edit"),
+  zv("json", anotarACapacitacionBody),
+  async (c) => {
+    const db = createDb(c.env);
+    const r = await anotarACapacitacion(db, c.req.valid("json"));
     return c.json({ success: true, data: r }, 201);
   },
 );
