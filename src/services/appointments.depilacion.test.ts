@@ -26,6 +26,10 @@ import { crearCombo, hardDeleteCombo } from "../repositories/depilacion.repo";
 import { getAppointmentById, getAppointmentDetail } from "../repositories/appointments.repo";
 import { datosParaAgendar } from "../repositories/turno-de-depilacion.repo";
 import { createAppointment, rescheduleAppointment, updateAppointmentStatus } from "./appointments.service";
+import { usarConfigDeDepilacionDeTest } from "../test-support/depilation-config";
+
+// La config de depilación la edita Laura: el archivo arma la suya (ver test-support).
+usarConfigDeDepilacionDeTest();
 
 /**
  * Task 12: el turno de depilación se crea con las zonas ELEGIDAS, no con el

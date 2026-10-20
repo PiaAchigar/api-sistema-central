@@ -53,6 +53,10 @@ import {
 import type { Db } from "../../db/client";
 import type { AppBindings } from "../../env";
 import type { DepilationConfig } from "../../lib/depilation-pricing";
+import { usarConfigDeDepilacionDeTest } from "../../test-support/depilation-config";
+
+// La config de depilación la edita Laura: el archivo arma la suya (ver test-support).
+usarConfigDeDepilacionDeTest();
 
 // ── Harness de integración contra Postgres local ────────────────────────────
 // Casos 1, 2 y "borra las dos direcciones" del guardado de exclusiones son
@@ -69,6 +73,20 @@ const QA_PREFIX = "ZZ_QA_DEPILACION_TEST_";
 
 const pgClient = postgres(LOCAL_DB_URL, { max: 1 });
 const testDb = drizzle(pgClient, { schema }) as unknown as Db;
+
+// Cada request de las rutas hace `createDb(c.env)`, que abre un pool nuevo de
+// postgres-js y nadie lo cierra (en el Worker real lo cierra Hyperdrive). Este
+// archivo manda cientos de requests y cada pool queda abierto 20s: junto con
+// las demás suites en paralelo se llegaba al tope de 100 conexiones de
+// Postgres ("sorry, too many clients already") y fallaba al azar el test que
+// tocara justo ese momento. Se reemplaza `createDb` por UN pool compartido de
+// este archivo, que se cierra en el `afterAll`.
+const rutasPool = postgres(LOCAL_DB_URL, { max: 5, fetch_types: false, prepare: false });
+const rutasDb = drizzle(rutasPool, { schema }) as unknown as Db;
+vi.mock("../../db/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../db/client")>()),
+  createDb: () => rutasDb,
+}));
 
 const ADMIN_ENV = {
   HYPERDRIVE: { connectionString: LOCAL_DB_URL },
@@ -148,6 +166,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await testDb.delete(bodyZone).where(ilike(bodyZone.name, `${QA_PREFIX}%`));
   await pgClient.end();
+  await rutasPool.end();
 });
 
 // ── Fixtures: las 24 zonas y las 8 exclusiones (x2 direcciones) reales del

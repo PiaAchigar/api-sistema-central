@@ -13,6 +13,10 @@ import {
   type DepilationComboRow,
 } from "./depilacion.repo";
 import type { DepilationConfig, ZonaParaCotizar } from "../lib/depilation-pricing";
+import { usarConfigDeDepilacionDeTest } from "../test-support/depilation-config";
+
+// La config de depilación la edita Laura: el archivo arma la suya (ver test-support).
+usarConfigDeDepilacionDeTest();
 
 /**
  * Task 4 (1.56.0): `obtenerCombo`/`assembleDepilationCombo` conectados con la
