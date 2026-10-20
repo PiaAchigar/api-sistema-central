@@ -1,7 +1,7 @@
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { todayLocal } from "../lib/time";
-import { formatearHorarios } from "../services/anotar.service";
+import { formatearHorarios } from "../lib/horarios";
 import {
   trainingSubscriptions,
   activityAttendance,

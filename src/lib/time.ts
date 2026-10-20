@@ -59,3 +59,9 @@ export function utcToLocalMinutes(d: Date): number {
 export function todayLocal(): string {
   return utcToLocalDateString(new Date());
 }
+
+/** Mes anterior de un YYYY-MM. */
+export function mesAnterior(mes: string): string {
+  const [a, m] = mes.split("-").map(Number);
+  return m === 1 ? `${a! - 1}-12` : `${a}-${String(m! - 1).padStart(2, "0")}`;
+}

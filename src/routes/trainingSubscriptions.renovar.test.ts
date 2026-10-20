@@ -1,8 +1,8 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq, inArray, like } from "drizzle-orm";
+import { eq, inArray, like, sql } from "drizzle-orm";
 import * as schema from "../db/schema";
 import {
   activities,
@@ -17,7 +17,7 @@ import {
 import type { Db } from "../db/client";
 import type { AppBindings, Variables } from "../env";
 import { auth } from "../middleware/auth";
-import { todayLocal } from "../lib/time";
+import { mesAnterior } from "../lib/time";
 import { trainingSubscriptionsRouter } from "./trainingSubscriptions";
 import { trainingSubscriptionsRepository } from "../repositories/trainingSubscriptionsRepository";
 import { trainingSubscriptionsService } from "../services/trainingSubscriptionsService";
@@ -61,15 +61,17 @@ function pedir(method: string, path: string, body?: unknown) {
   );
 }
 
-// Meses dinámicos para la ruta (usa el reloj real); fijos para el servicio (usa `ahora`).
-const MES_ACTUAL = todayLocal().slice(0, 7);
-function mesAnterior(mes: string) {
-  const [a, m] = mes.split("-").map(Number);
-  return m === 1 ? `${a! - 1}-12` : `${a}-${String(m! - 1).padStart(2, "0")}`;
-}
-const MES_PREVIO = mesAnterior(MES_ACTUAL);
+// El servicio y la ruta usan `ahora`/Date: se fija el reloj (sólo Date) para no depender de la fecha real.
 // Martes 20 de octubre de 2026, 11:00 ART.
 const AHORA = new Date("2026-10-20T14:00:00Z");
+
+// Mes actual ART según la MISMA expresión que usa admin/list (el now() de Postgres).
+async function mesActualSql(): Promise<string> {
+  const r = (await db.execute(
+    sql`SELECT to_char((now() AT TIME ZONE 'America/Argentina/Buenos_Aires'), 'YYYY-MM') AS m`,
+  )) as unknown as Array<{ m: string }>;
+  return r[0]!.m;
+}
 
 let clientaId = "";
 let actividadId = "";
@@ -193,6 +195,18 @@ describe("renovar (servicio)", () => {
     expect(turnos).toHaveLength(r.anotadas);
   });
 
+  it.each(["cancelled", "paused"] as const)("suscripción %s: 400 y no crea nada", async (status) => {
+    await crearCiclo("2026-09", [schMar10]);
+    await db.update(trainingSubscriptions).set({ status }).where(eq(trainingSubscriptions.id, subId));
+    await expect(renovar(db, { subscriptionId: subId, mes: "2026-10", ahora: AHORA })).rejects.toMatchObject({
+      status: 400,
+      message: status === "cancelled" ? "La suscripción está cancelada" : "La suscripción está pausada",
+    });
+    expect(await horariosDelCiclo("2026-10")).toEqual([]);
+    const todas = await db.select().from(trainingSubscriptions).where(eq(trainingSubscriptions.customerId, clientaId));
+    expect(todas).toHaveLength(1);
+  });
+
   it("sin ciclo anterior con horarios: 400", async () => {
     await crearCiclo("2026-09", []);
     await expect(renovar(db, { subscriptionId: subId, mes: "2026-10", ahora: AHORA })).rejects.toMatchObject({
@@ -203,26 +217,35 @@ describe("renovar (servicio)", () => {
 });
 
 describe("POST /training-subscriptions/:id/renovar", () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ["Date"], now: AHORA }));
+  afterEach(() => vi.useRealTimers());
+
   it("201 con el resultado y los horarios copiados", async () => {
-    await crearCiclo(MES_PREVIO, [schMar10, schLun9]);
-    const res = await pedir("POST", `/training-subscriptions/${subId}/renovar`, { mes: MES_ACTUAL });
+    await crearCiclo("2026-09", [schMar10, schLun9]);
+    const res = await pedir("POST", `/training-subscriptions/${subId}/renovar`, { mes: "2026-10" });
     expect(res.status).toBe(201);
     const body = (await res.json()) as { subscriptionId: string; billingCycleId: string };
     expect(body.subscriptionId).toBe(subId);
-    expect(await horariosDelCiclo(MES_ACTUAL)).toEqual([schLun9, schMar10].sort());
+    expect(await horariosDelCiclo("2026-10")).toEqual([schLun9, schMar10].sort());
   });
 
   it("suscripción inexistente: 404", async () => {
     const res = await pedir("POST", `/training-subscriptions/00000000-0000-4000-8000-000000000000/renovar`, {
-      mes: MES_ACTUAL,
+      mes: "2026-10",
     });
     expect(res.status).toBe(404);
   });
 
   it("sin mes anterior: 400 con el mensaje", async () => {
-    const res = await pedir("POST", `/training-subscriptions/${subId}/renovar`, { mes: MES_ACTUAL });
+    const res = await pedir("POST", `/training-subscriptions/${subId}/renovar`, { mes: "2026-10" });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe("No tiene horarios del mes anterior para repetir");
+  });
+
+  it.each(["cancelled", "paused"] as const)("suscripción %s: 400", async (status) => {
+    await crearCiclo("2026-09", [schMar10]);
+    await db.update(trainingSubscriptions).set({ status }).where(eq(trainingSubscriptions.id, subId));
+    expect((await pedir("POST", `/training-subscriptions/${subId}/renovar`, { mes: "2026-10" })).status).toBe(400);
   });
 
   it("mes mal formado: 400", async () => {
@@ -242,8 +265,9 @@ describe("GET /training-subscriptions/admin/list — horariosDelMes", () => {
   });
 
   it("formato 'Lun 09:00', de lunes a domingo y por hora; ignora otros meses", async () => {
-    await crearCiclo(MES_ACTUAL, [schMar10, schLun9]);
-    await crearCiclo(MES_PREVIO, [schMar10]);
+    const actual = await mesActualSql();
+    await crearCiclo(actual, [schMar10, schLun9]);
+    await crearCiclo(mesAnterior(actual), [schMar10]);
     expect((await fila())!.horariosDelMes).toEqual(["Lun 09:00", "Mar 10:00"]);
   });
 });

@@ -2,7 +2,8 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { isUniqueViolation } from "../lib/db-errors";
-import { utcToLocalDateString } from "../lib/time";
+import { mesAnterior, utcToLocalDateString } from "../lib/time";
+import { formatearHorarios } from "../lib/horarios";
 import {
   activities,
   activitySchedules,
@@ -249,12 +250,6 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
   }
 }
 
-/** Mes anterior de un YYYY-MM. */
-function mesAnterior(mes: string): string {
-  const [a, m] = mes.split("-").map(Number);
-  return m === 1 ? `${a! - 1}-12` : `${a}-${String(m! - 1).padStart(2, "0")}`;
-}
-
 /**
  * Renueva el mes de una suscripción: repite los horarios del ciclo del mes anterior y cobra
  * `monthly_amount`. No reimplementa nada: es `anotarAlMes` (con su lock, cupo y reglas) con los datos
@@ -269,11 +264,15 @@ export async function renovar(
       activityId: trainingSubscriptions.activityId,
       customerId: trainingSubscriptions.customerId,
       monthlyAmount: trainingSubscriptions.monthlyAmount,
+      status: trainingSubscriptions.status,
     })
     .from(trainingSubscriptions)
     .where(eq(trainingSubscriptions.id, input.subscriptionId))
     .limit(1);
   if (!sub) throw notFound("Subscription");
+  // Sin esto, anotarAlMes (que busca sólo la ACTIVA) crearía una suscripción nueva para una cancelada.
+  if (sub.status === "cancelled") throw badRequest("La suscripción está cancelada");
+  if (sub.status === "paused") throw badRequest("La suscripción está pausada");
   if (!sub.customerId || !sub.activityId) throw badRequest("La suscripción no tiene clienta o actividad");
 
   const previos = await db
@@ -444,15 +443,6 @@ export async function anotarAClase(db: Db, input: AnotarAClaseInput): Promise<{ 
 // Qué se le puede ofrecer a una clienta en una actividad (spec §3.1)
 // ---------------------------------------------------------------------------
 
-const DIAS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
-
-/** "Lun 10:00", de lunes a domingo y por hora. Lo comparten las opciones para anotar y el listado de suscripciones. */
-export function formatearHorarios(horarios: Array<{ dayOfWeek: number | null; startTime: string | null }>): string[] {
-  return horarios
-    .map((h) => ({ dia: h.dayOfWeek ?? 0, hora: (h.startTime ?? "00:00:00").slice(0, 5) }))
-    .sort((a, b) => ((a.dia + 6) % 7) - ((b.dia + 6) % 7) || a.hora.localeCompare(b.hora))
-    .map((h) => `${DIAS[h.dia]} ${h.hora}`);
-}
 
 export type OpcionesParaAnotar = {
   anotadaAlMes: boolean;
