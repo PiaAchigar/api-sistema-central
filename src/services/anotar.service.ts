@@ -1,15 +1,17 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { badRequest, conflict } from "../lib/errors";
+import { isUniqueViolation } from "../lib/db-errors";
 import { utcToLocalDateString } from "../lib/time";
 import {
   activities,
+  activitySchedules,
   appointments,
   subscriptionBillingCycles,
   subscriptionMonthSchedules,
   trainingSubscriptions,
 } from "../db/schema";
-import { asegurarCicloDelMes } from "../repositories/cuotas.repo";
+import { asegurarCicloDelMes, bloquearCiclo } from "../repositories/cuotas.repo";
 import { listClassesForRange } from "../repositories/classes.repo";
 
 export type AnotarAlMesInput = {
@@ -33,16 +35,6 @@ export type ResultadoAlMes = {
   clasesDelMes: number;
 };
 
-const SUBS_UNICA = "uq_training_subscriptions_customer_training_active";
-
-function esUnique(err: unknown, constraint?: string): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const e = err as { code?: unknown; constraint_name?: unknown; cause?: { code?: unknown; constraint_name?: unknown } };
-  const code = e.code ?? e.cause?.code;
-  const nombre = e.constraint_name ?? e.cause?.constraint_name;
-  return code === "23505" && (!constraint || nombre === constraint);
-}
-
 function minutos(hhmmss: string): number {
   const [h, m] = hhmmss.split(":").map(Number);
   return h! * 60 + m!;
@@ -56,10 +48,14 @@ function mesSiguiente(mes: string): string {
 /**
  * Anota a una clienta al mes en los horarios semanales que eligió.
  *
- * Todo en UNA transacción. Lo crítico es el cupo: antes de contar los lugares de
- * una clase se bloquea la fila de su horario (`FOR UPDATE`), así dos anotaciones
- * simultáneas a la última plaza se serializan y la segunda ve el lugar ocupado.
- * Los horarios se bloquean todos juntos y en orden de id para no entrar en deadlock.
+ * Todo en UNA transacción. Lo crítico es el cupo: lo primero que se hace es
+ * bloquear la fila de la ACTIVIDAD (`FOR UPDATE`), así dos anotaciones a la misma
+ * actividad se serializan y la segunda ve los lugares que ocupó la primera. Es una
+ * sola fila por operación, así que no hay deadlocks. Después se bloquea el ciclo
+ * del mes (orden: actividad → ciclo).
+ *
+ * El cupo de una clase se cuenta por actividad + inicio + máquina del horario:
+ * en Thermo Bike dos máquinas a la misma hora son dos clases, cada una con su cupo.
  */
 export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<ResultadoAlMes> {
   const ahora = input.ahora ?? new Date();
@@ -71,11 +67,22 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
   if (mes !== mesActual && mes !== mesSiguiente(mesActual)) {
     throw badRequest("Sólo se puede anotar al mes actual o al siguiente");
   }
-  if (scheduleIds.length < 1) throw badRequest("Elegí al menos un horario");
+  if (scheduleIds.length < 1) throw badRequest("Ese horario no es de esta actividad o no está vigente");
 
   try {
     return await db.transaction(async (tx) => {
       const t = tx as unknown as Db;
+
+      // Lo primero: serializar con cualquier otra anotación a esta actividad.
+      const [actividad] = await t
+        .select({
+          classesPerMonth: activities.classesPerMonth,
+          providerId: activities.serviceProviderId,
+        })
+        .from(activities)
+        .where(eq(activities.id, activityId))
+        .for("update")
+        .limit(1);
 
       // Clases del mes entero de la actividad (la misma lógica de vigencia que la grilla).
       const [anio, nMes] = mes.split("-").map(Number);
@@ -85,29 +92,14 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
         (c) =>
           c.kind === "activity" &&
           c.subject_id === activityId &&
-          scheduleIds.some((id) => c.occurrence_id.startsWith(`activity-${id}-`)),
+          c.schedule_id !== null &&
+          scheduleIds.includes(c.schedule_id),
       );
-      const vigentes = new Set(delMes.map((c) => c.occurrence_id.slice(9, 45)));
-      // El id de horario es un uuid (5 grupos): ya está en occurrence_id entre "activity-" y la fecha.
+      const vigentes = new Set(delMes.map((c) => c.schedule_id));
       if (!scheduleIds.every((id) => vigentes.has(id))) {
         throw badRequest("Ese horario no es de esta actividad o no está vigente");
       }
 
-      // Bloqueo de todos los horarios, en orden de id, ANTES de escribir nada: el insert en
-      // subscription_month_schedules toma un FOR KEY SHARE sobre el horario (por la FK) y, si
-      // pidiéramos el FOR UPDATE después, dos anotaciones simultáneas se trabarían entre sí (deadlock).
-      for (const id of scheduleIds) {
-        await t.execute(sql`SELECT id FROM activity_schedules WHERE id = ${id} FOR UPDATE`);
-      }
-
-      const [actividad] = await t
-        .select({
-          classesPerMonth: activities.classesPerMonth,
-          providerId: activities.serviceProviderId,
-        })
-        .from(activities)
-        .where(eq(activities.id, activityId))
-        .limit(1);
 
       // Suscripción activa; si sólo hay una pausada, no se anota.
       const subs = await t
@@ -132,12 +124,9 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
         subscriptionId = nueva!.id;
       }
 
+      // El ciclo nace con amount_due = cuota. Se bloquea antes de mirar si ya está anotada.
       const billingCycleId = await asegurarCicloDelMes(t, subscriptionId, mes, cuota);
-      const [ciclo] = await t
-        .select({ isPaid: subscriptionBillingCycles.isPaid })
-        .from(subscriptionBillingCycles)
-        .where(eq(subscriptionBillingCycles.id, billingCycleId))
-        .limit(1);
+      await bloquearCiclo(t, billingCycleId);
       const yaAnotada = await t
         .select({ id: subscriptionMonthSchedules.activityScheduleId })
         .from(subscriptionMonthSchedules)
@@ -150,16 +139,28 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
         });
         throw conflict(`Ya está anotada a ${nombreMes}`);
       }
-      if (ciclo?.isPaid !== true) {
-        await t
-          .update(subscriptionBillingCycles)
-          .set({ amountDue: cuota.toFixed(2), updatedAt: new Date() })
-          .where(eq(subscriptionBillingCycles.id, billingCycleId));
-      }
+      // Un ciclo que ya existía impago toma la cuota nueva; uno pagado no se toca.
+      await t
+        .update(subscriptionBillingCycles)
+        .set({ amountDue: cuota.toFixed(2), updatedAt: new Date() })
+        .where(
+          and(
+            eq(subscriptionBillingCycles.id, billingCycleId),
+            sql`${subscriptionBillingCycles.isPaid} IS NOT TRUE`,
+            sql`${subscriptionBillingCycles.amountDue} IS DISTINCT FROM ${cuota.toFixed(2)}::numeric`,
+          ),
+        );
 
       await t
         .insert(subscriptionMonthSchedules)
         .values(scheduleIds.map((id) => ({ billingCycleId, activityScheduleId: id })));
+
+      // Cupo de cada horario (la actividad ya está bloqueada, no hace falta bloquear cada fila).
+      const horarios = await t
+        .select({ id: activitySchedules.id, capacity: activitySchedules.capacity })
+        .from(activitySchedules)
+        .where(sql`${activitySchedules.id} IN (${sql.join(scheduleIds.map((id) => sql`${id}::uuid`), sql`, `)})`);
+      const cupoDe = new Map(horarios.map((h) => [h.id, h.capacity]));
 
       let anotadas = 0;
       const sinLugar: string[] = [];
@@ -169,7 +170,6 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
 
       for (const clase of futuras) {
         const inicio = new Date(clase.starts_at_utc);
-        const scheduleId = clase.occurrence_id.slice("activity-".length, "activity-".length + 36);
 
         const ya = await t
           .select({ id: appointments.id })
@@ -185,16 +185,14 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
           .limit(1);
         if (ya.length > 0) continue;
 
-        // Cupo del horario, con la fila bloqueada: lo que se cuenta no cambia hasta el commit.
-        const filas = (await t.execute(
-          sql`SELECT capacity FROM activity_schedules WHERE id = ${scheduleId} FOR UPDATE`,
-        )) as unknown as { capacity: number | null }[];
-        const capacidad = filas[0]?.capacity ?? null;
+        // Lugares ocupados de ESTA clase: misma actividad, mismo inicio y misma máquina (NULL con NULL).
+        const capacidad = cupoDe.get(clase.schedule_id!) ?? null;
         if (capacidad !== null) {
           const [fila] = (await t.execute(sql`
             SELECT COUNT(*)::int AS n FROM appointments
             WHERE activity_id = ${activityId}
               AND appointment_start = ${inicio.toISOString()}::timestamptz
+              AND machine_id IS NOT DISTINCT FROM ${clase.machine_id}::uuid
               AND status <> 'cancelled'
           `)) as unknown as { n: number }[];
           if (fila!.n >= capacidad) {
@@ -230,9 +228,10 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
       };
     });
   } catch (err) {
-    // Carrera con otra anotación de la misma clienta: los índices únicos la frenan.
-    if (esUnique(err)) {
-      throw conflict("Ya está anotada: otra operación se cruzó, volvé a intentar");
+    // Los índices únicos son la última red: se traducen a 409, nunca 500.
+    if (isUniqueViolation(err, "ux_appt_clase_actividad")) throw conflict("Ya está anotada en esa clase");
+    if (isUniqueViolation(err, "uq_training_subscriptions_customer_training_active")) {
+      throw conflict("Se cruzó con otra anotación de esta clienta: probá de nuevo");
     }
     throw err;
   }

@@ -9,6 +9,7 @@ import {
   appointments,
   contacts,
   customers,
+  machines,
   payments,
   subscriptionBillingCycles,
   subscriptionMonthSchedules,
@@ -37,6 +38,11 @@ let schMar12 = ""; // martes 12:00 (hoy todavía no)
 let schJue18 = ""; // jueves 18:00, cupo 1
 let schOtra = ""; // de otra actividad
 let schSolo = ""; // jueves 29, un solo día, cupo 1
+let schMaqA = ""; // viernes 23 09:00, máquina A, cupo 1
+let schMaqB = ""; // viernes 23 09:00, máquina B, cupo 1
+let schCorta = ""; // jueves 17:00 vigente del 8 al 22
+let maqA = "";
+let maqB = "";
 
 async function crearClienta(nombre: string) {
   const [ct] = await db.insert(contacts).values({ name: `${QA}_${nombre}` }).returning({ id: contacts.id });
@@ -75,6 +81,7 @@ async function limpiar() {
     await db.delete(activitySchedules).where(inArray(activitySchedules.activityId, actIds));
     await db.delete(activities).where(inArray(activities.id, actIds));
   }
+  await db.delete(machines).where(like(machines.name, `${QA}%`));
 }
 
 async function horario(activityId: string, dow: number, inicio: string, fin: string, extra: Partial<typeof activitySchedules.$inferInsert> = {}) {
@@ -105,6 +112,14 @@ beforeAll(async () => {
     validFrom: "2026-10-29",
     validUntil: "2026-10-29",
   });
+  const [ma] = await db.insert(machines).values({ name: `${QA}_MaqA` }).returning({ id: machines.id });
+  const [mb] = await db.insert(machines).values({ name: `${QA}_MaqB` }).returning({ id: machines.id });
+  maqA = ma!.id;
+  maqB = mb!.id;
+  const solo23 = { capacity: 1, validFrom: "2026-10-23", validUntil: "2026-10-23" };
+  schMaqA = await horario(actId, 5, "09:00:00", "10:00:00", { ...solo23, machineId: maqA });
+  schMaqB = await horario(actId, 5, "09:00:00", "10:00:00", { ...solo23, machineId: maqB });
+  schCorta = await horario(actId, 4, "17:00:00", "18:00:00", { validFrom: "2026-10-08", validUntil: "2026-10-22" });
   schOtra = await horario(otraActId, 2, "10:00:00", "11:00:00");
   clientaId = await crearClienta("CLIENTA");
   otraClientaId = await crearClienta("OTRA");
@@ -234,7 +249,10 @@ describe("anotarAlMes", () => {
   });
 
   it("sin horarios: 400", async () => {
-    await expect(anotarAlMes(db, { ...base(), scheduleIds: [] })).rejects.toMatchObject({ status: 400 });
+    await expect(anotarAlMes(db, { ...base(), scheduleIds: [] })).rejects.toMatchObject({
+      status: 400,
+      message: "Ese horario no es de esta actividad o no está vigente",
+    });
   });
 
   it("mes anterior o lejano: 400; mes siguiente: ok y arranca el día 1", async () => {
@@ -274,14 +292,19 @@ describe("anotarAlMes", () => {
     expect(filas).toHaveLength(1);
   });
 
-  it("CONCURRENCIA determinista: si otra transacción tiene bloqueado el horario, espera y ve el lugar ocupado", async () => {
-    // pg2 toma el horario y mete a la otra clienta en la clase, sin commitear todavía.
+  it("CONCURRENCIA determinista: con la actividad bloqueada por otra anotación, espera y ve el lugar ocupado", async () => {
+    // La suscripción ya existe: así el insert no se frena por la FK a la actividad y lo único que
+    // puede hacer esperar a la anotación es el lock explícito del servicio.
+    await db.insert(trainingSubscriptions).values({
+      activityId: actId, customerId: clientaId, status: "active", monthlyAmount: "5000", subscriptionStartDate: "2026-01-01",
+    });
+    // Otra anotación (pg2) ya tomó el lock de la ACTIVIDAD y metió a la otra clienta, sin commitear.
     let liberar!: () => void;
     const puedeCommitear = new Promise<void>((r) => (liberar = r));
     let bloqueado!: () => void;
     const yaBloqueo = new Promise<void>((r) => (bloqueado = r));
     const otra = db2.transaction(async (tx) => {
-      await tx.execute(sql`SELECT id FROM activity_schedules WHERE id = ${schSolo} FOR UPDATE`);
+      await tx.execute(sql`SELECT id FROM activities WHERE id = ${actId} FOR UPDATE`);
       await tx.insert(appointments).values({
         customerId: otraClientaId, activityId: actId, status: "scheduled",
         appointmentStart: new Date("2026-10-29T23:00:00Z"), appointmentEnd: new Date("2026-10-30T00:00:00Z"),
@@ -295,11 +318,68 @@ describe("anotarAlMes", () => {
     let termino = false;
     void mia.then(() => (termino = true), () => (termino = true));
     await new Promise((r) => setTimeout(r, 400));
-    expect(termino).toBe(false); // sigue esperando el bloqueo
+    expect(termino).toBe(false); // sigue esperando el lock de la actividad
     liberar();
     await otra;
     const r = await mia;
     expect(r.anotadas).toBe(0);
     expect(r.sinLugar).toEqual(["2026-10-29T23:00:00.000Z"]);
+  });
+
+  it("dos máquinas a la misma hora son dos clases distintas, cada una con su cupo", async () => {
+    const r1 = await anotarAlMes(db, { ...base(), customerId: clientaId, scheduleIds: [schMaqA] });
+    const r2 = await anotarAlMes(db, { ...base(), customerId: otraClientaId, scheduleIds: [schMaqB] });
+    expect(r1.anotadas).toBe(1);
+    expect(r2.anotadas).toBe(1);
+    expect(r2.sinLugar).toEqual([]);
+    // y la máquina A ya está llena para una tercera clienta
+    const [ct] = await db.insert(contacts).values({ name: `${QA}_TERCERA` }).returning({ id: contacts.id });
+    const [cu] = await db.insert(customers).values({ contactId: ct!.id }).returning({ id: customers.id });
+    const r3 = await anotarAlMes(db, { ...base(), customerId: cu!.id, scheduleIds: [schMaqA] });
+    expect(r3.anotadas).toBe(0);
+    expect(r3.sinLugar).toHaveLength(1);
+  });
+
+  it("dos anotaciones en paralelo de la misma clienta con ciclo ya existente y horarios distintos: una sola entra", async () => {
+    const [s] = await db.insert(trainingSubscriptions).values({
+      activityId: actId, customerId: clientaId, status: "active", monthlyAmount: "5000", subscriptionStartDate: "2026-01-01",
+    }).returning({ id: trainingSubscriptions.id });
+    await db.insert(subscriptionBillingCycles).values({
+      trainingSubscriptionId: s!.id, billingMonth: MES, billingPeriodStart: "2026-10-01", billingPeriodEnd: "2026-10-31",
+      amountDue: "5000", isPaid: false,
+    });
+    const res = await Promise.allSettled([
+      anotarAlMes(db, { ...base(), scheduleIds: [schMar12] }),
+      anotarAlMes(db2, { ...base(), scheduleIds: [schCorta] }),
+    ]);
+    expect(res.filter((x) => x.status === "fulfilled")).toHaveLength(1);
+    const rech = res.find((x) => x.status === "rejected") as PromiseRejectedResult;
+    expect(rech.reason).toMatchObject({ status: 409 });
+    const [c] = await db.select().from(subscriptionBillingCycles).where(eq(subscriptionBillingCycles.trainingSubscriptionId, s!.id));
+    const hs = await db.select().from(subscriptionMonthSchedules).where(eq(subscriptionMonthSchedules.billingCycleId, c!.id));
+    expect(hs).toHaveLength(1);
+  });
+
+  it("ciclo ya pagado: no se toca amount_due", async () => {
+    const [s] = await db.insert(trainingSubscriptions).values({
+      activityId: actId, customerId: clientaId, status: "active", monthlyAmount: "5000", subscriptionStartDate: "2026-01-01",
+    }).returning({ id: trainingSubscriptions.id });
+    await db.insert(subscriptionBillingCycles).values({
+      trainingSubscriptionId: s!.id, billingMonth: MES, billingPeriodStart: "2026-10-01", billingPeriodEnd: "2026-10-31",
+      amountDue: "5000", isPaid: true,
+    });
+    const r = await anotarAlMes(db, { ...base(), scheduleIds: [schMar12] });
+    const [c] = await db.select().from(subscriptionBillingCycles).where(eq(subscriptionBillingCycles.id, r.billingCycleId));
+    expect(Number(c!.amountDue)).toBe(5000);
+    expect(r.anotadas).toBe(2);
+  });
+
+  it("vigencia que corta a mitad de mes: solo cuentan las fechas dentro (8, 15 y 22)", async () => {
+    // Jueves 17:00 vigente del 8 al 22; ahora = martes 20: solo falta el 22.
+    const r = await anotarAlMes(db, { ...base(), scheduleIds: [schCorta] });
+    expect(r.clasesDelMes).toBe(3);
+    expect(r.anotadas).toBe(1);
+    const ts = await turnos(clientaId);
+    expect(ts.map((t) => t.appointmentStart!.toISOString())).toEqual(["2026-10-22T20:00:00.000Z"]);
   });
 });

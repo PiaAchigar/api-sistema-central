@@ -30,6 +30,8 @@ export type ClassOccurrenceRow = {
   subject_id: string;
   /** training_sessions.id — sólo para capacitaciones */
   session_id: string | null;
+  /** activity_schedules.id — sólo para actividades */
+  schedule_id: string | null;
   name: string;
   /** 'class' | 'machine' para actividades; null para capacitaciones */
   activity_type: string | null;
@@ -107,6 +109,7 @@ export async function listClassesForRange(
         'activity'::text        AS kind,
         a.id                    AS subject_id,
         NULL::uuid              AS session_id,
+        sch.id                  AS schedule_id,
         a.name                  AS name,
         a.activity_type         AS activity_type,
         NULL::int               AS session_number,
@@ -139,6 +142,7 @@ export async function listClassesForRange(
         'training'::text        AS kind,
         tr.id                   AS subject_id,
         tsx.id                  AS session_id,
+        NULL::uuid              AS schedule_id,
         tr.name                 AS name,
         NULL::varchar           AS activity_type,
         tsx.session_number      AS session_number,
@@ -182,6 +186,7 @@ export async function listClassesForRange(
       r.kind,
       r.subject_id,
       r.session_id,
+      r.schedule_id,
       r.name,
       r.activity_type,
       r.session_number,

@@ -26,18 +26,6 @@ export interface ClassRosterEntry {
 }
 
 /**
- * ¿Es este error una violación del índice UNIQUE `constraintName`?
- * postgres.js expone el SQLSTATE en `.code` (23505 = unique_violation) y el
- * nombre del índice en `.constraint_name`. Se chequean ambos para no confundir
- * una unique distinta sobre la misma tabla.
- */
-function isUniqueViolation(err: unknown, constraintName: string): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const e = err as { code?: unknown; constraint_name?: unknown };
-  return e.code === "23505" && e.constraint_name === constraintName;
-}
-
-/**
  * Subscription row enriched with this-month attendance and payment status,
  * used by the admin panel (GET /api/training-subscriptions/admin/list)
  */
@@ -646,6 +634,7 @@ export class TrainingSubscriptionsService {
  * Usage: trainingSubscriptionsService.createSubscription(...) after app startup
  */
 import { trainingSubscriptionsRepository } from "../repositories/trainingSubscriptionsRepository";
+import { isUniqueViolation } from "../lib/db-errors";
 
 export const trainingSubscriptionsService = new TrainingSubscriptionsService(
   trainingSubscriptionsRepository
