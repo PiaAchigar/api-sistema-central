@@ -97,8 +97,8 @@ describe("clases de máquina", () => {
     expect(filas).toHaveLength(2);
     const porMaquina = Object.fromEntries(filas.map((f) => [f.machine_id, f]));
     expect(porMaquina[maqA]!.enrolled_count).toBe(1);
-    expect(porMaquina[maqA]!.anotadas.map((a) => a.nombre)).toEqual([`${QA}_ANA`]);
+    expect(porMaquina[maqA]!.anotadas.map((a: { nombre: string }) => a.nombre)).toEqual([`${QA}_ANA`]);
     expect(porMaquina[maqB]!.enrolled_count).toBe(1);
-    expect(porMaquina[maqB]!.anotadas.map((a) => a.nombre)).toEqual([`${QA}_BEA`]);
+    expect(porMaquina[maqB]!.anotadas.map((a: { nombre: string }) => a.nombre)).toEqual([`${QA}_BEA`]);
   });
 });
