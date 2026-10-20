@@ -90,21 +90,19 @@ export class ActivitySchedulesRepository {
   }
 
   /**
-   * List all active schedules for an activity
+   * List schedules for an activity
    * @param activityId Activity ID
-   * @returns Array of active schedules
+   * @param includeInactive true incluye también los pausados (isActive = false)
+   * @returns Array of schedules
    */
-  async listByActivityId(activityId: string) {
+  async listByActivityId(activityId: string, includeInactive = false) {
     const db = this.getDb();
+    const condiciones = [eq(activitySchedules.activityId, activityId)];
+    if (!includeInactive) condiciones.push(eq(activitySchedules.isActive, true));
     return db
       .select()
       .from(activitySchedules)
-      .where(
-        and(
-          eq(activitySchedules.activityId, activityId),
-          eq(activitySchedules.isActive, true)
-        )
-      );
+      .where(and(...condiciones));
   }
 
   /**

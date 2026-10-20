@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { horarioBody, horarioPatchBody } from "./activitySchedules";
+import { horarioBody, horarioPatchBody, horarioListQuery } from "./activitySchedules";
 
 // Tests de schema (sin base): el body del POST y del PATCH de horarios.
 
@@ -10,6 +10,11 @@ describe("horarioBody (POST de horarios)", () => {
     const r = horarioBody.safeParse({ ...base, capacity: 8 });
     expect(r.success).toBe(true);
     if (r.success) expect(r.data.capacity).toBe(8);
+  });
+
+  it("acepta el POST sin capacity (queda sin límite declarado)", () => {
+    const r = horarioBody.safeParse(base);
+    expect(r.success).toBe(true);
   });
 
   it("acepta capacity null (sin límite declarado)", () => {
@@ -56,6 +61,12 @@ describe("horarioPatchBody (PATCH de horarios, todo opcional)", () => {
     if (r.success) expect(r.data.isActive).toBe(false);
   });
 
+  it("acepta capacity null en el PATCH (quitar el límite)", () => {
+    const r = horarioPatchBody.safeParse({ capacity: null });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.capacity).toBeNull();
+  });
+
   it("rechaza capacity 0 también en el PATCH", () => {
     expect(horarioPatchBody.safeParse({ capacity: 0 }).success).toBe(false);
   });
@@ -73,5 +84,29 @@ describe("horarioPatchBody (PATCH de horarios, todo opcional)", () => {
         "La hora de fin tiene que ser posterior a la de inicio"
       );
     }
+  });
+});
+
+describe("horarioListQuery (GET de horarios)", () => {
+  it("sin includeInactive: solo activos (includeInactive false)", () => {
+    const r = horarioListQuery.safeParse({});
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.includeInactive).toBe(false);
+  });
+
+  it("includeInactive=true incluye pausados", () => {
+    const r = horarioListQuery.safeParse({ includeInactive: "true" });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.includeInactive).toBe(true);
+  });
+
+  it("includeInactive=false equivale al default", () => {
+    const r = horarioListQuery.safeParse({ includeInactive: "false" });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.includeInactive).toBe(false);
+  });
+
+  it("rechaza un valor que no sea true/false", () => {
+    expect(horarioListQuery.safeParse({ includeInactive: "si" }).success).toBe(false);
   });
 });

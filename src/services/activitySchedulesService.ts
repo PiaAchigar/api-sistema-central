@@ -130,16 +130,17 @@ export class ActivitySchedulesService {
   }
 
   /**
-   * List active schedules for an activity
+   * List schedules for an activity (solo activos salvo includeInactive)
    * @param activityId Activity ID
+   * @param includeInactive incluye los pausados
    * @returns Array of schedules
    * @throws notFound if activity not found
    */
-  async listSchedules(activityId: string) {
+  async listSchedules(activityId: string, includeInactive = false) {
     // Verify activity exists
     await activitiesService.getActivity(activityId);
 
-    return this.repository.listByActivityId(activityId);
+    return this.repository.listByActivityId(activityId, includeInactive);
   }
 
   /**
