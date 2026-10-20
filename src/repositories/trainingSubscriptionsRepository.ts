@@ -378,12 +378,19 @@ export class TrainingSubscriptionsRepository {
    *
    * @param activityId Actividad de la clase
    * @param startsAt Timestamp exacto de inicio (ISO)
+   * @param machineId Opcional: sólo los turnos de esa máquina (clase de máquina)
    */
   async getClassRoster(
     activityId: string,
-    startsAt: string
+    startsAt: string,
+    machineId?: string
   ): Promise<ClassRosterRow[]> {
     const db = this.getDb();
+    // Clase de máquina: dos máquinas a la misma hora son dos clases. Sin
+    // machineId no se filtra (comportamiento de siempre).
+    const porMaquina = machineId
+      ? sql`AND ap.machine_id IS NOT DISTINCT FROM ${machineId}::uuid`
+      : sql``;
 
     const rows = await db.execute<ClassRosterRow>(sql`
       SELECT
@@ -412,6 +419,7 @@ export class TrainingSubscriptionsRepository {
       WHERE ap.activity_id = ${activityId}
         AND ap.appointment_start = ${startsAt}
         AND ap.status <> 'cancelled'
+        ${porMaquina}
       ORDER BY ct.name NULLS LAST
     `);
 

@@ -384,8 +384,12 @@ export class TrainingSubscriptionsService {
    * Roster de una clase: quiénes están agendados a (actividad, horario) y si ya
    * se les registró asistencia. Lo consume el modal de la Agenda.
    */
-  async getClassRoster(activityId: string, startsAt: string): Promise<ClassRosterEntry[]> {
-    const rows = await this.repository.getClassRoster(activityId, startsAt);
+  async getClassRoster(
+    activityId: string,
+    startsAt: string,
+    machineId?: string
+  ): Promise<ClassRosterEntry[]> {
+    const rows = await this.repository.getClassRoster(activityId, startsAt, machineId);
     return rows.map((row) => this.toRosterEntry(row));
   }
 
@@ -417,12 +421,14 @@ export class TrainingSubscriptionsService {
    * @param activityId Actividad de la clase
    * @param startsAt Timestamp de inicio de la clase (ISO)
    * @param entries Asistencia por suscripción
+   * @param machineId Opcional: la lista (y la validación) es sólo de esa máquina
    * @returns El roster actualizado
    */
   async markClassAttendance(
     activityId: string,
     startsAt: string,
-    entries: { subscriptionId: string; attended: boolean }[]
+    entries: { subscriptionId: string; attended: boolean }[],
+    machineId?: string
   ): Promise<ClassRosterEntry[]> {
     const start = new Date(startsAt);
     if (Number.isNaN(start.getTime())) {
@@ -434,7 +440,7 @@ export class TrainingSubscriptionsService {
       );
     }
 
-    const roster = await this.repository.getClassRoster(activityId, startsAt);
+    const roster = await this.repository.getClassRoster(activityId, startsAt, machineId);
     if (roster.length === 0) {
       throw notFound("Class");
     }
@@ -456,7 +462,7 @@ export class TrainingSubscriptionsService {
     const classDate = roster[0]!.class_date;
     await this.repository.upsertAttendance(activityId, classDate, entries);
 
-    return this.getClassRoster(activityId, startsAt);
+    return this.getClassRoster(activityId, startsAt, machineId);
   }
 
   /**
