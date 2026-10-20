@@ -150,6 +150,8 @@ export async function asegurarCicloDelMes(
   tx: Tx,
   subscriptionId: string,
   mes: string,
+  /** Si se pasa, el ciclo nuevo arranca con este `amount_due` en vez del `monthly_amount`. */
+  cuota?: number,
 ): Promise<string> {
   const { anio, mes: m } = partesDelMes(mes);
   const [sub] = await tx
@@ -168,7 +170,7 @@ export async function asegurarCicloDelMes(
       billingMonth: mes,
       billingPeriodStart: `${mes}-01`,
       billingPeriodEnd: `${mes}-${String(ultimoDia).padStart(2, "0")}`,
-      amountDue: String(sub.monthlyAmount ?? "0"),
+      amountDue: cuota !== undefined ? cuota.toFixed(2) : String(sub.monthlyAmount ?? "0"),
       isPaid: false,
     })
     .onConflictDoNothing({

@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { createDb } from "../../db/client";
 import { listClassesForRange, type ClassOccurrenceRow } from "../../repositories/classes.repo";
-import { requireAuth } from "../../middleware/auth";
+import { requireAuth, requirePermission } from "../../middleware/auth";
+import { anotarAlMes } from "../../services/anotar.service";
 import { zv } from "../../lib/validator";
 import type { AppBindings, Variables } from "../../env";
 
@@ -122,6 +123,34 @@ classesRouter.get(
     const { date, from, to } = c.req.valid("query");
     const rows = await listClassesForRange(db, date ?? from!, date ?? to!);
     return c.json({ success: true, data: rows.map(toClassOccurrence) });
+  },
+);
+
+const anotarAlMesBody = z.object({
+  activityId: z.string().uuid(),
+  customerId: z.string().uuid(),
+  mes: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "mes must be YYYY-MM"),
+  scheduleIds: z.array(z.string().uuid()).min(1, "Elegí al menos un horario"),
+  cuota: z.number().positive(),
+});
+
+/**
+ * POST /api/agenda/classes/anotar-al-mes
+ *
+ * Anota a una clienta, todo el mes, a los horarios semanales que eligió. Crea
+ * (o reusa) su suscripción, deja la cuota del mes y genera un turno por cada
+ * clase que todavía no pasó. Las clases sin lugar no frenan nada: vuelven en
+ * `sinLugar`. El "ahora" lo toma el servidor: la ruta no lo acepta.
+ */
+classesRouter.post(
+  "/anotar-al-mes",
+  requireAuth,
+  requirePermission("agenda", "edit"),
+  zv("json", anotarAlMesBody),
+  async (c) => {
+    const db = createDb(c.env);
+    const resultado = await anotarAlMes(db, c.req.valid("json"));
+    return c.json({ success: true, data: resultado }, 201);
   },
 );
 
