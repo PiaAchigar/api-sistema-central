@@ -525,8 +525,8 @@ export async function opcionesParaAnotar(
       clases: h.clases,
     }));
 
-  const [plan] = await db
-    .select({ clases: activities.classesPerMonth })
+  const [actividad] = await db
+    .select({ clases: activities.classesPerMonth, precio: activities.monthlyBasePrice })
     .from(activities)
     .where(eq(activities.id, activityId))
     .limit(1);
@@ -535,17 +535,12 @@ export async function opcionesParaAnotar(
   const suya = activa ?? pausada;
   if (suya?.monthlyAmount != null) cuotaSugerida = Number(suya.monthlyAmount);
   else {
-    const [a] = await db
-      .select({ precio: activities.monthlyBasePrice })
-      .from(activities)
-      .where(eq(activities.id, activityId))
-      .limit(1);
-    cuotaSugerida = a?.precio != null ? Number(a.precio) : 0;
+    cuotaSugerida = actividad?.precio != null ? Number(actividad.precio) : 0;
   }
 
   return {
     subscriptionId: suya?.id ?? null,
-    clasesDelPlan: plan?.clases ?? null,
+    clasesDelPlan: actividad?.clases ?? null,
     horarios,
     anotadaAlMes: horariosDelMes.length > 0,
     suscripcion: activa ? "activa" : pausada ? "pausada" : null,

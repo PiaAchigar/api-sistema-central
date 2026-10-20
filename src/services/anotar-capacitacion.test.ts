@@ -168,4 +168,36 @@ describe("opcionesDeCapacitacion", () => {
     await turno(clientaId, sesPasada, "2026-10-20T12:00:00Z");
     expect(await op()).toMatchObject({ encuentrosAnotada: 1, encuentrosQueQuedan: 3 });
   });
+
+  it("escenario del brief: 1 pasado, 1 de baja, 2 futuros activos y anotada en 1", async () => {
+    const [t] = (await db.execute(sql`
+      INSERT INTO training (id, name, max_participants, is_active) VALUES (gen_random_uuid(), ${QA + "_Capa2"}, 10, true) RETURNING id`)) as unknown as { id: string }[];
+    const tid = t!.id;
+    const ses = async (n: number, fecha: string, activo: boolean) => {
+      const [r] = (await db.execute(sql`
+        INSERT INTO training_sessions (training_id, session_number, session_date, start_time, end_time, is_active, notes)
+        VALUES (${tid}, ${n}, ${fecha}::date, '10:00'::time, '12:00'::time, ${activo}, ${QA}) RETURNING id`)) as unknown as { id: string }[];
+      return r!.id;
+    };
+    await ses(1, "2026-10-13", true); // pasado
+    await ses(2, "2026-10-30", false); // de baja
+    const f1 = await ses(3, "2026-10-27", true);
+    await ses(4, "2026-11-03", true);
+    await turno(clientaId, f1, "2026-10-27T13:00:00Z");
+    expect(await opcionesDeCapacitacion(db, { trainingId: tid, customerId: clientaId, ahora: AHORA })).toEqual({
+      compraId: null, debe: 0, encuentrosAnotada: 1, encuentrosQueQuedan: 2,
+    });
+  });
+
+  it("con dos compras vivas devuelve la más reciente y su deuda", async () => {
+    const insertar = async (monto: number, fecha: string) => {
+      const [r] = (await db.execute(sql`
+        INSERT INTO customer_purchase (customer_id, training_id, description, sessions_total, base_amount, discounted_amount, final_amount, purchased_at, notes)
+        VALUES (${clientaId}, ${trainingId}, ${QA}, 1, ${monto}, 0, ${monto}, ${fecha}::timestamptz, ${QA}) RETURNING id`)) as unknown as { id: string }[];
+      return r!.id;
+    };
+    await insertar(100, "2026-09-01T12:00:00Z");
+    const nueva = await insertar(250, "2026-10-01T12:00:00Z");
+    expect(await op()).toMatchObject({ compraId: nueva, debe: 250 });
+  });
 });

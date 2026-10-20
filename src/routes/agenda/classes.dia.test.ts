@@ -32,6 +32,21 @@ vi.mock("../../middleware/auth", async (importOriginal) => {
   };
 });
 
+// Roles de prueba para separar view de edit y agenda de catálogo (la matriz real no tiene un rol así).
+vi.mock("../../lib/permissions", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../lib/permissions")>();
+  const SOLO: Record<string, [string, string]> = {
+    "test-agenda-view": ["agenda", "view"],
+    "test-catalogo-view": ["catalogo", "view"],
+    "test-nada": ["", ""],
+  };
+  return {
+    ...real,
+    can: (role: any, section: any, cap: any) =>
+      role in SOLO ? SOLO[role]![0] === section && SOLO[role]![1] === cap : real.can(role, section, cap),
+  };
+});
+
 const { auth, requireAnyPermission } = await import("../../middleware/auth");
 const { classesRouter } = await import("./classes");
 const { trainingSubscriptionsRouter } = await import("../trainingSubscriptions");
@@ -203,31 +218,38 @@ describe("permisos: agenda·view alcanza para mirar, agenda·edit para anotar y 
     expect(await res.json()).toEqual({ error: "Forbidden" });
   });
 
-  it("agenda·view: 200 en /cuota, /opciones y /opciones-capacitacion", async () => {
-    const cuota = await pedir("GET", `/training-subscriptions/${subId}/cuota?mes=${MES}`, "operator");
-    expect(cuota.status).toBe(200);
-    const opc = await pedir("GET", `/classes/opciones?activityId=${actId}&customerId=${clientaSub}&mes=${MES}`, "operator");
-    expect(opc.status).toBe(200);
-    const cap = await pedir("GET", `/classes/opciones-capacitacion?trainingId=${trainingId}&customerId=${clientaCapa}`, "operator");
+  it("agenda·view sin edit ni catálogo: 200 en /cuota, /opciones y /opciones-capacitacion", async () => {
+    const rol = "test-agenda-view";
+    expect((await pedir("GET", `/training-subscriptions/${subId}/cuota?mes=${MES}`, rol)).status).toBe(200);
+    expect((await pedir("GET", `/classes/opciones?activityId=${actId}&customerId=${clientaSub}&mes=${MES}`, rol)).status).toBe(200);
+    const cap = await pedir("GET", `/classes/opciones-capacitacion?trainingId=${trainingId}&customerId=${clientaCapa}`, rol);
     expect(cap.status).toBe(200);
     expect(((await cap.json()) as any).data).toMatchObject({ compraId, debe: 100 });
   });
 
-  it("sin agenda ni catálogo: 403 en /cuota, /opciones y /opciones-capacitacion", async () => {
-    for (const rol of ["sales", "accountant"]) {
+  it("agenda·view sin edit: 403 al anotar y al cobrar", async () => {
+    const rol = "test-agenda-view";
+    expect((await pedir("POST", "/classes/anotar-al-mes", rol, {})).status).toBe(403);
+    expect((await pedir("POST", "/classes/anotar-a-clase", rol, {})).status).toBe(403);
+    expect((await pedir("POST", "/classes/anotar-a-capacitacion", rol, {})).status).toBe(403);
+    expect((await pedir("POST", `/training-subscriptions/${subId}/cobrar`, rol, {})).status).toBe(403);
+  });
+
+  it("catálogo·view sin agenda: 200 en /cuota (el dashboard la sigue usando)", async () => {
+    expect((await pedir("GET", `/training-subscriptions/${subId}/cuota?mes=${MES}`, "test-catalogo-view")).status).toBe(200);
+  });
+
+  it("ni agenda ni catálogo: 403 en /cuota, /opciones y /opciones-capacitacion", async () => {
+    for (const rol of ["test-nada", "sales", "accountant"]) {
       expect((await pedir("GET", `/training-subscriptions/${subId}/cuota?mes=${MES}`, rol)).status).toBe(403);
       expect((await pedir("GET", `/classes/opciones?activityId=${actId}&customerId=${clientaSub}&mes=${MES}`, rol)).status).toBe(403);
       expect((await pedir("GET", `/classes/opciones-capacitacion?trainingId=${trainingId}&customerId=${clientaCapa}`, rol)).status).toBe(403);
     }
   });
 
-  it("sin agenda·edit: 403 al anotar y al cobrar", async () => {
-    for (const rol of ["sales", "accountant"]) {
-      expect((await pedir("POST", "/classes/anotar-al-mes", rol, {})).status).toBe(403);
-      expect((await pedir("POST", "/classes/anotar-a-clase", rol, {})).status).toBe(403);
-      expect((await pedir("POST", "/classes/anotar-a-capacitacion", rol, {})).status).toBe(403);
-      expect((await pedir("POST", `/training-subscriptions/${subId}/cobrar`, rol, {})).status).toBe(403);
-    }
+  it("rol operator (real): puede todo lo de agenda", async () => {
+    expect((await pedir("GET", `/training-subscriptions/${subId}/cuota?mes=${MES}`, "operator")).status).toBe(200);
+    expect((await pedir("POST", "/classes/anotar-al-mes", "operator", {})).status).toBe(400); // pasa el permiso, falla la validación
   });
 
   it("sin sesión: 401", async () => {
