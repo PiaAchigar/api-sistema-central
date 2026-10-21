@@ -62,6 +62,7 @@ import { localDayRangeUtc, todayLocal } from "../../lib/time";
 import { isForeignKeyViolation } from "../../lib/db-errors";
 import { anclaDeDepilacionOpcional } from "../../repositories/ancla-de-depilacion.repo";
 import type { AppBindings, Variables } from "../../env";
+import { getOfertaDeProveedora } from "../../repositories/oferta-de-proveedora.repo";
 
 /** Roles con permiso de editar catálogo (nivel E de la matriz de reglas_negocio). */
 const STAFF = ["admin", "manager", "operator"] as const;
@@ -556,6 +557,16 @@ providersRouter.get("/:id/services", async (c) => {
       unitPriceCash: r.unitPriceCash != null ? Number(r.unitPriceCash) : null,
     })),
   );
+});
+
+/**
+ * GET /api/agenda/providers/:id/oferta — lo que ofrece: servicios vendibles,
+ * si hace depilación, y las actividades y capacitaciones que dicta. Lo usa el
+ * "Nuevo turno" abierto desde su columna para mostrar sólo lo suyo.
+ */
+providersRouter.get("/:id/oferta", auth, requireAuth, requirePermission("agenda", "view"), async (c) => {
+  const db = createDb(c.env);
+  return c.json(await getOfertaDeProveedora(db, c.req.param("id"), todayLocal()));
 });
 
 // ── Cuentas de MercadoPago de la proveedora (alias / CVU) ───────────────────

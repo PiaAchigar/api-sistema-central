@@ -363,4 +363,12 @@ describe("máquinas de una proveedora (providersRouter)", () => {
     const res = await app.request(`/providers/${provId}/machines`, {}, ENV);
     expect(res.status).toBe(401);
   });
+
+  it("GET /oferta: lo que ofrece (con sesión), 401 sin token", async () => {
+    const h = { Authorization: `Bearer ${TOKEN}` };
+    const res = await app.request(`/providers/${provId}/oferta`, { headers: h }, ENV);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ servicios: [], depilacion: false, actividades: [], capacitaciones: [] });
+    expect((await app.request(`/providers/${provId}/oferta`, {}, ENV)).status).toBe(401);
+  });
 });
