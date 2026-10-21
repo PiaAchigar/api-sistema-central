@@ -509,3 +509,55 @@ describe("/api/class-attendance acepta machineId y providerId en null", () => {
     expect(filas[0]!.attended).toBe(true);
   });
 });
+
+describe("la clase sin proveedora: el roster no mezcla la de al lado", () => {
+  // Máquina con un horario "Sin proveedora" y otro de Lucía a la misma hora:
+  // son dos clases, y Asistencias de la vacía no puede traer a la de Lucía.
+  const pasada = new Date("2026-03-04T15:00:00Z");
+  async function dosClases() {
+    const c1 = await crearClienta("C1");
+    const c2 = await crearClienta("C2");
+    const subs: string[] = [];
+    for (const [cu, pr] of [[c1, null], [c2, lucia]] as const) {
+      const [s] = await db
+        .insert(trainingSubscriptions)
+        .values({ activityId: actId, customerId: cu, subscriptionStartDate: "2026-01-01", status: "active", monthlyAmount: "8000" })
+        .returning({ id: trainingSubscriptions.id });
+      subs.push(s!.id);
+      await db.insert(appointments).values({
+        customerId: cu, activityId: actId, serviceProviderId: pr, status: "scheduled",
+        appointmentStart: pasada, appointmentEnd: new Date(pasada.getTime() + 3600_000), durationMinutes: 60,
+      });
+    }
+    return subs;
+  }
+
+  it("getClassRoster con providerId null trae sólo los turnos sin proveedora", async () => {
+    await dosClases();
+    const vacia = await trainingSubscriptionsService.getClassRoster(actId, pasada.toISOString(), undefined, null);
+    expect(vacia.map((r) => r.customerName)).toEqual([`${QA}_C1`]);
+  });
+
+  it("GET ?providerId=none trae sólo la clase sin proveedora; sin providerId, las dos", async () => {
+    await dosClases();
+    const q = `activityId=${actId}&startsAt=${encodeURIComponent(pasada.toISOString())}`;
+    const vacia = await (await pedir("GET", `/class-attendance?${q}&providerId=none&machineId=none`)).json() as { data: { customerName: string }[] };
+    expect(vacia.data.map((r) => r.customerName)).toEqual([`${QA}_C1`]);
+    const todas = await (await pedir("GET", `/class-attendance?${q}`)).json() as { data: unknown[] };
+    expect(todas.data).toHaveLength(2);
+  });
+
+  it("POST con providerId 'none' rechaza la suscripción de la clase de Lucía", async () => {
+    const subs = await dosClases();
+    const mal = await pedir("POST", "/class-attendance", {
+      activityId: actId, startsAt: pasada.toISOString(), providerId: "none", machineId: "none",
+      entries: [{ subscriptionId: subs[1]!, attended: true }],
+    });
+    expect(mal.status).toBe(400);
+    const bien = await pedir("POST", "/class-attendance", {
+      activityId: actId, startsAt: pasada.toISOString(), providerId: "none", machineId: "none",
+      entries: [{ subscriptionId: subs[0]!, attended: true }],
+    });
+    expect(bien.status).toBe(200);
+  });
+});

@@ -383,12 +383,15 @@ export class TrainingSubscriptionsService {
   /**
    * Roster de una clase: quiénes están agendados a (actividad, horario) y si ya
    * se les registró asistencia. Lo consume el modal de la Agenda.
+   *
+   * machineId/providerId: sin dar (undefined) no se filtra; null es "la clase
+   * no tiene" y trae sólo esos turnos.
    */
   async getClassRoster(
     activityId: string,
     startsAt: string,
-    machineId?: string,
-    providerId?: string
+    machineId?: string | null,
+    providerId?: string | null
   ): Promise<ClassRosterEntry[]> {
     const rows = await this.repository.getClassRoster(activityId, startsAt, machineId, providerId);
     return rows.map((row) => this.toRosterEntry(row));
@@ -422,16 +425,16 @@ export class TrainingSubscriptionsService {
    * @param activityId Actividad de la clase
    * @param startsAt Timestamp de inicio de la clase (ISO)
    * @param entries Asistencia por suscripción
-   * @param machineId Opcional: la lista (y la validación) es sólo de esa máquina
-   * @param providerId Opcional: la lista (y la validación) es sólo de esa proveedora
+   * @param machineId Opcional: la lista (y la validación) es sólo de esa máquina (null: sin máquina)
+   * @param providerId Opcional: la lista (y la validación) es sólo de esa proveedora (null: sin proveedora)
    * @returns El roster actualizado
    */
   async markClassAttendance(
     activityId: string,
     startsAt: string,
     entries: { subscriptionId: string; attended: boolean }[],
-    machineId?: string,
-    providerId?: string
+    machineId?: string | null,
+    providerId?: string | null
   ): Promise<ClassRosterEntry[]> {
     const start = new Date(startsAt);
     if (Number.isNaN(start.getTime())) {

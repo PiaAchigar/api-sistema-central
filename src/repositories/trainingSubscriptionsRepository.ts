@@ -380,23 +380,25 @@ export class TrainingSubscriptionsRepository {
    *
    * @param activityId Actividad de la clase
    * @param startsAt Timestamp exacto de inicio (ISO)
-   * @param machineId Opcional: sólo los turnos de esa máquina (clase de máquina)
+   * @param machineId Opcional: sólo los turnos de esa máquina (clase de máquina);
+   *   null: sólo los que no tienen máquina
    * @param providerId Opcional: sólo los turnos de esa proveedora (dos horarios a la misma hora
-   *   con distinta proveedora son dos clases)
+   *   con distinta proveedora son dos clases); null: sólo los que no tienen proveedora
    */
   async getClassRoster(
     activityId: string,
     startsAt: string,
-    machineId?: string,
-    providerId?: string
+    machineId?: string | null,
+    providerId?: string | null
   ): Promise<ClassRosterRow[]> {
     const db = this.getDb();
     // Clase de máquina: dos máquinas a la misma hora son dos clases. Sin
-    // machineId no se filtra (comportamiento de siempre).
-    const porMaquina = machineId
+    // machineId no se filtra (comportamiento de siempre, el de los fronts
+    // viejos); null es "la clase sin máquina" y filtra por el vacío.
+    const porMaquina = machineId !== undefined
       ? sql`AND ap.machine_id IS NOT DISTINCT FROM ${machineId}::uuid`
       : sql``;
-    const porProveedora = providerId
+    const porProveedora = providerId !== undefined
       ? sql`AND ap.service_provider_id IS NOT DISTINCT FROM ${providerId}::uuid`
       : sql``;
 
