@@ -11,6 +11,7 @@ import {
 } from "../db/schema";
 import { conflict, notFound } from "../lib/errors";
 import { getDeudasDeCompras } from "./compras.repo";
+import { compraSinTerminar } from "../lib/compra-de-capacitacion";
 
 // Encuentros de una capacitación (training_sessions). Las horas son LOCALES
 // del negocio (ART), "HH:MM:SS", igual que activity_schedules.
@@ -249,7 +250,7 @@ export type Inscripta = {
 };
 
 /**
- * Quiénes compraron la capacitación: compras vivas (sin cancelar), por nombre.
+ * Quiénes compraron la capacitación: compras vivas (sin cancelar ni terminadas por una baja), por nombre.
  * Tres consultas fijas sin importar cuántas inscriptas haya: compras, deudas
  * (getDeudasDeCompras) y conteos de turnos por clienta.
  */
@@ -265,7 +266,13 @@ export async function listInscriptas(db: Db, trainingId: string): Promise<Inscri
     .from(customerPurchase)
     .leftJoin(customers, eq(customers.id, customerPurchase.customerId))
     .leftJoin(contacts, eq(contacts.id, customers.contactId))
-    .where(and(eq(customerPurchase.trainingId, trainingId), isNull(customerPurchase.cancelledAt)))
+    .where(
+      and(
+        eq(customerPurchase.trainingId, trainingId),
+        isNull(customerPurchase.cancelledAt),
+        compraSinTerminar(sql`${customerPurchase.id}`),
+      ),
+    )
     .orderBy(asc(contacts.name), asc(customerPurchase.purchasedAt));
   if (compras.length === 0) return [];
 

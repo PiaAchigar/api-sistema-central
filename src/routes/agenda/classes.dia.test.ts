@@ -225,6 +225,9 @@ describe("permisos: agenda·view alcanza para mirar, agenda·edit para anotar y 
     const cap = await pedir("GET", `/classes/opciones-capacitacion?trainingId=${trainingId}&customerId=${clientaCapa}`, rol);
     expect(cap.status).toBe(200);
     expect(((await cap.json()) as any).data).toMatchObject({ compraId, debe: 100 });
+    const baja = await pedir("GET", `/classes/baja-de-capacitacion?trainingId=${trainingId}&customerId=${clientaCapa}`, rol);
+    expect(baja.status).toBe(200);
+    expect(((await baja.json()) as any).data).toMatchObject({ compraId, precio: expect.any(Number) });
   });
 
   it("agenda·view sin edit: 403 al anotar y al cobrar", async () => {
@@ -232,6 +235,7 @@ describe("permisos: agenda·view alcanza para mirar, agenda·edit para anotar y 
     expect((await pedir("POST", "/classes/anotar-al-mes", rol, {})).status).toBe(403);
     expect((await pedir("POST", "/classes/anotar-a-clase", rol, {})).status).toBe(403);
     expect((await pedir("POST", "/classes/anotar-a-capacitacion", rol, {})).status).toBe(403);
+    expect((await pedir("POST", "/classes/baja-de-capacitacion", rol, {})).status).toBe(403);
     expect((await pedir("POST", `/training-subscriptions/${subId}/cobrar`, rol, {})).status).toBe(403);
   });
 
@@ -244,6 +248,7 @@ describe("permisos: agenda·view alcanza para mirar, agenda·edit para anotar y 
       expect((await pedir("GET", `/training-subscriptions/${subId}/cuota?mes=${MES}`, rol)).status).toBe(403);
       expect((await pedir("GET", `/classes/opciones?activityId=${actId}&customerId=${clientaSub}&mes=${MES}`, rol)).status).toBe(403);
       expect((await pedir("GET", `/classes/opciones-capacitacion?trainingId=${trainingId}&customerId=${clientaCapa}`, rol)).status).toBe(403);
+      expect((await pedir("GET", `/classes/baja-de-capacitacion?trainingId=${trainingId}&customerId=${clientaCapa}`, rol)).status).toBe(403);
     }
   });
 

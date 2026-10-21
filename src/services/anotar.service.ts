@@ -16,6 +16,7 @@ import {
 import { asegurarCicloDelMes, bloquearCiclo } from "../repositories/cuotas.repo";
 import { listClassesForRange } from "../repositories/classes.repo";
 import { getDeudasDeCompras } from "../repositories/compras.repo";
+import { compraSinTerminar } from "../lib/compra-de-capacitacion";
 
 export type AnotarAlMesInput = {
   activityId: string;
@@ -609,6 +610,7 @@ export async function anotarACapacitacion(
     const compra = (await t.execute(sql`
       SELECT 1 AS ok FROM customer_purchase
       WHERE customer_id = ${customerId}::uuid AND training_id = ${trainingId}::uuid AND cancelled_at IS NULL
+        AND ${compraSinTerminar(sql`customer_purchase.id`)}
       LIMIT 1
     `)) as unknown as unknown[];
     if (compra.length === 0) throw badRequest("No compró esta capacitación");
@@ -699,7 +701,7 @@ export async function anotarACapacitacion(
 // ---------------------------------------------------------------------------
 
 export type OpcionesDeCapacitacion = {
-  /** Compra viva (no cancelada) más reciente de esa capacitación */
+  /** Compra viva (no cancelada ni terminada por una baja) más reciente de esa capacitación */
   compraId: string | null;
   /** Lo que debe de esa compra (0 sin compra) */
   debe: number;
@@ -719,6 +721,7 @@ export async function opcionesDeCapacitacion(
   const [compra] = (await db.execute(sql`
     SELECT id FROM customer_purchase
     WHERE customer_id = ${customerId}::uuid AND training_id = ${trainingId}::uuid AND cancelled_at IS NULL
+      AND ${compraSinTerminar(sql`customer_purchase.id`)}
     ORDER BY purchased_at DESC NULLS LAST
     LIMIT 1
   `)) as unknown as { id: string }[];

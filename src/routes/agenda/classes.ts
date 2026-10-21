@@ -5,6 +5,7 @@ import { listClassesForRange, type ClassOccurrenceRow } from "../../repositories
 import { requireAuth, requirePermission } from "../../middleware/auth";
 import { anotarACapacitacion, anotarAClase, anotarAlMes, opcionesDeCapacitacion, opcionesParaAnotar } from "../../services/anotar.service";
 import { zv } from "../../lib/validator";
+import { cuentaDeBaja, darDeBajaDeCapacitacion } from "../../services/baja-de-capacitacion.service";
 import type { AppBindings, Variables } from "../../env";
 
 const classesRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
@@ -244,6 +245,47 @@ classesRouter.get(
   async (c) => {
     const db = createDb(c.env);
     return c.json({ success: true, data: await opcionesDeCapacitacion(db, c.req.valid("query")) });
+  },
+);
+
+const bajaQuery = z.object({
+  trainingId: z.string().uuid(),
+  customerId: z.string().uuid(),
+});
+
+/**
+ * GET /api/agenda/classes/baja-de-capacitacion — la cuenta para darla de baja:
+ * si empezó, encuentros que pasaron (vino/faltó), lo que corresponde y lo sugerido.
+ */
+classesRouter.get(
+  "/baja-de-capacitacion",
+  requireAuth,
+  requirePermission("agenda", "view"),
+  zv("query", bajaQuery),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json({ success: true, data: await cuentaDeBaja(db, c.req.valid("query")) });
+  },
+);
+
+/**
+ * POST /api/agenda/classes/baja-de-capacitacion — la saca de toda la capacitación.
+ * Si ya empezó, Laura manda `saldoAFavor` o `debe` (uno de los dos).
+ */
+classesRouter.post(
+  "/baja-de-capacitacion",
+  requireAuth,
+  requirePermission("agenda", "edit"),
+  zv(
+    "json",
+    bajaQuery.extend({
+      saldoAFavor: z.number().min(0).optional(),
+      debe: z.number().min(0).optional(),
+    }),
+  ),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json({ success: true, data: await darDeBajaDeCapacitacion(db, c.req.valid("json")) });
   },
 );
 

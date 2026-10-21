@@ -805,7 +805,13 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
  * Todo en UNA transacción: cancelar sin acreditar dejaría a la clienta sin la
  * plata y sin el pack.
  */
-export async function cancelCompra(db: Db, id: string, motivo?: string | null) {
+export async function cancelCompra(
+  db: Db,
+  id: string,
+  motivo?: string | null,
+  /** Saldo a favor elegido a mano (la baja de una capacitación empezada): reemplaza la cuenta automática, tope lo pagado. */
+  saldoFijo?: number,
+) {
   return db.transaction(async (tx) => {
     const filas = await tx
       .update(customerPurchase)
@@ -823,7 +829,7 @@ export async function cancelCompra(db: Db, id: string, motivo?: string | null) {
     const compra = filas[0];
     if (!compra) return null;
 
-    const acreditado = await acreditarSobranteDeCompra(tx, compra);
+    const acreditado = await acreditarSobranteDeCompra(tx, compra, saldoFijo);
     return { ...compra, saldoAcreditado: acreditado };
   });
 }
@@ -870,6 +876,7 @@ async function serviciosParaSaldo(tx: Db, compraId: string): Promise<ServicioPar
 async function acreditarSobranteDeCompra(
   tx: Db,
   compra: { id: string; customerId: string | null; finalAmount: string | null },
+  saldoFijo?: number,
 ): Promise<number> {
   if (!compra.customerId) return 0;
 
@@ -891,11 +898,15 @@ async function acreditarSobranteDeCompra(
   //   servicios vendido suelto tiene `sessions_total` 1 y dos filas; contar
   //   por repeticiones le acreditaba a la clienta $0 donde le tocaban $106.600
   //   (revisión final de V3b, 2026-09-14).
-  const monto = saldoAAcreditar({
-    pagado: Number(cobrado?.total ?? 0),
-    finalAmount: Number(compra.finalAmount ?? 0),
-    servicios: await serviciosParaSaldo(tx, compra.id),
-  });
+  const pagado = Number(cobrado?.total ?? 0);
+  const monto =
+    saldoFijo !== undefined
+      ? Math.min(Math.max(0, saldoFijo), pagado)
+      : saldoAAcreditar({
+          pagado,
+          finalAmount: Number(compra.finalAmount ?? 0),
+          servicios: await serviciosParaSaldo(tx, compra.id),
+        });
   if (monto <= 0) return 0;
 
   const ahora = new Date();
