@@ -26,6 +26,9 @@ let pilates = "";
 let yoga = "";
 let capaFutura = "";
 let capaPasada = "";
+let comboMixto = ""; // un servicio suyo y uno ajeno
+let comboAjeno = "";
+let packDelMixto = "";
 
 const uno = async (q: ReturnType<typeof sql>) => ((await db.execute(q)) as unknown as { id: string }[])[0]!.id;
 
@@ -35,6 +38,8 @@ async function limpiar() {
   await db.execute(sql`DELETE FROM activities WHERE name LIKE ${QA + "%"}`);
   await db.execute(sql`DELETE FROM training_sessions WHERE training_id IN (SELECT id FROM training WHERE name LIKE ${QA + "%"})`);
   await db.execute(sql`DELETE FROM training WHERE name LIKE ${QA + "%"}`);
+  await db.execute(sql`DELETE FROM combos WHERE name LIKE ${QA + "_Pack%"}`);
+  await db.execute(sql`DELETE FROM combos WHERE name LIKE ${QA + "%"}`);
   await db.execute(sql`DELETE FROM service WHERE name LIKE ${QA + "%"}`);
   await db.execute(sql`DELETE FROM service_providers WHERE full_name LIKE ${QA + "%"}`);
 }
@@ -79,6 +84,21 @@ beforeAll(async () => {
     return t;
   };
   capaFutura = await capacitacion("Instructorado", "2026-11-05");
+  const categoria = await uno(sql`SELECT id FROM categories LIMIT 1`);
+  const combo = async (nombre: string, servicios: string[]) => {
+    const c = await uno(sql`
+      INSERT INTO combos (id, name, price_type, fixed_price, validity_months, area_category_id)
+      VALUES (gen_random_uuid(), ${`${QA}_${nombre}`}, 'fixed', 1000, 3, ${categoria}) RETURNING id`);
+    for (const sv of servicios) {
+      await db.execute(sql`INSERT INTO combo_service (combo_id, service_id, sessions_included) VALUES (${c}, ${sv}, 1)`);
+    }
+    return c;
+  };
+  comboMixto = await combo("Mixto", [suyo, ajeno]);
+  comboAjeno = await combo("Ajeno", [ajeno]);
+  packDelMixto = await uno(sql`
+    INSERT INTO combos (id, name, price_type, fixed_price, validity_months, area_category_id, kind, pack_of_combo_id, pack_sessions)
+    VALUES (gen_random_uuid(), ${QA + "_Pack"}, 'fixed', 1000, 3, ${categoria}, 'pack', ${comboMixto}, 3) RETURNING id`);
   capaPasada = await capacitacion("Vieja", "2026-09-01");
 });
 
@@ -105,6 +125,13 @@ describe("getOfertaDeProveedora", () => {
     const o = await getOfertaDeProveedora(db, ana, HOY);
     expect(o.capacitaciones.map((c) => c.id)).toContain(capaFutura);
     expect(o.capacitaciones.map((c) => c.id)).not.toContain(capaPasada);
+  });
+
+  it("combos y packs: los que incluyen al menos un servicio suyo (el pack, por su combo)", async () => {
+    const o = await getOfertaDeProveedora(db, ana, HOY);
+    expect(o.combos).toContain(comboMixto);
+    expect(o.combos).toContain(packDelMixto);
+    expect(o.combos).not.toContain(comboAjeno);
   });
 
   it("depilación: sí sólo si está habilitada en el servicio ancla", async () => {

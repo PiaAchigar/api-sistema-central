@@ -8,6 +8,9 @@ import { listServicesForProvider } from "./services.repo";
  * columna muestre sólo lo suyo (pedido de Pia, 2026-10-22).
  *
  * - `servicios`: los vendibles que tiene habilitados (`listServicesForProvider`).
+ * - `combos`: combos y packs activos con al menos un servicio suyo (un pack
+ *   de combo, por los servicios de su combo). Alcanza con uno: desde su hueco
+ *   se agenda lo que ella hace y el resto queda "A agendar".
  * - `depilacion`: si está habilitada en el servicio ancla, que no es vendible
  *   y por eso no sale en `servicios`.
  * - `actividades`: las que dicta en algún horario activo y vigente (la
@@ -16,6 +19,7 @@ import { listServicesForProvider } from "./services.repo";
  */
 export type OfertaDeProveedora = {
   servicios: string[];
+  combos: string[];
   depilacion: boolean;
   actividades: { id: string; nombre: string }[];
   capacitaciones: { id: string; nombre: string }[];
@@ -23,7 +27,7 @@ export type OfertaDeProveedora = {
 
 /** `hoy` es el día local (ART) en YYYY-MM-DD. */
 export async function getOfertaDeProveedora(db: Db, providerId: string, hoy: string): Promise<OfertaDeProveedora> {
-  const [servicios, ancla, actividades, capacitaciones] = await Promise.all([
+  const [servicios, ancla, actividades, capacitaciones, combos] = await Promise.all([
     listServicesForProvider(db, providerId),
     anclaDeDepilacionOpcional(db),
     db.execute(sql`
@@ -40,6 +44,16 @@ export async function getOfertaDeProveedora(db: Db, providerId: string, hoy: str
         AND ts.session_date >= ${hoy}::date
       ORDER BY t.name
     `),
+    db.execute(sql`
+      SELECT c.id FROM combos c
+      WHERE c.is_active AND EXISTS (
+        SELECT 1 FROM combo_service cs
+        JOIN service_provider_service sps ON sps.service_id = cs.service_id
+        JOIN service s ON s.id = cs.service_id
+        WHERE cs.combo_id = coalesce(c.pack_of_combo_id, c.id)
+          AND sps.service_provider_id = ${providerId}::uuid AND sps.is_active AND s.is_active
+      )
+    `),
   ]);
 
   let depilacion = false;
@@ -54,6 +68,7 @@ export async function getOfertaDeProveedora(db: Db, providerId: string, hoy: str
 
   return {
     servicios: servicios.map((s) => s.id),
+    combos: (combos as unknown as { id: string }[]).map((c) => c.id),
     depilacion,
     actividades: actividades as unknown as { id: string; nombre: string }[],
     capacitaciones: capacitaciones as unknown as { id: string; nombre: string }[],
