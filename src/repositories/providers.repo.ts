@@ -2,6 +2,7 @@ import { and, asc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { type AgreementInput, diffAgreements } from "../lib/agreements";
 import {
+  activitySchedules,
   appointments,
   mercadopagoAccounts,
   openHours,
@@ -393,7 +394,7 @@ export async function setServiceAgreements(
  *  máquinas certificadas, disponibilidad, cuentas MP, promo-service) son datos
  *  de configuración que sí se borran en cascada. */
 export async function getProviderDeleteImpact(db: Db, id: string) {
-  const [appts, pays, agreements, mach, avail, saturdays, exceptions, mp, promos] =
+  const [appts, pays, agreements, mach, avail, saturdays, exceptions, mp, promos, classScheds] =
     await Promise.all([
       db.select({ id: appointments.id }).from(appointments).where(eq(appointments.serviceProviderId, id)),
       db.select({ id: payments.id }).from(payments).where(eq(payments.receivedByProviderId, id)),
@@ -425,6 +426,11 @@ export async function getProviderDeleteImpact(db: Db, id: string) {
         .select({ id: promotionService.id })
         .from(promotionService)
         .where(eq(promotionService.serviceProviderId, id)),
+      // Horarios de clases activos que la tienen asignada: al borrarla quedan sin proveedora (FK SET NULL).
+      db
+        .select({ id: activitySchedules.id })
+        .from(activitySchedules)
+        .where(and(eq(activitySchedules.serviceProviderId, id), eq(activitySchedules.isActive, true))),
     ]);
 
   const parts: string[] = [];
@@ -445,6 +451,7 @@ export async function getProviderDeleteImpact(db: Db, id: string) {
       exceptions: exceptions.length,
       mpAccounts: mp.length,
       promotions: promos.length,
+      classSchedules: classScheds.length,
     },
   };
 }

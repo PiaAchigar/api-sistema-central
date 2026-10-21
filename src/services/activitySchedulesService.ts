@@ -225,7 +225,11 @@ export class ActivitySchedulesService {
       }
     }
 
-    await this.validarProveedora(data.serviceProviderId);
+    // Sólo se valida si CAMBIA: un horario cuya proveedora fue archivada tiene que
+    // poder seguir editándose (cupo, pausa) mandando la misma serviceProviderId.
+    if (data.serviceProviderId !== existing.serviceProviderId) {
+      await this.validarProveedora(data.serviceProviderId);
+    }
 
     // Update via repository
     const updated = await this.repository.update(id, data);

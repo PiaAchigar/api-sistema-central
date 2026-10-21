@@ -3,11 +3,12 @@ import type { Db } from "../db/client";
 import { badRequest, conflict, notFound } from "../lib/errors";
 import { isUniqueViolation } from "../lib/db-errors";
 import { mesAnterior, utcToLocalDateString } from "../lib/time";
-import { formatearHorarios } from "../lib/horarios";
+import { formatearHorarios, horarioAmbiguoSql } from "../lib/horarios";
 import {
   activities,
   activitySchedules,
   appointments,
+  serviceProviders,
   subscriptionBillingCycles,
   subscriptionMonthSchedules,
   trainingSubscriptions,
@@ -360,10 +361,16 @@ async function tuvoPrueba(t: Db, customerId: string, activityId: string): Promis
 /** El ciclo del mes de su suscripción ACTIVA tiene al menos un horario elegido. */
 async function horariosElegidosDelMes(t: Db, subscriptionId: string, mes: string) {
   return t
-    .select({ dayOfWeek: activitySchedules.dayOfWeek, startTime: activitySchedules.startTime })
+    .select({
+      dayOfWeek: activitySchedules.dayOfWeek,
+      startTime: activitySchedules.startTime,
+      proveedora: serviceProviders.fullName,
+      ambiguo: sql<boolean>`${sql.raw(horarioAmbiguoSql("activity_schedules"))}`,
+    })
     .from(subscriptionBillingCycles)
     .innerJoin(subscriptionMonthSchedules, eq(subscriptionMonthSchedules.billingCycleId, subscriptionBillingCycles.id))
     .innerJoin(activitySchedules, eq(activitySchedules.id, subscriptionMonthSchedules.activityScheduleId))
+    .leftJoin(serviceProviders, eq(serviceProviders.id, activitySchedules.serviceProviderId))
     .where(and(eq(subscriptionBillingCycles.trainingSubscriptionId, subscriptionId), eq(subscriptionBillingCycles.billingMonth, mes)));
 }
 
@@ -478,6 +485,8 @@ export type HorarioParaAnotar = {
   /** "Lun 10:00" */
   etiqueta: string;
   maquina: string | null;
+  /** Nombre de la proveedora del horario (null si no tiene) */
+  proveedora: string | null;
   /** Cuántas clases de este horario quedan en el mes y todavía no pasaron */
   clases: number;
 };
@@ -515,12 +524,13 @@ export async function opcionesParaAnotar(
 
   // Horarios del mes: las mismas ocurrencias que usa `anotarAlMes` para crear turnos (las que no pasaron).
   const ocurrencias = await clasesDeActividadDelMes(db, activityId, mes);
-  const porHorario = new Map<string, { dow: number; hora: string; maquina: string | null; clases: number }>();
+  const porHorario = new Map<string, { dow: number; hora: string; maquina: string | null; proveedora: string | null; clases: number }>();
   for (const c of ocurrencias) {
     const h = porHorario.get(c.schedule_id!) ?? {
       dow: new Date(`${c.the_date}T00:00:00Z`).getUTCDay(),
       hora: c.start_time,
       maquina: c.machine_name,
+      proveedora: c.provider_name,
       clases: 0,
     };
     if (new Date(c.starts_at_utc).getTime() > ahora.getTime()) h.clases++;
@@ -532,6 +542,7 @@ export async function opcionesParaAnotar(
       scheduleId,
       etiqueta: formatearHorarios([{ dayOfWeek: h.dow, startTime: h.hora }])[0]!,
       maquina: h.maquina,
+      proveedora: h.proveedora,
       clases: h.clases,
     }));
 

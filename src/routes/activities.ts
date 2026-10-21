@@ -78,7 +78,7 @@ activitiesRouter.get("/activities/:id", requireAuth, requirePermission("catalogo
  *   name: string
  *   description?: string | null
  *   activityType: "class" | "machine"
- *   serviceProviderId?: string | null (required for 'class')
+ *   serviceProviderId?: string | null (opcional, ya no se exige para 'class': la proveedora va en cada horario, activity_schedules.service_provider_id)
  *   classesPerMonth: number (> 0 for 'class', = 0 for 'machine')
  *   monthlyBasePrice: number | string
  * }

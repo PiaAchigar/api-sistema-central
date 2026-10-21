@@ -1,7 +1,7 @@
 import { eq, and, gte, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { todayLocal } from "../lib/time";
-import { formatearHorarios } from "../lib/horarios";
+import { formatearHorarios, horarioAmbiguoSql } from "../lib/horarios";
 import {
   trainingSubscriptions,
   activityAttendance,
@@ -332,19 +332,21 @@ export class TrainingSubscriptionsRepository {
 
     // Los horarios del mes actual (ART) de TODAS las filas en una sola consulta, sin N+1.
     const ids = filas.map((f) => f.id);
-    const porSuscripcion = new Map<string, Array<{ dayOfWeek: number | null; startTime: string | null }>>();
+    const porSuscripcion = new Map<string, Array<{ dayOfWeek: number | null; startTime: string | null; proveedora: string | null; ambiguo: boolean }>>();
     if (ids.length > 0) {
-      const horarios = await db.execute<{ subscription_id: string; day_of_week: number | null; start_time: string | null }>(sql`
-        SELECT sbc.training_subscription_id AS subscription_id, asch.day_of_week, asch.start_time
+      const horarios = await db.execute<{ subscription_id: string; day_of_week: number | null; start_time: string | null; proveedora: string | null; ambiguo: boolean }>(sql`
+        SELECT sbc.training_subscription_id AS subscription_id, asch.day_of_week, asch.start_time,
+               sp.full_name AS proveedora, ${sql.raw(horarioAmbiguoSql("asch"))} AS ambiguo
         FROM subscription_billing_cycles sbc
         JOIN subscription_month_schedules sms ON sms.billing_cycle_id = sbc.id
         JOIN activity_schedules asch ON asch.id = sms.activity_schedule_id
+        LEFT JOIN service_providers sp ON sp.id = asch.service_provider_id
         WHERE sbc.billing_month = to_char((now() AT TIME ZONE 'America/Argentina/Buenos_Aires'), 'YYYY-MM')
           AND sbc.training_subscription_id IN (${sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)})
       `);
-      for (const h of horarios as unknown as Array<{ subscription_id: string; day_of_week: number | null; start_time: string | null }>) {
+      for (const h of horarios as unknown as Array<{ subscription_id: string; day_of_week: number | null; start_time: string | null; proveedora: string | null; ambiguo: boolean }>) {
         const lista = porSuscripcion.get(h.subscription_id) ?? [];
-        lista.push({ dayOfWeek: h.day_of_week, startTime: h.start_time });
+        lista.push({ dayOfWeek: h.day_of_week, startTime: h.start_time, proveedora: h.proveedora, ambiguo: h.ambiguo });
         porSuscripcion.set(h.subscription_id, lista);
       }
     }

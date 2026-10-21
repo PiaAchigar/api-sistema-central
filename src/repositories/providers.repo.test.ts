@@ -3,9 +3,9 @@ import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { and, eq, inArray, like } from "drizzle-orm";
 import * as schema from "../db/schema";
-import { service, serviceProviders, serviceProviderService } from "../db/schema";
+import { activities, activitySchedules, service, serviceProviders, serviceProviderService } from "../db/schema";
 import type { Db } from "../db/client";
-import { listAgreementRowsForService, setServiceAgreements } from "./providers.repo";
+import { getProviderDeleteImpact, listAgreementRowsForService, setServiceAgreements } from "./providers.repo";
 
 // Integración real contra Postgres local: lo que se prueba acá es la
 // ATOMICIDAD de dos escrituras, y eso no existe sin una base de verdad.
@@ -109,5 +109,28 @@ describe("setServiceAgreements — o pasan las dos escrituras o no pasa ninguna"
       );
     expect(todas).toHaveLength(2);
     expect(todas.filter((t) => t.isActive)).toHaveLength(1);
+  });
+});
+
+describe("getProviderDeleteImpact cuenta los horarios de clases activos", () => {
+  it("cascade.classSchedules cuenta sólo los horarios activos de la proveedora", async () => {
+    const [a] = await db
+      .insert(activities)
+      .values({ name: `${QA}ACT`, activityType: "class", classesPerMonth: 4, monthlyBasePrice: "1000", isActive: true })
+      .returning({ id: activities.id });
+    try {
+      const base = { activityId: a!.id, endTime: "11:00:00" };
+      await db.insert(activitySchedules).values([
+        { ...base, dayOfWeek: 1, startTime: "10:00:00", serviceProviderId: provId, isActive: true },
+        { ...base, dayOfWeek: 2, startTime: "10:00:00", serviceProviderId: provId, isActive: true },
+        { ...base, dayOfWeek: 3, startTime: "10:00:00", serviceProviderId: provId, isActive: false },
+      ]);
+      const impacto = await getProviderDeleteImpact(db, provId);
+      expect(impacto.cascade.classSchedules).toBe(2);
+      expect(impacto.cascade.agreements).toBeGreaterThanOrEqual(0); // los campos viejos siguen
+    } finally {
+      await db.delete(activitySchedules).where(eq(activitySchedules.activityId, a!.id));
+      await db.delete(activities).where(eq(activities.id, a!.id));
+    }
   });
 });

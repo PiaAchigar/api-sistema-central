@@ -26,7 +26,7 @@ import { trainingSubscriptionsService } from "./trainingSubscriptionsService";
 import { activitySchedulesRouter } from "../routes/activitySchedules";
 import { trainingSubscriptionsRouter } from "../routes/trainingSubscriptions";
 import { listClassesForRange } from "../repositories/classes.repo";
-import { anotarAClase, anotarAlMes } from "./anotar.service";
+import { anotarAClase, anotarAlMes, opcionesParaAnotar } from "./anotar.service";
 
 // La proveedora va en cada horario: dos horarios a la misma hora con distinta
 // proveedora son dos clases (cupo, anotadas y asistencias propios).
@@ -253,6 +253,19 @@ describe("dos horarios de Pilates el miércoles a las 12 (Lucía y Ana, cupo 1 c
     expect((await turnos(c2)).every((t) => t.serviceProviderId === ana)).toBe(true);
   });
 
+  it("opcionesParaAnotar: cada horario trae su proveedora y horariosDelMes las distingue", async () => {
+    const c1 = await crearClienta("C1");
+    await alMes(c1, [schLucia, schLun]);
+    const o = await opcionesParaAnotar(db, { activityId: actId, customerId: c1, mes: MES, ahora: AHORA });
+    const mie = o.horarios.filter((h) => h.etiqueta === "Mié 12:00");
+    expect(mie).toHaveLength(2);
+    expect(mie.find((h) => h.scheduleId === schLucia)!.proveedora).toBe(`${QA}_Lucia`);
+    expect(mie.find((h) => h.scheduleId === schAna)!.proveedora).toBe(`${QA}_Ana`);
+    expect(o.horarios.find((h) => h.scheduleId === schLun)!.proveedora).toBe(`${QA}_Lucia`);
+    // El lunes no se repite: su etiqueta queda como siempre. El miércoles se distingue.
+    expect(o.horariosDelMes).toEqual([`Lun 09:00`, `Mié 12:00 · ${QA}_Lucia`]);
+  });
+
   it("el roster con providerId=Lucía trae sólo a la de Lucía", async () => {
     const c1 = await crearClienta("C1");
     const c2 = await crearClienta("C2");
@@ -451,6 +464,21 @@ describe("PATCH: cambio de proveedora de un horario", () => {
     const b = await pedir("PATCH", `/activities/schedules/${sch}`, { serviceProviderId: fantasma });
     expect(b.status).toBe(400);
     expect((await json(b)).error).toBe("Esa proveedora no existe");
+  });
+
+  it("con la proveedora archivada se puede editar el cupo mandando la misma serviceProviderId; cambiar A una archivada da 400", async () => {
+    const [arch] = await db
+      .insert(serviceProviders)
+      .values({ fullName: `${QA}_Archivada` })
+      .returning({ id: serviceProviders.id });
+    const archSch = await horario(actId, 5, "08:00:00", "09:00:00", { serviceProviderId: arch!.id, capacity: 2 });
+    await db.update(serviceProviders).set({ status: "inactive" }).where(eq(serviceProviders.id, arch!.id));
+    const ok = await pedir("PATCH", `/activities/schedules/${archSch}`, { capacity: 5, serviceProviderId: arch!.id });
+    expect(ok.status).toBe(200);
+    expect((await json(ok)).data.capacity).toBe(5);
+    const mal = await pedir("PATCH", `/activities/schedules/${sch}`, { serviceProviderId: arch!.id });
+    expect(mal.status).toBe(400);
+    expect((await json(mal)).error).toBe("Esa proveedora no existe");
   });
 
   it("dejar una Clase sin proveedora: 400", async () => {

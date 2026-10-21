@@ -353,8 +353,8 @@ describe("opcionesParaAnotar: horarios del mes", () => {
     const r = await opcionesParaAnotar(db, { activityId: id, customerId: clientaId, mes: MES, ahora: AHORA });
     expect(r.clasesDelPlan).toBe(8);
     expect(r.horarios).toEqual([
-      { scheduleId: lun, etiqueta: "Lun 09:00", maquina: null, clases: 1 },
-      { scheduleId: mie, etiqueta: "Mié 18:30", maquina: `${QA}_MaqA`, clases: 2 },
+      { scheduleId: lun, etiqueta: "Lun 09:00", maquina: null, proveedora: null, clases: 1 },
+      { scheduleId: mie, etiqueta: "Mié 18:30", maquina: `${QA}_MaqA`, proveedora: null, clases: 2 },
     ]);
   });
 });
