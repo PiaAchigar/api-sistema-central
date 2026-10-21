@@ -70,6 +70,12 @@ export class ActivitySchedulesService {
     }
   }
 
+  /** Una proveedora que no existe (o archivada) es un 400, no un error de clave foránea. */
+  private async validarProveedora(id: string | null | undefined): Promise<void> {
+    if (!id) return;
+    if (!(await this.repository.providerIsUsable(id))) throw badRequest("Esa proveedora no existe");
+  }
+
   /**
    * Create a new activity schedule with validation
    * @param data Schedule data to create
@@ -111,6 +117,8 @@ export class ActivitySchedulesService {
     if (activity.activityType === "class" && !data.serviceProviderId) {
       throw badRequest("Elegí la proveedora del horario");
     }
+
+    await this.validarProveedora(data.serviceProviderId);
 
     // Create via repository
     const created = await this.repository.create(data);
@@ -216,6 +224,8 @@ export class ActivitySchedulesService {
         throw badRequest("Elegí la proveedora del horario");
       }
     }
+
+    await this.validarProveedora(data.serviceProviderId);
 
     // Update via repository
     const updated = await this.repository.update(id, data);

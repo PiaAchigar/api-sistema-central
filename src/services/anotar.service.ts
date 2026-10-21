@@ -49,7 +49,6 @@ async function bloquearActividad(t: Db, activityId: string) {
     .select({
       name: activities.name,
       classesPerMonth: activities.classesPerMonth,
-      providerId: activities.serviceProviderId,
     })
     .from(activities)
     .where(eq(activities.id, activityId))

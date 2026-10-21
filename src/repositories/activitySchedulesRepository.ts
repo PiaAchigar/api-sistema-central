@@ -1,7 +1,41 @@
 import { eq, and, getTableColumns, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { activities, activitySchedules, serviceProviders } from "../db/schema/agenda";
-import { conflict, notFound } from "../lib/errors";
+import { badRequest, conflict, notFound } from "../lib/errors";
+
+/**
+ * Dos horarios activos de la misma actividad con el mismo día, hora de inicio, máquina y
+ * proveedora serían la misma clase dos veces. Se ignora la vigencia: rechazar de más es lo seguro.
+ */
+async function rechazarHorarioDuplicado(
+  t: Db,
+  activityId: string,
+  excluirId: string | null,
+  dia: number | null,
+  inicio: string | null,
+  maquina: string | null,
+  proveedora: string | null,
+) {
+  const [choque] = (await t.execute(sql`
+    SELECT 1 AS x FROM activity_schedules
+    WHERE activity_id = ${activityId}::uuid
+      AND (${excluirId}::uuid IS NULL OR id <> ${excluirId}::uuid)
+      AND is_active = true
+      AND day_of_week = ${dia}
+      AND start_time = ${inicio}::time
+      AND machine_id IS NOT DISTINCT FROM ${maquina}::uuid
+      AND service_provider_id IS NOT DISTINCT FROM ${proveedora}::uuid
+    LIMIT 1
+  `)) as unknown as { x: number }[];
+  if (choque) {
+    const [a] = await t.select({ name: activities.name }).from(activities).where(eq(activities.id, activityId)).limit(1);
+    throw conflict(`Esa proveedora ya tiene un horario de ${a?.name ?? "la actividad"} a esa hora`);
+  }
+}
+
+async function bloquearActividad(t: Db, activityId: string) {
+  await t.select({ id: activities.id }).from(activities).where(eq(activities.id, activityId)).for("update").limit(1);
+}
 
 /**
  * ActivitySchedulesRepository — Data access layer for activity schedules
@@ -30,6 +64,16 @@ export class ActivitySchedulesRepository {
     return this.db;
   }
 
+  /** La proveedora existe y no está archivada. */
+  async providerIsUsable(id: string): Promise<boolean> {
+    const [p] = await this.getDb()
+      .select({ status: serviceProviders.status })
+      .from(serviceProviders)
+      .where(eq(serviceProviders.id, id))
+      .limit(1);
+    return Boolean(p) && p!.status !== "inactive";
+  }
+
   /**
    * Create a new activity schedule
    * @param data Schedule data to insert
@@ -51,7 +95,13 @@ export class ActivitySchedulesRepository {
     // .toISOString() al mapear, así que un string ISO revienta con
     // "value.toISOString is not a function". Tiene que ser un Date.
     const now = new Date();
-    const rows = await db
+    return db.transaction(async (tx) => {
+    const t = tx as unknown as Db;
+    await bloquearActividad(t, data.activityId);
+    await rechazarHorarioDuplicado(
+      t, data.activityId, null, data.dayOfWeek, data.startTime, data.machineId || null, data.serviceProviderId ?? null,
+    );
+    const rows = await t
       .insert(activitySchedules)
       .values({
         id: crypto.randomUUID(),
@@ -75,6 +125,7 @@ export class ActivitySchedulesRepository {
       .returning();
 
     return rows[0] || null;
+    });
   }
 
   /**
@@ -144,17 +195,7 @@ export class ActivitySchedulesRepository {
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
     updateData.updatedAt = new Date();
 
-    if (data.serviceProviderId === undefined) {
-      const rows = await db
-        .update(activitySchedules)
-        .set(updateData)
-        .where(eq(activitySchedules.id, id))
-        .returning();
-      return rows[0] || null;
-    }
-
-    // Cambio de proveedora: los turnos futuros del horario la siguen. Todo en una
-    // transacción que toma la actividad FOR UPDATE primero (igual que las anotaciones).
+    // Todo en una transacción que toma la actividad FOR UPDATE primero (igual que las anotaciones).
     return db.transaction(async (tx) => {
       const t = tx as unknown as Db;
       const [previo] = await t
@@ -163,44 +204,32 @@ export class ActivitySchedulesRepository {
         .where(eq(activitySchedules.id, id))
         .limit(1);
       if (!previo) return null;
-
-      const [actividad] = await t
-        .select({ name: activities.name })
-        .from(activities)
-        .where(eq(activities.id, previo.activityId as string))
-        .for("update")
-        .limit(1);
+      await bloquearActividad(t, previo.activityId as string);
 
       // Con la actividad bloqueada se lee el horario tal como está ahora.
       const [actual] = await t.select().from(activitySchedules).where(eq(activitySchedules.id, id)).limit(1);
       if (!actual) throw notFound("Activity schedule");
 
-      const nueva = data.serviceProviderId ?? null;
-      if (nueva !== (actual.serviceProviderId ?? null)) {
-        // Cómo va a quedar el horario (día, hora y máquina nuevos si también se cambian).
-        const dia = data.dayOfWeek ?? actual.dayOfWeek;
-        const inicio = data.startTime ?? actual.startTime;
-        const maquina = data.machineId !== undefined ? data.machineId : actual.machineId;
+      const nueva = data.serviceProviderId !== undefined ? data.serviceProviderId : actual.serviceProviderId ?? null;
+      const cambiaProveedora = nueva !== (actual.serviceProviderId ?? null);
+      const dia = data.dayOfWeek ?? actual.dayOfWeek;
+      const inicio = data.startTime ?? actual.startTime;
+      const maquina = data.machineId !== undefined ? data.machineId : actual.machineId;
+      const cambiaHorario =
+        dia !== actual.dayOfWeek || inicio !== actual.startTime || (maquina ?? null) !== (actual.machineId ?? null);
+      const quedaActivo = data.isActive ?? actual.isActive;
+      const reactiva = data.isActive === true && actual.isActive !== true;
 
-        if (nueva !== null) {
-          const [choque] = (await t.execute(sql`
-            SELECT 1 AS x FROM activity_schedules
-            WHERE activity_id = ${actual.activityId}::uuid
-              AND id <> ${id}::uuid
-              AND is_active = true
-              AND day_of_week = ${dia}
-              AND start_time = ${inicio}::time
-              AND machine_id IS NOT DISTINCT FROM ${maquina}::uuid
-              AND service_provider_id = ${nueva}::uuid
-            LIMIT 1
-          `)) as unknown as { x: number }[];
-          if (choque) {
-            throw conflict(`Esa proveedora ya tiene un horario de ${actividad?.name ?? "la actividad"} a esa hora`);
-          }
-        }
+      if (cambiaProveedora && cambiaHorario) {
+        throw badRequest("Cambiá la proveedora y el día u horario por separado");
+      }
+      if (quedaActivo && (cambiaProveedora || cambiaHorario || reactiva)) {
+        await rechazarHorarioDuplicado(t, actual.activityId as string, id, dia, inicio, maquina ?? null, nueva);
+      }
 
-        // Turnos futuros de ESTE horario (por sus valores de antes del cambio): misma actividad,
-        // mismo día y hora en ART, misma máquina, la proveedora anterior y fecha dentro de la vigencia.
+      if (cambiaProveedora) {
+        // Turnos futuros de ESTE horario: misma actividad, mismo día y hora en ART, misma máquina,
+        // la proveedora anterior y fecha dentro de la vigencia.
         await t.execute(sql`
           UPDATE appointments
           SET service_provider_id = ${nueva}::uuid, updated_at = now()

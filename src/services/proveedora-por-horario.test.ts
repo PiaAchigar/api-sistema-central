@@ -409,6 +409,50 @@ describe("PATCH: cambio de proveedora de un horario", () => {
     expect(s!.serviceProviderId).toBe(lucia);
   });
 
+  it("cambiar la proveedora y el horario a la vez: 400 y no cambia nada", async () => {
+    const c1 = await crearClienta("C1");
+    const futuro = await turno(c1, new Date(FUTURO.getTime() + 6 * 3600_000));
+    for (const extra of [{ dayOfWeek: 4 }, { startTime: "19:00:00", endTime: "20:00:00" }]) {
+      const r = await pedir("PATCH", `/activities/schedules/${sch}`, { serviceProviderId: ana, ...extra });
+      expect(r.status).toBe(400);
+      expect((await json(r)).error).toBe("Cambiá la proveedora y el día u horario por separado");
+    }
+    const [s] = await db.select().from(activitySchedules).where(eq(activitySchedules.id, sch));
+    expect(s!.serviceProviderId).toBe(lucia);
+    expect(s!.dayOfWeek).toBe(3);
+    expect(s!.startTime).toBe("18:00:00");
+    expect(await proveedoraDe(futuro)).toBe(lucia);
+  });
+
+  it("alta duplicada (mismo día, hora, máquina y proveedora): 409", async () => {
+    const r = await pedir("POST", `/activities/${actId}/schedules`, {
+      dayOfWeek: 3, startTime: "12:00:00", endTime: "13:00:00", serviceProviderId: lucia,
+    });
+    expect(r.status).toBe(409);
+    expect((await json(r)).error).toBe(`Esa proveedora ya tiene un horario de ${QA}_Pilates a esa hora`);
+  });
+
+  it("mover un horario al lugar de otro de la misma proveedora: 409; a un lugar libre: 200", async () => {
+    const mover = await horario(actId, 3, "19:00:00", "20:00:00", { serviceProviderId: lucia });
+    const r = await pedir("PATCH", `/activities/schedules/${mover}`, { startTime: "12:00:00", endTime: "13:00:00" });
+    expect(r.status).toBe(409);
+    expect((await json(r)).error).toBe(`Esa proveedora ya tiene un horario de ${QA}_Pilates a esa hora`);
+    const ok = await pedir("PATCH", `/activities/schedules/${mover}`, { startTime: "19:30:00", endTime: "20:30:00" });
+    expect(ok.status).toBe(200);
+  });
+
+  it("proveedora que no existe: 400 'Esa proveedora no existe' en alta y en PATCH", async () => {
+    const fantasma = "00000000-0000-4000-8000-000000000000";
+    const a = await pedir("POST", `/activities/${actId}/schedules`, {
+      dayOfWeek: 6, startTime: "10:00:00", endTime: "11:00:00", serviceProviderId: fantasma,
+    });
+    expect(a.status).toBe(400);
+    expect((await json(a)).error).toBe("Esa proveedora no existe");
+    const b = await pedir("PATCH", `/activities/schedules/${sch}`, { serviceProviderId: fantasma });
+    expect(b.status).toBe(400);
+    expect((await json(b)).error).toBe("Esa proveedora no existe");
+  });
+
   it("dejar una Clase sin proveedora: 400", async () => {
     const r = await pedir("PATCH", `/activities/schedules/${sch}`, { serviceProviderId: null });
     expect(r.status).toBe(400);
