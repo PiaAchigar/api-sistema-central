@@ -118,7 +118,7 @@ export async function listClassesForRange(
         a.activity_type         AS activity_type,
         NULL::int               AS session_number,
         NULL::int               AS total_sessions,
-        a.service_provider_id   AS provider_id,
+        sch.service_provider_id AS provider_id,
         sp.full_name            AS provider_name,
         sch.machine_id          AS machine_id,
         m.name                  AS machine_name,
@@ -130,7 +130,7 @@ export async function listClassesForRange(
       FROM activity_schedules sch
       CROSS JOIN target t
       JOIN activities a ON a.id = sch.activity_id
-      LEFT JOIN service_providers sp ON sp.id = a.service_provider_id
+      LEFT JOIN service_providers sp ON sp.id = sch.service_provider_id
       LEFT JOIN machines m ON m.id = sch.machine_id
       WHERE sch.is_active = true
         AND a.is_active = true
@@ -207,7 +207,7 @@ export async function listClassesForRange(
       r.capacity,
       -- Inscriptas: todo turno que no esté cancelado (scheduled, reserved,
       -- completed, no_show). Es la misma regla del cupo y de la lista de anotadas:
-      -- actividad + inicio + máquina (dos máquinas a la misma hora son dos clases).
+      -- actividad + inicio + máquina + proveedora (dos máquinas a la misma hora son dos clases).
       COALESCE(enr.enrolled_count, 0)::int AS enrolled_count,
       COALESCE(att.attended_count, 0)::int AS attended_count,
       anot.anotadas
@@ -219,7 +219,8 @@ export async function listClassesForRange(
         AND (
           (r.kind = 'activity' AND ap.activity_id = r.subject_id
              AND ap.appointment_start = r.starts_at_utc
-             AND ap.machine_id IS NOT DISTINCT FROM r.machine_id)
+             AND ap.machine_id IS NOT DISTINCT FROM r.machine_id
+             AND ap.service_provider_id IS NOT DISTINCT FROM r.provider_id)
           OR
           (r.kind = 'training' AND ap.training_session_id = r.session_id)
         )
@@ -244,6 +245,7 @@ export async function listClassesForRange(
             AND apa.activity_id = r.subject_id
             AND apa.appointment_start = r.starts_at_utc
             AND apa.machine_id IS NOT DISTINCT FROM r.machine_id
+            AND apa.service_provider_id IS NOT DISTINCT FROM r.provider_id
         )
     ) att ON true
     -- Anotadas: los turnos no cancelados de la clase, con su Debe.
@@ -291,7 +293,8 @@ export async function listClassesForRange(
         AND (
           (r.kind = 'activity' AND ap.activity_id = r.subject_id
              AND ap.appointment_start = r.starts_at_utc
-             AND ap.machine_id IS NOT DISTINCT FROM r.machine_id)
+             AND ap.machine_id IS NOT DISTINCT FROM r.machine_id
+             AND ap.service_provider_id IS NOT DISTINCT FROM r.provider_id)
           OR
           (r.kind = 'training' AND ap.training_session_id = r.session_id)
         )

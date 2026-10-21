@@ -63,7 +63,7 @@ trainingSubscriptionsRouter.get("/training-subscriptions", requireAuth, requireP
 });
 
 /**
- * GET /api/class-attendance?activityId=&startsAt=&machineId=
+ * GET /api/class-attendance?activityId=&startsAt=&machineId=&providerId=
  * Roster de una clase: clientes agendados a (actividad, horario) con su estado
  * de asistencia. Lo consume el modal de asistencias de la Agenda.
  *
@@ -80,13 +80,20 @@ trainingSubscriptionsRouter.get(
     z.object({
       activityId: z.string().uuid("activityId must be a valid UUID"),
       startsAt: z.string().datetime({ offset: true, message: "startsAt must be an ISO timestamp" }),
-      machineId: z.string().uuid("machineId must be a valid UUID").optional(),
+      // null = "no dado": el front en producción manda machineId: null en las clases sin máquina.
+      machineId: z.string().uuid("machineId must be a valid UUID").nullish(),
+      providerId: z.string().uuid("providerId must be a valid UUID").nullish(),
     })
   ),
   async (c) => {
     try {
-      const { activityId, startsAt, machineId } = c.req.valid("query");
-      const roster = await trainingSubscriptionsService.getClassRoster(activityId, startsAt, machineId);
+      const { activityId, startsAt, machineId, providerId } = c.req.valid("query");
+      const roster = await trainingSubscriptionsService.getClassRoster(
+        activityId,
+        startsAt,
+        machineId ?? undefined,
+        providerId ?? undefined
+      );
       return c.json({ success: true, data: roster });
     } catch (err) {
       if (err instanceof AppError) {
@@ -101,7 +108,7 @@ trainingSubscriptionsRouter.get(
  * POST /api/class-attendance
  * Registra la asistencia de una clase para varios clientes de una sola vez.
  *
- * Body: { activityId, startsAt, machineId?, entries: [{ subscriptionId, attended }] }
+ * Body: { activityId, startsAt, machineId?, providerId?, entries: [{ subscriptionId, attended }] }
  * Response: { success: true, data: <roster actualizado> }
  */
 trainingSubscriptionsRouter.post(
@@ -113,7 +120,9 @@ trainingSubscriptionsRouter.post(
     z.object({
       activityId: z.string().uuid("activityId must be a valid UUID"),
       startsAt: z.string().datetime({ offset: true, message: "startsAt must be an ISO timestamp" }),
-      machineId: z.string().uuid("machineId must be a valid UUID").optional(),
+      // null = "no dado": el front en producción manda machineId: null en las clases sin máquina.
+      machineId: z.string().uuid("machineId must be a valid UUID").nullish(),
+      providerId: z.string().uuid("providerId must be a valid UUID").nullish(),
       entries: z
         .array(
           z.object({
@@ -126,12 +135,13 @@ trainingSubscriptionsRouter.post(
   ),
   async (c) => {
     try {
-      const { activityId, startsAt, entries, machineId } = c.req.valid("json");
+      const { activityId, startsAt, entries, machineId, providerId } = c.req.valid("json");
       const roster = await trainingSubscriptionsService.markClassAttendance(
         activityId,
         startsAt,
         entries,
-        machineId
+        machineId ?? undefined,
+        providerId ?? undefined
       );
       return c.json({ success: true, data: roster });
     } catch (err) {

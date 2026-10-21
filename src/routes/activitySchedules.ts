@@ -31,6 +31,7 @@ export const horarioBody = z
     validFrom: z.string().date().nullable().optional(),
     validUntil: z.string().date().nullable().optional(),
     capacity: capacidadSchema.optional(),
+    serviceProviderId: z.string().uuid().nullable().optional(),
   })
   .refine(finPosteriorAInicio, errorOrdenHoras);
 
@@ -44,6 +45,7 @@ export const horarioPatchBody = z
     validFrom: z.string().date().nullable().optional(),
     validUntil: z.string().date().nullable().optional(),
     capacity: capacidadSchema.optional(),
+    serviceProviderId: z.string().uuid().nullable().optional(),
     isActive: z.boolean().optional(),
   })
   .refine(finPosteriorAInicioOpcional, errorOrdenHoras);
@@ -94,6 +96,7 @@ activitySchedulesRouter.get(
  *   validFrom?: string | null (ISO 8601 date)
  *   validUntil?: string | null (ISO 8601 date)
  *   capacity?: number | null (entero ≥ 1, o null = sin límite)
+ *   serviceProviderId?: string | null (obligatoria en actividades 'class')
  * }
  */
 activitySchedulesRouter.post(
@@ -114,6 +117,7 @@ activitySchedulesRouter.post(
         validFrom: body.validFrom || null,
         validUntil: body.validUntil || null,
         capacity: body.capacity ?? null,
+        serviceProviderId: body.serviceProviderId || null,
       });
       return c.json(
         {
@@ -150,6 +154,7 @@ activitySchedulesRouter.post(
  *   validFrom?: string | null (ISO 8601 date)
  *   validUntil?: string | null (ISO 8601 date)
  *   capacity?: number | null (entero ≥ 1, o null = sin límite)
+ *   serviceProviderId?: string | null (obligatoria en actividades 'class')
  *   isActive?: boolean (false = pausado; true = reactivado)
  * }
  */

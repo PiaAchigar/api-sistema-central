@@ -58,13 +58,20 @@ async function bloquearActividad(t: Db, activityId: string) {
   return actividad;
 }
 
-/** Lugares ocupados de UNA clase: misma actividad, mismo inicio y misma máquina (NULL con NULL). */
-async function lugaresOcupados(t: Db, activityId: string, inicio: Date, machineId: string | null): Promise<number> {
+/** Lugares ocupados de UNA clase: misma actividad, mismo inicio, misma máquina y misma proveedora (NULL con NULL). */
+async function lugaresOcupados(
+  t: Db,
+  activityId: string,
+  inicio: Date,
+  machineId: string | null,
+  providerId: string | null,
+): Promise<number> {
   const [fila] = (await t.execute(sql`
     SELECT COUNT(*)::int AS n FROM appointments
     WHERE activity_id = ${activityId}
       AND appointment_start = ${inicio.toISOString()}::timestamptz
       AND machine_id IS NOT DISTINCT FROM ${machineId}::uuid
+      AND service_provider_id IS NOT DISTINCT FROM ${providerId}::uuid
       AND status <> 'cancelled'
   `)) as unknown as { n: number }[];
   return fila!.n;
@@ -97,8 +104,8 @@ function mesSiguiente(mes: string): string {
  * sola fila por operación, así que no hay deadlocks. Después se bloquea el ciclo
  * del mes (orden: actividad → ciclo).
  *
- * El cupo de una clase se cuenta por actividad + inicio + máquina del horario:
- * en Thermo Bike dos máquinas a la misma hora son dos clases, cada una con su cupo.
+ * El cupo de una clase se cuenta por actividad + inicio + máquina + proveedora del horario:
+ * en Thermo Bike dos máquinas a la misma hora (o dos proveedoras en Pilates) son dos clases, cada una con su cupo.
  */
 export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<ResultadoAlMes> {
   const ahora = input.ahora ?? new Date();
@@ -221,10 +228,10 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
           .limit(1);
         if (ya.length > 0) continue;
 
-        // Lugares ocupados de ESTA clase: misma actividad, mismo inicio y misma máquina (NULL con NULL).
+        // Lugares ocupados de ESTA clase: misma actividad, mismo inicio, máquina y proveedora (NULL con NULL).
         const capacidad = cupoDe.get(clase.schedule_id!) ?? null;
         if (capacidad !== null) {
-          if ((await lugaresOcupados(t, activityId, inicio, clase.machine_id)) >= capacidad) {
+          if ((await lugaresOcupados(t, activityId, inicio, clase.machine_id, clase.provider_id)) >= capacidad) {
             sinLugar.push(inicio.toISOString());
             continue;
           }
@@ -234,7 +241,7 @@ export async function anotarAlMes(db: Db, input: AnotarAlMesInput): Promise<Resu
         await t.insert(appointments).values({
           customerId,
           activityId,
-          serviceProviderId: actividad?.providerId ?? null,
+          serviceProviderId: clase.provider_id,
           machineId: clase.machine_id,
           appointmentStart: inicio,
           appointmentEnd: new Date(inicio.getTime() + duracion * 60_000),
@@ -433,7 +440,7 @@ export async function anotarAClase(db: Db, input: AnotarAClaseInput): Promise<{ 
           .where(eq(activitySchedules.id, c.schedule_id!))
           .limit(1);
         const capacidad = h?.capacity ?? null;
-        if (capacidad === null || (await lugaresOcupados(t, activityId, inicio, c.machine_id)) < capacidad) {
+        if (capacidad === null || (await lugaresOcupados(t, activityId, inicio, c.machine_id, c.provider_id)) < capacidad) {
           elegida = c;
           break;
         }
@@ -446,7 +453,7 @@ export async function anotarAClase(db: Db, input: AnotarAClaseInput): Promise<{ 
         .values({
           customerId,
           activityId,
-          serviceProviderId: actividad.providerId ?? null,
+          serviceProviderId: elegida.provider_id,
           machineId: elegida.machine_id,
           appointmentStart: inicio,
           appointmentEnd: new Date(inicio.getTime() + duracion * 60_000),

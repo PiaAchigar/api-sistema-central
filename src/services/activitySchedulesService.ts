@@ -86,6 +86,7 @@ export class ActivitySchedulesService {
     validFrom?: string | null;
     validUntil?: string | null;
     capacity?: number | null;
+    serviceProviderId?: string | null;
   }) {
     // Validate day of week
     this.validateDayOfWeek(data.dayOfWeek);
@@ -105,6 +106,11 @@ export class ActivitySchedulesService {
       activity.activityType as "class" | "machine",
       data.machineId
     );
+
+    // La proveedora va en el horario: en una Clase es obligatoria; en una Máquina es opcional.
+    if (activity.activityType === "class" && !data.serviceProviderId) {
+      throw badRequest("Elegí la proveedora del horario");
+    }
 
     // Create via repository
     const created = await this.repository.create(data);
@@ -162,6 +168,7 @@ export class ActivitySchedulesService {
       validFrom?: string | null;
       validUntil?: string | null;
       capacity?: number | null;
+      serviceProviderId?: string | null;
       isActive?: boolean;
     }
   ) {
@@ -200,6 +207,14 @@ export class ActivitySchedulesService {
         activity.activityType as "class" | "machine",
         data.machineId
       );
+    }
+
+    // En una Clase el horario no puede quedar sin proveedora.
+    if (data.serviceProviderId !== undefined && !data.serviceProviderId) {
+      const activity = await activitiesService.getActivity(existing.activityId as string);
+      if (activity.activityType === "class") {
+        throw badRequest("Elegí la proveedora del horario");
+      }
     }
 
     // Update via repository
