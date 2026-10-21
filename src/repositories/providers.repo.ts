@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { type AgreementInput, diffAgreements } from "../lib/agreements";
 import {
@@ -240,9 +240,21 @@ const providerFields = {
   status: serviceProviders.status,
 };
 
-/** Lista completa para la vista admin (incluye archivadas si `includeInactive`). */
+/** Lista completa para la vista admin (incluye archivadas si `includeInactive`).
+ *  Con los nombres de los servicios que tiene habilitados (activos), para la
+ *  columna "Servicios": incluye el ancla de depilación, que se lee
+ *  "Depilación Definitiva". */
 export async function listProvidersAdmin(db: Db, includeInactive = false) {
-  const base = db.select(providerFields).from(serviceProviders);
+  const base = db
+    .select({
+      ...providerFields,
+      servicios: sql<string[]>`coalesce((
+        SELECT json_agg(s.name ORDER BY s.name)
+        FROM service_provider_service sps JOIN service s ON s.id = sps.service_id
+        WHERE sps.service_provider_id = "service_providers"."id" AND sps.is_active AND s.is_active
+      ), '[]'::json)`,
+    })
+    .from(serviceProviders);
   const ordered = includeInactive
     ? base
     : base.where(eq(serviceProviders.status, "active"));

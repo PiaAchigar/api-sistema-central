@@ -6,6 +6,7 @@ import * as schema from "../db/schema";
 import type { Db } from "../db/client";
 import { anclaDeDepilacion } from "./ancla-de-depilacion.repo";
 import { getOfertaDeProveedora } from "./oferta-de-proveedora.repo";
+import { listProvidersAdmin } from "./providers.repo";
 
 // Lo que ofrece una prestadora: con esto el "Nuevo turno" desde su columna
 // muestra sólo lo suyo (pedido de Pia, 2026-10-22).
@@ -145,3 +146,14 @@ describe("getOfertaDeProveedora", () => {
     }
   });
 });
+
+describe("listProvidersAdmin trae los servicios de cada una", () => {
+  // La columna "Servicios" de Administración → Proveedoras. Incluye los no
+  // vendibles: el ancla de depilación se lee "Depilación Definitiva".
+  it("los habilitados y activos, por nombre; no los dados de baja", async () => {
+    const lista = await listProvidersAdmin(db, true);
+    expect(lista.find((p) => p.id === ana)!.servicios).toEqual([`${QA}_Interno`, `${QA}_Limpieza`]);
+    expect(lista.find((p) => p.id === otra)!.servicios).toEqual([`${QA}_Masaje`]);
+  });
+});
+
