@@ -93,13 +93,14 @@ activitiesRouter.post(
       name: z.string().min(1, "Activity name is required"),
       description: z.string().nullable().optional(),
       activityType: z.enum(["class", "machine"]),
+      // Deprecado (1.60.0): la proveedora va en cada horario. Se sigue aceptando para no romper clientes viejos.
       serviceProviderId: z.string().uuid().nullable().optional(),
       classesPerMonth: z.number().int().min(0),
       monthlyBasePrice: z.union([z.number(), z.string()]),
     }).refine(
       (data) => {
         if (data.activityType === "class") {
-          return data.serviceProviderId != null && data.classesPerMonth > 0;
+          return data.classesPerMonth > 0;
         }
         if (data.activityType === "machine") {
           return data.classesPerMonth === 0;
@@ -107,7 +108,7 @@ activitiesRouter.post(
         return true;
       },
       {
-        message: "Invalid activity type constraints: class requires service_provider_id and classes_per_month > 0; machine requires classes_per_month = 0",
+        message: "Invalid activity type constraints: class requires classes_per_month > 0; machine requires classes_per_month = 0",
         path: ["activityType"],
       }
     )

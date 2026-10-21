@@ -11,20 +11,16 @@ export class ActivitiesService {
 
   /**
    * Validate activity_type constraints
-   * - 'class' requires service_provider_id and classes_per_month > 0
+   * - 'class' requires classes_per_month > 0 (la proveedora va en cada horario, 1.60.0)
    * - 'machine' requires classes_per_month = 0
    *
    * @throws badRequest if validation fails
    */
   validateActivityType(
     activityType: "class" | "machine",
-    classesPerMonth: number,
-    serviceProviderId?: string | null
+    classesPerMonth: number
   ): void {
     if (activityType === "class") {
-      if (!serviceProviderId) {
-        throw badRequest("Activity type 'class' requires a service_provider_id");
-      }
       if (classesPerMonth <= 0) {
         throw badRequest(
           "Activity type 'class' requires classes_per_month to be greater than 0"
@@ -56,11 +52,7 @@ export class ActivitiesService {
     monthlyBasePrice: number | string;
   }) {
     // Validate business rules
-    this.validateActivityType(
-      data.activityType,
-      data.classesPerMonth,
-      data.serviceProviderId
-    );
+    this.validateActivityType(data.activityType, data.classesPerMonth);
 
     // Create via repository
     const created = await this.repository.create(data);
@@ -128,15 +120,10 @@ export class ActivitiesService {
     const newActivityType = data.activityType ?? (existing.activityType as "class" | "machine");
     const newClassesPerMonth =
       data.classesPerMonth ?? (existing.classesPerMonth || 0);
-    const newServiceProviderId = data.serviceProviderId ?? existing.serviceProviderId;
 
     // Re-validate if either activity_type or classesPerMonth changed
     if (data.activityType !== undefined || data.classesPerMonth !== undefined) {
-      this.validateActivityType(
-        newActivityType,
-        newClassesPerMonth,
-        newServiceProviderId
-      );
+      this.validateActivityType(newActivityType, newClassesPerMonth);
     }
 
     // Update via repository

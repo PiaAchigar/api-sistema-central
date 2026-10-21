@@ -481,6 +481,8 @@ export const activitySchedules = pgTable("activity_schedules", {
   validUntil: date("valid_until"),
   // Cupo de ESTE horario (1.24.0). NULL = sin límite declarado.
   capacity: integer("capacity"),
+  // Proveedora de ESTE horario (1.60.0). Reemplaza a activities.service_provider_id.
+  serviceProviderId: uuid("service_provider_id"),
   isActive: boolean("is_active").default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
