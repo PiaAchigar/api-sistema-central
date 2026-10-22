@@ -15,6 +15,7 @@ import {
   serviceProviderAvailability,
   serviceProviderMachine,
   serviceProviderService,
+  service,
   serviceProviders,
 } from "../db/schema";
 import type { Db } from "../db/client";
@@ -58,6 +59,7 @@ let maquinaId: string;
 let piernaId: string;
 let axilaId: string;
 let packId: string;
+let servicioId: string;
 
 async function limpiar() {
   const compras = await db
@@ -70,6 +72,13 @@ async function limpiar() {
     await db.delete(customerPurchase).where(inArray(customerPurchase.id, ids));
   }
   await db.delete(appointments).where(like(appointments.notes, `${QA}%`));
+
+  const srvs = await db.select({ id: service.id }).from(service).where(like(service.name, `${QA}%`));
+  const srvIds = srvs.map((x) => x.id);
+  if (srvIds.length > 0) {
+    await db.delete(serviceProviderService).where(inArray(serviceProviderService.serviceId, srvIds));
+    await db.delete(service).where(inArray(service.id, srvIds));
+  }
 
   const packs = await db
     .select({ id: depilationCombo.id })
@@ -178,6 +187,12 @@ beforeAll(async () => {
   });
   packId = pack!.id;
 
+  const [srv] = await db
+    .insert(service)
+    .values({ name: `${QA}_SERVICIO`, isActive: true, unitPriceList: "10000", estimatedDurationMinutes: 30 })
+    .returning({ id: service.id });
+  servicioId = srv!.id;
+
   const [maquina] = await db.insert(machines).values({ name: `${QA}_MAQUINA`, status: "active" }).returning({ id: machines.id });
   maquinaId = maquina!.id;
   await db.insert(serviceMachine).values({ serviceId: anclaId, machineId: maquinaId, isPrimaryMachine: true });
@@ -195,6 +210,13 @@ beforeAll(async () => {
     isActive: true,
   });
   await db.insert(serviceProviderMachine).values({ serviceProviderId: proveedoraId, machineId: maquinaId });
+  await db.insert(serviceProviderService).values({
+    serviceProviderId: proveedoraId,
+    serviceId: servicioId,
+    paymentType: "fixed_per_service",
+    rate: "1000",
+    isActive: true,
+  });
   // Lunes (day_of_week=1): `open_hours` del local ya abre 09–20 ese día (no se toca).
   await db.insert(serviceProviderAvailability).values({
     serviceProviderId: proveedoraId,
@@ -277,5 +299,30 @@ describe("crear turnos en lote", () => {
     expect(err.indice).toBe(0);
     expect(err.message).toContain("Para agendar hace falta al menos el 40%");
     expect(await turnosDeLaCompra(compraId)).toBe(0);
+  });
+
+  it("promo mixta: un servicio + 2 de 3 sesiones de depilación con 50% pago → 201", async () => {
+    // La línea de servicio va PRIMERA en el lote: no es de depilación, así que no
+    // tiene que descontarse de las sesiones libres de depilación.
+    const { compraId, lineas } = await comprar("MIXTA", 3, 50000);
+    const [lineaServicio] = await db
+      .insert(customerPurchaseService)
+      .values({ customerPurchaseId: compraId, serviceId: servicioId, repeticion: 1, orden: 1 })
+      .returning({ id: customerPurchaseService.id });
+
+    const creados = await crearTurnosEnLote(db, [
+      {
+        customerId: CUSTOMER_ID,
+        serviceId: servicioId,
+        providerId: proveedoraId,
+        start: hora(5, 0),
+        customerPurchaseServiceId: lineaServicio!.id,
+        notes: QA,
+      },
+      turno(lineas[0]!, hora(5, 2)),
+      turno(lineas[1]!, hora(5, 4)),
+    ]);
+    expect(creados).toHaveLength(3);
+    expect(await turnosDeLaCompra(compraId)).toBe(3);
   });
 });

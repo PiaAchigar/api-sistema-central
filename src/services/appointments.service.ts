@@ -412,8 +412,12 @@ export async function crearTurnosEnLote(db: Db, inputs: CreateAppointmentInput[]
         ? await compraDeLaLinea(db, input.customerPurchaseServiceId)
         : null;
       const tomadas = compra ? (tomadasPorLinea.get(compra) ?? 0) : 0;
-      preparados.push(await prepararTurno(db, input, null, { tomadasAntesEnLaCompra: tomadas }));
-      if (compra) tomadasPorLinea.set(compra, tomadas + 1);
+      const preparado = await prepararTurno(db, input, null, { tomadasAntesEnLaCompra: tomadas });
+      preparados.push(preparado);
+      // Sólo las de depilación se descuentan de las libres de la puerta de
+      // pago (que cuenta únicamente líneas de depilación): en una promo mixta
+      // un servicio común del lote no gasta ninguna.
+      if (compra && preparado.esDepilacion) tomadasPorLinea.set(compra, tomadas + 1);
     } catch (e) {
       throw conIndice(e, i);
     }

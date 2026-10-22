@@ -38,6 +38,7 @@ async function limpiar() {
   await db.execute(sql`DELETE FROM combos WHERE name LIKE ${QA + "_Pack%"}`);
   await db.execute(sql`DELETE FROM combos WHERE name LIKE ${QA + "%"}`);
   await db.execute(sql`DELETE FROM depilation_combo WHERE name LIKE ${QA + "%"}`);
+  await db.execute(sql`DELETE FROM body_zone WHERE name LIKE ${QA + "_ZonaApagada%"}`);
   await db.execute(sql`DELETE FROM customers WHERE tax_id LIKE ${QA + "%"}`);
   await db.execute(sql`DELETE FROM contacts WHERE name LIKE ${QA + "%"}`);
   await db.execute(sql`DELETE FROM service WHERE name LIKE ${QA + "_Svc%"}`);
@@ -240,6 +241,35 @@ describe("basePlanificador", () => {
         expect(s.serviceId).toBeTruthy();
       }
       expect(base.intervalo).toEqual(await intervaloDeLaCompra(db, compra.id));
+    }
+  });
+
+  it("una zona apagada en el catálogo no entra en las zonas ni en la duración", async () => {
+    // Zonas propias: apagar una real rompería a las demás suites.
+    const encendida = await uno(sql`
+      INSERT INTO body_zone (id, name, category, display_order, is_active)
+      VALUES (gen_random_uuid(), ${`${QA}_ZonaApagadaOn`}, 'grande', 940, true) RETURNING id`);
+    const apagada = await uno(sql`
+      INSERT INTO body_zone (id, name, category, display_order, is_active)
+      VALUES (gen_random_uuid(), ${`${QA}_ZonaApagadaOff`}, 'chica', 941, true) RETURNING id`);
+    const pack = await crearCombo(db, {
+      name: `${QA}_BasePackApagada`,
+      kind: "pack_fijo",
+      fixedPrice: 30001,
+      choiceZoneCount: 0,
+      zonaIds: [encendida, apagada],
+    });
+    const cli = await clienta("Apagada", "mujer");
+    const compra = await comprarDepi(cli.id, "Apagada", pack!.id, 2);
+    // Se vende con las dos y DESPUÉS se apaga una en el catálogo.
+    await db.execute(sql`UPDATE body_zone SET is_active = false WHERE id = ${apagada}`);
+
+    const cfg = await leerConfig(db);
+    const base = (await basePlanificador(db, compra.id))!;
+    expect(base.sesiones).toHaveLength(2);
+    for (const s of base.sesiones) {
+      expect(s.zonas).toEqual([encendida]);
+      expect(s.duracionMinutos).toBe(cfg.minutosTurno.mujer.grande);
     }
   });
 

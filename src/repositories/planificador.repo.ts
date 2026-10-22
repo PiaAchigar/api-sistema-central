@@ -276,7 +276,7 @@ export async function basePlanificador(db: Db, compraId: string): Promise<BaseDe
     };
     if (l.depilationComboId) {
       const datos = datosPorPack.get(l.depilationComboId)!;
-      const delPack = datos.zonas.filter((z) => !z.esDeRegalo);
+      const delPack = datos.zonas.filter((z) => !z.esDeRegalo && z.disponible);
       return {
         ...base,
         nombre: l.packName ?? datos.nombreDelPack,
