@@ -100,6 +100,8 @@ export const depilationPricingConfig = pgTable("depilation_pricing_config", {
   pricingMinutesMaleChica: integer("pricing_minutes_male_chica").notNull(),
   /** El `service` ancla que sostiene la agenda de depilación (§4). */
   anchorServiceId: uuid("anchor_service_id"),
+  /** 1.61.0 — Días entre sesiones por defecto de los packs de depilación. NULL = no cargado. */
+  sessionIntervalDays: integer("session_interval_days"),
   updatedAt: updatedAt().notNull(),
 });
 
@@ -138,6 +140,8 @@ export const depilationCombo = pgTable("depilation_combo", {
   packRoundingBase: integer("pack_rounding_base"),
   /** 1.56.0 — Meses de vigencia del pack. NULL = no vence. */
   validityMonths: integer("validity_months"),
+  /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL = no cargado. */
+  sessionIntervalDays: integer("session_interval_days"),
   isPublishedWeb: boolean("is_published_web").notNull(),
   displayOrder: integer("display_order").notNull(),
   isActive: boolean("is_active").notNull(),

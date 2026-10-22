@@ -386,6 +386,8 @@ export const promotions = pgTable("promotions", {
   updatedAt: updatedAt(),
   /** §4.1 — Precio fijo del paquete entero. NULL en las promos de descuento. */
   precioDelPaquete: numeric("precio_del_paquete", { precision: 12, scale: 2 }),
+  /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL = no cargado. */
+  sessionIntervalDays: integer("session_interval_days"),
 });
 
 /**
@@ -533,6 +535,8 @@ export const combos = pgTable("combos", {
   fixedPrice: decimal("fixed_price", { precision: 10, scale: 2 }),
   discountPercentage: decimal("discount_percentage", { precision: 5, scale: 2 }),
   validityMonths: integer("validity_months"),
+  /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL = no cargado. */
+  sessionIntervalDays: integer("session_interval_days"),
   isActive: boolean("is_active"),
   isVisibleWeb: boolean("is_visible_web"),
   displayOrder: integer("display_order"),

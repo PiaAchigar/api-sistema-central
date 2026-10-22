@@ -288,6 +288,8 @@ export type ConfigInput = {
   packSessions: number;
   packDiscountPercentage: number;
   packRoundingBase: number;
+  /** 1.61.0 — undefined = no se toca; null = se borra. */
+  sessionIntervalDays?: number | null;
 };
 
 /**
@@ -370,6 +372,20 @@ export async function leerConfig(db: Db): Promise<DepilationConfig> {
   const [f] = await db.select().from(depilationPricingConfig).limit(1);
   if (!f) throw new Error("Falta la fila de depilation_pricing_config");
   return aConfigAnidada(f);
+}
+
+/**
+ * Los días entre sesiones por defecto de los packs (1.61.0). Va aparte de
+ * `leerConfig` por la misma razón que `anchorServiceId`: `DepilationConfig` es
+ * el tipo de la aritmética de precios y este dato no entra en ninguna cuenta.
+ * NULL = no cargado.
+ */
+export async function leerDiasEntreSesiones(db: Db): Promise<number | null> {
+  const [f] = await db
+    .select({ dias: depilationPricingConfig.sessionIntervalDays })
+    .from(depilationPricingConfig)
+    .limit(1);
+  return f?.dias ?? null;
 }
 
 /** Actualiza la fila única de config y devuelve el objeto anidado ya releído. */
@@ -551,6 +567,8 @@ export type DepilationComboRow = {
   packRoundingBase: number | null;
   /** 1.56.0 — Meses de vigencia del pack. NULL = no vence. */
   validityMonths: number | null;
+  /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL = usa el de la config. */
+  sessionIntervalDays: number | null;
   isPublishedWeb: boolean;
   displayOrder: number;
   isActive: boolean;
@@ -584,6 +602,8 @@ export type DepilationComboAssembled = {
   packRoundingBase: number | null;
   /** 1.56.0 — Meses de vigencia del pack. NULL = no vence. */
   validityMonths: number | null;
+  /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL = usa el de la config. */
+  sessionIntervalDays: number | null;
   isPublishedWeb: boolean;
   displayOrder: number;
   isActive: boolean;
@@ -682,6 +702,7 @@ export function assembleDepilationCombo(
     packDiscountPercentage: combo.packDiscountPercentage,
     packRoundingBase: combo.packRoundingBase,
     validityMonths: combo.validityMonths,
+    sessionIntervalDays: combo.sessionIntervalDays,
     isPublishedWeb: combo.isPublishedWeb,
     displayOrder: combo.displayOrder,
     isActive: combo.isActive,
@@ -711,6 +732,7 @@ const comboFields = {
   packDiscountPercentage: depilationCombo.packDiscountPercentage,
   packRoundingBase: depilationCombo.packRoundingBase,
   validityMonths: depilationCombo.validityMonths,
+  sessionIntervalDays: depilationCombo.sessionIntervalDays,
   isPublishedWeb: depilationCombo.isPublishedWeb,
   displayOrder: depilationCombo.displayOrder,
   isActive: depilationCombo.isActive,
@@ -772,6 +794,8 @@ export type DepilationComboInput = {
   packRoundingBase?: number | null;
   /** 1.56.0 — Meses de vigencia del pack. NULL/ausente = no vence. */
   validityMonths?: number | null;
+  /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL/ausente = usa el de la config. */
+  sessionIntervalDays?: number | null;
 };
 
 export type ComboKindYPrecio = { kind: string; fixedPrice: string | number | null };
@@ -849,6 +873,7 @@ export async function crearCombo(
         packDiscountPercentage: input.packDiscountPercentage ?? null,
         packRoundingBase: input.packRoundingBase ?? null,
         validityMonths: input.validityMonths ?? null,
+        sessionIntervalDays: input.sessionIntervalDays ?? null,
         isPublishedWeb: input.isPublishedWeb ?? false,
         displayOrder: input.displayOrder ?? 0,
         isActive: true,
@@ -882,6 +907,7 @@ export async function actualizarCombo(
         packDiscountPercentage: input.packDiscountPercentage ?? null,
         packRoundingBase: input.packRoundingBase ?? null,
         validityMonths: input.validityMonths ?? null,
+        sessionIntervalDays: input.sessionIntervalDays ?? null,
         isPublishedWeb: input.isPublishedWeb ?? false,
         displayOrder: input.displayOrder ?? 0,
         updatedAt: new Date(),

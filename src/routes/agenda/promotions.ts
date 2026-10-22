@@ -84,6 +84,8 @@ const headerSchema = z.object({
   isFeatured: z.boolean().nullish(),
   isVisibleWeb: z.boolean().nullish(),
   usageLimit: z.number().int().nonnegative().nullish(),
+  // 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. Vacío = no cargado.
+  sessionIntervalDays: z.number().int().positive().nullish(),
   notes: z.string().max(2000).nullish(),
 });
 const promoBody = headerSchema.extend({

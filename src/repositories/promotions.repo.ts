@@ -113,6 +113,8 @@ export type PromoHeaderInput = {
   isVisibleWeb?: boolean | null;
   usageLimit?: number | null;
   notes?: string | null;
+  /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL = no cargado. */
+  sessionIntervalDays?: number | null;
 };
 
 /** Las promos que se venden enteras, no como descuento sobre una cosa. */
@@ -158,6 +160,7 @@ const promoFields = {
   usageLimit: promotions.usageLimit,
   notes: promotions.notes,
   precioDelPaquete: promotions.precioDelPaquete,
+  sessionIntervalDays: promotions.sessionIntervalDays,
 };
 
 /**
@@ -330,6 +333,7 @@ export async function createPromotion(
       isVisibleWeb: header.isVisibleWeb ?? false,
       usageLimit: header.usageLimit ?? null,
       notes: header.notes ?? null,
+      sessionIntervalDays: header.sessionIntervalDays ?? null,
     })
     .returning({ id: promotions.id });
   if (!created) return null;
@@ -368,6 +372,7 @@ export async function updatePromotion(
       isVisibleWeb: header.isVisibleWeb ?? false,
       usageLimit: header.usageLimit ?? null,
       notes: header.notes ?? null,
+      sessionIntervalDays: header.sessionIntervalDays ?? null,
     })
     .where(eq(promotions.id, id))
     .returning({ id: promotions.id });

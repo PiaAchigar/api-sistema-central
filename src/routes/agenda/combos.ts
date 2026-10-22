@@ -75,6 +75,12 @@ export const comboBody = z
       .number({ invalid_type_error: "La vigencia tiene que ser un número" })
       .int("La vigencia tiene que ser un número entero de meses")
       .min(1, "La vigencia tiene que ser de al menos 1 mes"),
+    // 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. Vacío = no cargado.
+    sessionIntervalDays: z
+      .number({ invalid_type_error: "Los días entre sesiones tienen que ser un número" })
+      .int("Los días entre sesiones tienen que ser un número entero")
+      .positive("Los días entre sesiones tienen que ser mayor a cero")
+      .nullish(),
     isVisibleWeb: z.boolean().nullish(),
     displayOrder: z
       .number({ invalid_type_error: "El orden tiene que ser un número" })

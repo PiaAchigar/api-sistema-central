@@ -35,6 +35,8 @@ export type ComboHeaderInput = {
   fixedPrice?: number | null;
   discountPercentage?: number | null;
   validityMonths: number;
+  /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL = no cargado. */
+  sessionIntervalDays?: number | null;
   isVisibleWeb?: boolean | null;
   displayOrder?: number | null;
   // ── 1.50.0 ───────────────────────────────────────────────────────────────
@@ -69,6 +71,7 @@ const comboFields = {
   fixedPrice: combos.fixedPrice,
   discountPercentage: combos.discountPercentage,
   validityMonths: combos.validityMonths,
+  sessionIntervalDays: combos.sessionIntervalDays,
   isActive: combos.isActive,
   isVisibleWeb: combos.isVisibleWeb,
   displayOrder: combos.displayOrder,
@@ -599,6 +602,7 @@ export async function createCombo(db: Db, header: ComboHeaderInput, lines: Combo
         fixedPrice: dec(header.fixedPrice ?? null),
         discountPercentage: dec(header.discountPercentage ?? null),
         validityMonths: header.validityMonths,
+        sessionIntervalDays: header.sessionIntervalDays ?? null,
         isActive: true,
         isVisibleWeb: header.isVisibleWeb ?? true,
         displayOrder: header.displayOrder ?? 0,
@@ -648,6 +652,7 @@ export async function updateCombo(db: Db, id: string, header: ComboEditInput) {
       fixedPrice: dec(header.fixedPrice ?? null),
       discountPercentage: dec(header.discountPercentage ?? null),
       validityMonths: header.validityMonths,
+      sessionIntervalDays: header.sessionIntervalDays ?? null,
       isVisibleWeb: header.isVisibleWeb ?? true,
       displayOrder: header.displayOrder ?? 0,
       packDiscountPercentage: header.packDiscountPercentage ?? null,

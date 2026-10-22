@@ -136,6 +136,7 @@ services:
       - ./src/db/migrations/1.56.0/01-depilacion-agendable.sql:/docker-entrypoint-initdb.d/43-depilacion-agendable.sql:ro
       - ./src/db/migrations/1.58.0/01-reagendar-con-proveedora.sql:/docker-entrypoint-initdb.d/44-reagendar-con-proveedora.sql:ro
       - ./src/db/migrations/1.60.0/01-proveedora-por-horario.sql:/docker-entrypoint-initdb.d/45-proveedora-por-horario.sql:ro
+      - ./src/db/migrations/1.61.0/01-dias-entre-sesiones.sql:/docker-entrypoint-initdb.d/46-dias-entre-sesiones.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]

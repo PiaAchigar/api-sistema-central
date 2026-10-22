@@ -10,6 +10,7 @@ import { auth, requireAdmin, requireAuth, requirePermission } from "../../middle
 import { isForeignKeyViolation } from "../../lib/db-errors";
 import {
   aConfigAnidada,
+  leerDiasEntreSesiones,
   actualizarCombo,
   actualizarZona,
   conflictoEnSeleccion,
@@ -137,6 +138,13 @@ export const configBody = z.object({
     .min(0, "El descuento del pack no puede ser negativo")
     .max(100, "El descuento del pack no puede superar el 100%"),
   packRoundingBase: enteroPositivo("El redondeo del pack"),
+  // 1.61.0 — Días entre sesiones por defecto de los packs. Ausente = no se toca;
+  // null = se borra (los packs sin días propios vuelven a usar 30).
+  sessionIntervalDays: z
+    .number({ invalid_type_error: "Los días entre sesiones tienen que ser un número" })
+    .int("Los días entre sesiones tienen que ser un número entero")
+    .positive("Los días entre sesiones tienen que ser mayor a cero")
+    .nullish(),
 })
   .superRefine((v, ctx) => {
     // Ronda de fixes 1, punto 1 (Important): "agregar una zona nunca puede
@@ -267,6 +275,12 @@ export const comboDepilacionBody = z
       .number({ invalid_type_error: "La vigencia tiene que ser un número" })
       .int("La vigencia tiene que ser un número entero")
       .positive("La vigencia tiene que ser mayor a cero")
+      .nullish(),
+    // 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. Vacío = usa el de la config.
+    sessionIntervalDays: z
+      .number({ invalid_type_error: "Los días entre sesiones tienen que ser un número" })
+      .int("Los días entre sesiones tienen que ser un número entero")
+      .positive("Los días entre sesiones tienen que ser mayor a cero")
       .nullish(),
     displayOrder: z
       .number({ invalid_type_error: "El orden tiene que ser un número" })
@@ -620,12 +634,13 @@ depilacionRouter.get(
     // meterle un id de servicio y un conteo lo obligaría a saber de cosas que
     // no le incumben. La pantalla de Configuración los necesita, la de
     // precios no.
-    const [config, anchorServiceId, sesionesEsperandoTurno] = await Promise.all([
+    const [config, anchorServiceId, sesionesEsperandoTurno, sessionIntervalDays] = await Promise.all([
       leerConfig(db),
       anclaDeDepilacionOpcional(db),
       sesionesCompradasSinTurno(db),
+      leerDiasEntreSesiones(db),
     ]);
-    return c.json({ ...config, anchorServiceId, sesionesEsperandoTurno });
+    return c.json({ ...config, anchorServiceId, sesionesEsperandoTurno, sessionIntervalDays });
   },
 );
 
@@ -638,7 +653,7 @@ depilacionRouter.put(
   async (c) => {
     const db = createDb(c.env);
     const updated = await guardarConfig(db, c.req.valid("json"));
-    return c.json(updated);
+    return c.json({ ...updated, sessionIntervalDays: await leerDiasEntreSesiones(db) });
   },
 );
 
