@@ -283,7 +283,12 @@ export async function puertaDeLaReserva(
  * las que Laura podía agendar, en el único cartel de esa pantalla que habla de
  * clientas esperando.
  */
-export async function sesionesCompradasSinTurno(db: Db): Promise<number> {
+/**
+ * `customerId` acota la cuenta a una clienta: la pantalla de configuración
+ * cuenta todas; los tests, sólo la suya (contra la base compartida, otro
+ * archivo de test vendiendo depilación en paralelo les movía el número).
+ */
+export async function sesionesCompradasSinTurno(db: Db, customerId?: string): Promise<number> {
   const filas = await db
     .select({ id: customerPurchaseService.id })
     .from(customerPurchaseService)
@@ -296,7 +301,11 @@ export async function sesionesCompradasSinTurno(db: Db): Promise<number> {
     )
     .innerJoin(depilationCombo, eq(depilationCombo.id, customerPurchaseService.depilationComboId))
     .leftJoin(appointments, eq(appointments.id, customerPurchaseService.appointmentId))
-    .where(condicionDeLineaDeDepilacionLibre(null, new Date()));
+    .where(
+      customerId
+        ? and(condicionDeLineaDeDepilacionLibre(null, new Date()), eq(customerPurchase.customerId, customerId))
+        : condicionDeLineaDeDepilacionLibre(null, new Date()),
+    );
   return filas.length;
 }
 

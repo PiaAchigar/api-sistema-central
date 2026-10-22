@@ -201,13 +201,19 @@ describe("anotarAlMes", () => {
       appointmentStart: new Date("2026-10-29T23:00:00Z"), appointmentEnd: new Date("2026-10-30T00:00:00Z"),
       durationMinutes: 60,
     });
-    const ciclosAntes = (await db.select().from(subscriptionBillingCycles)).length;
     await expect(anotarAlMes(db, { ...base(), scheduleIds: [schSolo] })).rejects.toMatchObject({
       status: 409,
       message: "No hay lugar en ninguna de esas clases",
     });
     expect(await db.select().from(trainingSubscriptions).where(eq(trainingSubscriptions.customerId, clientaId))).toHaveLength(0);
-    expect((await db.select().from(subscriptionBillingCycles)).length).toBe(ciclosAntes);
+    // Sin suscripción no hay ciclo: se cuentan sólo los de ESTA clienta (contar
+    // todos los de la base fallaba cuando otro archivo de test creaba uno en paralelo).
+    const ciclos = await db
+      .select({ id: subscriptionBillingCycles.id })
+      .from(subscriptionBillingCycles)
+      .innerJoin(trainingSubscriptions, eq(trainingSubscriptions.id, subscriptionBillingCycles.trainingSubscriptionId))
+      .where(eq(trainingSubscriptions.customerId, clientaId));
+    expect(ciclos).toHaveLength(0);
     const hs = await db.select().from(subscriptionMonthSchedules).where(eq(subscriptionMonthSchedules.activityScheduleId, schSolo));
     expect(hs).toHaveLength(0);
     expect(await turnos(clientaId)).toHaveLength(0);
