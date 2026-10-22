@@ -46,4 +46,30 @@ availability.get("/:serviceId", zValidator("query", availabilityQuery), async (c
   return c.json(result);
 });
 
+// Varias consultas de disponibilidad en un solo pedido (el planificador de la compra).
+export const loteBody = z.object({
+  consultas: z
+    .array(
+      z.object({
+        serviceId: z.string().uuid(),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Formato esperado: YYYY-MM-DD"),
+        durationMinutes: z.number().int().positive().optional(),
+      }),
+    )
+    .min(1)
+    .max(60),
+});
+
+availability.post("/lote", zValidator("json", loteBody), async (c) => {
+  const db = createDb(c.env);
+  const { consultas } = c.req.valid("json");
+  const resultados = await Promise.all(
+    consultas.map((q) =>
+      // null (no undefined) = "usar la duración del servicio"; undefined dispara la búsqueda de reagendado.
+      getAvailability(db, q.serviceId, q.date, undefined, undefined, q.durationMinutes ?? null),
+    ),
+  );
+  return c.json({ resultados });
+});
+
 export { availability };
