@@ -111,7 +111,7 @@ async function comprarDepilacion(
 
 describe("sesionesCompradasSinTurno", () => {
   it("cuenta las líneas de depilación sin turno, sin contar la que ya tiene uno", async () => {
-    const antes = await sesionesCompradasSinTurno(db);
+    const antes = await sesionesCompradasSinTurno(db, clienteId);
 
     // Dos sesiones compradas: una se queda SIN turno (la que tiene que contar
     // `sesionesCompradasSinTurno`) y a la otra le enganchamos un turno a mano.
@@ -135,7 +135,7 @@ describe("sesionesCompradasSinTurno", () => {
       .where(eq(customerPurchaseService.id, lineas[0]!.id));
 
     // Sube en exactamente 1, no en 2.
-    expect(await sesionesCompradasSinTurno(db)).toBe(antes + 1);
+    expect(await sesionesCompradasSinTurno(db, clienteId)).toBe(antes + 1);
   });
 
   // Los tres casos que el conteo tiene que EXCLUIR, y que hasta la revisión
@@ -149,40 +149,40 @@ describe("sesionesCompradasSinTurno", () => {
   // corren en paralelo y varios crean líneas de depilación, así que un número
   // absoluto tomado al principio del archivo se desactualiza solo.
   it("no cuenta las sesiones de una compra cancelada", async () => {
-    const antes = await sesionesCompradasSinTurno(db);
+    const antes = await sesionesCompradasSinTurno(db, clienteId);
     const id = await comprarDepilacion("CANCELADA", 3);
     // El fixture existe de verdad: sin esto el test pasaría por vacío.
     expect(await lineasDe(id)).toBe(3);
     await cancelCompra(db, id, `${QA}_motivo`);
-    expect(await sesionesCompradasSinTurno(db)).toBe(antes);
+    expect(await sesionesCompradasSinTurno(db, clienteId)).toBe(antes);
   });
 
   it("no cuenta las sesiones de una compra vencida", async () => {
-    const antes = await sesionesCompradasSinTurno(db);
+    const antes = await sesionesCompradasSinTurno(db, clienteId);
     const ayer = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const id = await comprarDepilacion("VENCIDA", 2, ayer);
     expect(await lineasDe(id)).toBe(2);
-    expect(await sesionesCompradasSinTurno(db)).toBe(antes);
+    expect(await sesionesCompradasSinTurno(db, clienteId)).toBe(antes);
   });
 
   it("no cuenta una línea ya consumida aunque no tenga turno enganchado", async () => {
-    const antes = await sesionesCompradasSinTurno(db);
+    const antes = await sesionesCompradasSinTurno(db, clienteId);
     const id = await comprarDepilacion("CONSUMIDA", 2);
     expect(await lineasDe(id)).toBe(2);
     await db
       .update(customerPurchaseService)
       .set({ consumedAt: new Date() })
       .where(eq(customerPurchaseService.customerPurchaseId, id));
-    expect(await sesionesCompradasSinTurno(db)).toBe(antes);
+    expect(await sesionesCompradasSinTurno(db, clienteId)).toBe(antes);
   });
 
   // La contracara: una compra viva, sin vencer y sin consumir, SÍ tiene que
   // sumar. Sin esto, un conteo que devolviera siempre el mismo número pasaría
   // los tres tests de arriba.
   it("una compra viva sin turno sí suma sus sesiones", async () => {
-    const antes = await sesionesCompradasSinTurno(db);
+    const antes = await sesionesCompradasSinTurno(db, clienteId);
     const id = await comprarDepilacion("VIVA", 3);
     expect(await lineasDe(id)).toBe(3);
-    expect(await sesionesCompradasSinTurno(db)).toBe(antes + 3);
+    expect(await sesionesCompradasSinTurno(db, clienteId)).toBe(antes + 3);
   });
 });
