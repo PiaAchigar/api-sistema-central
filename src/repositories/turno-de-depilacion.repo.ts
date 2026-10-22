@@ -189,6 +189,9 @@ async function puertaDeLaLinea(
     sesionesTotales: number;
     libres: LineaDeDepilacion[];
     lineaYaTomada: boolean;
+    /** Líneas de la misma compra que un lote ya va a tomar y todavía no están
+     *  en la base: se descuentan de las libres. */
+    tomadasAntes?: number;
   },
 ): Promise<EstadoDePuerta> {
   const [finalAmount, pagado] = await Promise.all([
@@ -201,7 +204,8 @@ async function puertaDeLaLinea(
   ]);
   const sesionesLibres =
     opts.libres.filter((l) => l.purchaseId === opts.purchaseId).length +
-    (opts.lineaYaTomada ? 1 : 0);
+    (opts.lineaYaTomada ? 1 : 0) -
+    (opts.tomadasAntes ?? 0);
 
   return puertaDePago({
     finalAmount,
@@ -327,6 +331,7 @@ export async function datosParaAgendar(
   db: Db,
   purchaseServiceId: string,
   sexoPedido?: Sexo,
+  tomadasAntesEnLaCompra = 0,
 ): Promise<DatosParaAgendar> {
   const customerId = await customerIdDePurchaseService(db, purchaseServiceId);
   if (!customerId) throw notFound("Servicio de depilación");
@@ -358,6 +363,7 @@ export async function datosParaAgendar(
     sesionesTotales,
     libres,
     lineaYaTomada: false,
+    tomadasAntes: tomadasAntesEnLaCompra,
   });
 
   return {

@@ -1,7 +1,7 @@
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { appointmentBodyZone } from "../db/schema";
-import { badRequest, conflict, notFound } from "../lib/errors";
+import { appointmentBodyZone, customerPurchaseService } from "../db/schema";
+import { AppError, badRequest, conflict, notFound, type ErrorStatus } from "../lib/errors";
 import { subtractAll, type Interval } from "../lib/intervals";
 import type { Sexo } from "../lib/depilation-pricing";
 import { minutosElegidos, regalosElegidos } from "../lib/menu-de-zonas";
@@ -79,11 +79,54 @@ export type CreateAppointmentInput = {
   sexo?: Sexo;
 };
 
+export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+/**
+ * Todo lo que `guardarTurno` necesita, ya validado. `prepararTurno` lo arma
+ * leyendo la base; `guardarTurno` sólo escribe.
+ */
+export type TurnoPreparado = {
+  input: CreateAppointmentInput;
+  arca: ArcaConfig | null;
+  customer: NonNullable<Awaited<ReturnType<typeof getCustomerById>>>;
+  serviceName: string | null;
+  startDate: Date;
+  endDate: Date;
+  durationMinutes: number;
+  machineId: string | null;
+  servicePrice: string | null;
+  esDepilacion: boolean;
+  zonasParaGuardar: { bodyZoneId: string; minutos: number }[];
+};
+
+/**
+ * Un turno nuevo: `prepararTurno` (validaciones, sin escribir) y después
+ * `guardarTurno` dentro de una transacción.
+ */
 export async function createAppointment(
   db: Db,
   input: CreateAppointmentInput,
   arca?: ArcaConfig,
 ) {
+  const preparado = await prepararTurno(db, input, arca ?? null);
+  // Re-chequeo de solapamiento dentro de la transacción para mitigar carreras
+  return db.transaction((tx) => guardarTurno(tx, preparado));
+}
+
+/**
+ * Todas las validaciones de un turno nuevo, SIN escribir nada.
+ *
+ * `tomadasAntesEnLaCompra`: sólo lo usa el lote. Cuántas líneas de la MISMA
+ * compra ya tomaron los turnos anteriores del lote — todavía no están en la
+ * base, así que la puerta de pago las descuenta de las libres para que la
+ * última sesión del pack pida el 100% aunque se agenden todas juntas.
+ */
+export async function prepararTurno(
+  db: Db,
+  input: CreateAppointmentInput,
+  arca: ArcaConfig | null,
+  opts?: { tomadasAntesEnLaCompra?: number },
+): Promise<TurnoPreparado> {
   if (input.deposit && !arca) throw badRequest("Config ARCA requerida para señas");
   const startDate = new Date(input.start);
   if (Number.isNaN(startDate.getTime())) throw badRequest("Fecha de inicio inválida");
@@ -126,7 +169,12 @@ export async function createAppointment(
   let durationMinutes = ctx.durationMinutes;
   let zonasParaGuardar: { bodyZoneId: string; minutos: number }[] = [];
   if (esDepilacion) {
-    const datos = await datosParaAgendar(db, input.customerPurchaseServiceId!, input.sexo);
+    const datos = await datosParaAgendar(
+      db,
+      input.customerPurchaseServiceId!,
+      input.sexo,
+      opts?.tomadasAntesEnLaCompra ?? 0,
+    );
     const menuPorId = new Map(datos.zonas.map((z) => [z.id, z]));
     for (const zonaId of input.zonas!) {
       const zonaMenu = menuPorId.get(zonaId);
@@ -209,105 +257,180 @@ export async function createAppointment(
   const servicePrice =
     input.priceMode === "cash" ? ctx.service.unitPriceCash : ctx.service.unitPriceList;
 
-  // Re-chequeo de solapamiento dentro de la transacción para mitigar carreras
-  return db.transaction(async (tx) => {
-    const providerClash = await getOverlappingAppointments(
+  return {
+    input,
+    arca,
+    customer,
+    serviceName: ctx.service.name ?? null,
+    startDate,
+    endDate,
+    durationMinutes,
+    machineId,
+    servicePrice,
+    esDepilacion,
+    zonasParaGuardar,
+  };
+}
+
+/** Todo lo que escribe un turno nuevo. Va dentro de una transacción. */
+export async function guardarTurno(tx: Tx, p: TurnoPreparado) {
+  const {
+    input, arca, customer, startDate, endDate, durationMinutes, machineId,
+    servicePrice, esDepilacion, zonasParaGuardar,
+  } = p;
+  const providerClash = await getOverlappingAppointments(
+    tx,
+    { providerId: input.providerId },
+    startDate,
+    endDate,
+  );
+  if (providerClash.length > 0) {
+    throw conflict("El horario acaba de ser tomado por otro turno");
+  }
+  if (machineId) {
+    const machineClash = await getOverlappingAppointments(
       tx,
-      { providerId: input.providerId },
+      { machineId },
       startDate,
       endDate,
     );
-    if (providerClash.length > 0) {
-      throw conflict("El horario acaba de ser tomado por otro turno");
+    if (machineClash.length > 0) {
+      throw conflict("La máquina acaba de ser tomada por otro turno");
     }
-    if (machineId) {
-      const machineClash = await getOverlappingAppointments(
-        tx,
-        { machineId },
-        startDate,
-        endDate,
-      );
-      if (machineClash.length > 0) {
-        throw conflict("La máquina acaba de ser tomada por otro turno");
-      }
-    }
+  }
 
-    const apptStatus = input.status ?? "scheduled";
-    const reservationExpiresAt =
-      apptStatus === "reserved"
-        ? new Date(Date.now() + (input.expiryMinutes ?? 60) * 60_000)
-        : null;
+  const apptStatus = input.status ?? "scheduled";
+  const reservationExpiresAt =
+    apptStatus === "reserved"
+      ? new Date(Date.now() + (input.expiryMinutes ?? 60) * 60_000)
+      : null;
 
-    const appointment = await insertAppointment(tx, {
-      customerId: input.customerId,
-      serviceProviderId: input.providerId,
-      serviceId: input.serviceId,
-      machineId,
-      appointmentStart: startDate,
-      appointmentEnd: endDate,
-      durationMinutes,
-      servicePrice,
-      status: apptStatus,
-      reservationExpiresAt,
-      notes: input.notes ?? null,
-    });
+  const appointment = await insertAppointment(tx, {
+    customerId: input.customerId,
+    serviceProviderId: input.providerId,
+    serviceId: input.serviceId,
+    machineId,
+    appointmentStart: startDate,
+    appointmentEnd: endDate,
+    durationMinutes,
+    servicePrice,
+    status: apptStatus,
+    reservationExpiresAt,
+    notes: input.notes ?? null,
+  });
 
-    // Las zonas elegidas, para el detalle del recibo y la trazabilidad de qué
-    // se depiló. Sólo existe con el servicio ancla (validado arriba).
+  // Las zonas elegidas, para el detalle del recibo y la trazabilidad de qué
+  // se depiló. Sólo existe con el servicio ancla (validado arriba).
+  if (esDepilacion) {
+    await tx.insert(appointmentBodyZone).values(
+      zonasParaGuardar.map((z) => ({
+        appointmentId: appointment.id,
+        bodyZoneId: z.bodyZoneId,
+        minutos: z.minutos,
+      })),
+    );
+  }
+
+  // Descontar el servicio comprado, si el turno viene atado a una compra.
+  //
+  // Va DENTRO de la transacción y con su propia guarda: entre que la pantalla
+  // preguntó qué había disponible y el momento de guardar, otra persona pudo
+  // haber agendado ese mismo servicio comprado. Sin el chequeo, la segunda
+  // pisaría a la primera y el pack quedaría con una sesión de más.
+  if (input.customerPurchaseServiceId) {
     if (esDepilacion) {
-      await tx.insert(appointmentBodyZone).values(
-        zonasParaGuardar.map((z) => ({
-          appointmentId: appointment.id,
-          bodyZoneId: z.bodyZoneId,
-          minutos: z.minutos,
-        })),
-      );
-    }
-
-    // Descontar el servicio comprado, si el turno viene atado a una compra.
-    //
-    // Va DENTRO de la transacción y con su propia guarda: entre que la pantalla
-    // preguntó qué había disponible y el momento de guardar, otra persona pudo
-    // haber agendado ese mismo servicio comprado. Sin el chequeo, la segunda
-    // pisaría a la primera y el pack quedaría con una sesión de más.
-    if (input.customerPurchaseServiceId) {
-      if (esDepilacion) {
-        // No usa `tomarServicio`: esa guarda busca por `service_id`, y una
-        // línea de depilación lo tiene en NULL (su identidad vive en
-        // `depilation_combo_id`, ver `consumo.repo.ts`). Comparte con
-        // `tomarServicio` la misma guarda atómica ante carreras
-        // (`tomarFilaSiLibre`, privada de `consumo.repo.ts`) — sólo cambia de
-        // dónde sale la lista de "libres" para el error temprano.
-        await tomarLineaDeDepilacion(tx, input.customerPurchaseServiceId, {
-          appointmentId: appointment.id,
-          customerId: input.customerId,
-          ahora: new Date(),
-        });
-      } else {
-        await tomarServicio(tx, input.customerPurchaseServiceId, {
-          appointmentId: appointment.id,
-          customerId: input.customerId,
-          serviceId: input.serviceId,
-          ahora: new Date(),
-        });
-      }
-    }
-
-    if (input.deposit && arca) {
-      await registerDeposit(tx, arca, {
+      // No usa `tomarServicio`: esa guarda busca por `service_id`, y una
+      // línea de depilación lo tiene en NULL (su identidad vive en
+      // `depilation_combo_id`, ver `consumo.repo.ts`). Comparte con
+      // `tomarServicio` la misma guarda atómica ante carreras
+      // (`tomarFilaSiLibre`, privada de `consumo.repo.ts`) — sólo cambia de
+      // dónde sale la lista de "libres" para el error temprano.
+      await tomarLineaDeDepilacion(tx, input.customerPurchaseServiceId, {
         appointmentId: appointment.id,
         customerId: input.customerId,
-        contactId: customer.contactId ?? null,
-        customerName: customer.name ?? null,
+        ahora: new Date(),
+      });
+    } else {
+      await tomarServicio(tx, input.customerPurchaseServiceId, {
+        appointmentId: appointment.id,
+        customerId: input.customerId,
         serviceId: input.serviceId,
-        serviceName: ctx.service.name ?? null,
-        servicePrice: Number(servicePrice ?? 0),
-        deposit: input.deposit,
+        ahora: new Date(),
       });
     }
+  }
 
-    return appointment;
-  });
+  if (input.deposit && arca) {
+    await registerDeposit(tx, arca, {
+      appointmentId: appointment.id,
+      customerId: input.customerId,
+      contactId: customer.contactId ?? null,
+      customerName: customer.name ?? null,
+      serviceId: input.serviceId,
+      serviceName: p.serviceName,
+      servicePrice: Number(servicePrice ?? 0),
+      deposit: input.deposit,
+    });
+  }
+
+  return appointment;
+}
+
+/**
+ * Varios turnos de una vez, todos o ninguno. Sin seña (el lote sale de una
+ * compra ya hecha). Cualquier error se relanza con el índice del turno que
+ * lo causó, conservando su status.
+ */
+export class ErrorDeLote extends AppError {
+  constructor(
+    readonly original: AppError,
+    readonly indice: number,
+  ) {
+    super(original.status as ErrorStatus, original.message, original);
+    this.name = "ErrorDeLote";
+  }
+}
+
+async function compraDeLaLinea(db: Db, purchaseServiceId: string) {
+  const [fila] = await db
+    .select({ id: customerPurchaseService.customerPurchaseId })
+    .from(customerPurchaseService)
+    .where(eq(customerPurchaseService.id, purchaseServiceId))
+    .limit(1);
+  return fila?.id ?? null;
+}
+
+const conIndice = (e: unknown, indice: number) =>
+  e instanceof AppError ? new ErrorDeLote(e, indice) : e;
+
+export async function crearTurnosEnLote(db: Db, inputs: CreateAppointmentInput[]) {
+  const preparados: TurnoPreparado[] = [];
+  const tomadasPorLinea = new Map<string, number>(); // por compra
+  for (const [i, input] of inputs.entries()) {
+    try {
+      const compra = input.customerPurchaseServiceId
+        ? await compraDeLaLinea(db, input.customerPurchaseServiceId)
+        : null;
+      const tomadas = compra ? (tomadasPorLinea.get(compra) ?? 0) : 0;
+      preparados.push(await prepararTurno(db, input, null, { tomadasAntesEnLaCompra: tomadas }));
+      if (compra) tomadasPorLinea.set(compra, tomadas + 1);
+    } catch (e) {
+      throw conIndice(e, i);
+    }
+  }
+
+  let indice = 0;
+  try {
+    return await db.transaction(async (tx) => {
+      const creados = [];
+      for (indice = 0; indice < preparados.length; indice++) {
+        creados.push(await guardarTurno(tx, preparados[indice]!));
+      }
+      return creados;
+    });
+  } catch (e) {
+    throw conIndice(e, indice);
+  }
 }
 
 export async function listAppointmentsByDay(

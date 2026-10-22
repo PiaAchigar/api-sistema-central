@@ -6,6 +6,8 @@ import { createDb } from "../../db/client";
 import {
   computeProviderEarning,
   createAppointment,
+  crearTurnosEnLote,
+  ErrorDeLote,
   listAppointmentsByDays,
   rescheduleAppointment,
   updateAppointmentStatus,
@@ -209,6 +211,27 @@ appointmentsRouter.post("/", zValidator("json", createBody), async (c) => {
   const arca = await resolveArcaConfig(db, c.env, input.deposit?.issuerId);
   const appointment = await createAppointment(db, input, arca);
   return c.json(appointment, 201);
+});
+
+export const loteBody = z.object({
+  turnos: z.array(createBody.omit({ deposit: true })).min(1).max(30),
+});
+
+/**
+ * Varios turnos juntos, todos o ninguno (el planificador de la compra). Sin
+ * seña. Si uno falla: su mismo status y `{ error, indice }`.
+ */
+appointmentsRouter.post("/lote", requireAuth, zValidator("json", loteBody), async (c) => {
+  const db = createDb(c.env);
+  try {
+    const turnos = await crearTurnosEnLote(db, c.req.valid("json").turnos);
+    return c.json({ turnos }, 201);
+  } catch (e) {
+    if (e instanceof ErrorDeLote) {
+      return c.json({ error: e.message, indice: e.indice }, e.original.status as 400 | 404 | 409);
+    }
+    throw e;
+  }
 });
 
 const patchBody = z.object({
