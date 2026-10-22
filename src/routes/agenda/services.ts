@@ -63,7 +63,7 @@ import { isForeignKeyViolation } from "../../lib/db-errors";
 import { anclaDeDepilacionOpcional } from "../../repositories/ancla-de-depilacion.repo";
 import type { AppBindings, Variables } from "../../env";
 import { getOfertaDeProveedora } from "../../repositories/oferta-de-proveedora.repo";
-import { quienHaceEsto } from "../../repositories/quien-hace-esto.repo";
+import { quienHaceAlgoDe, quienHaceEsto } from "../../repositories/quien-hace-esto.repo";
 
 /** Roles con permiso de editar catálogo (nivel E de la matriz de reglas_negocio). */
 const STAFF = ["admin", "manager", "operator"] as const;
@@ -568,6 +568,26 @@ providersRouter.get(
     return c.json(await quienHaceEsto(db, tipo, id));
   },
 );
+
+/**
+ * GET /api/agenda/providers/quien-hace-en?servicio=&combo=&depilacion=true —
+ * las que hacen algo de lo de un Área (parámetros repetidos). Lo usa el Nuevo
+ * turno con un Área elegida y todavía sin Qué.
+ */
+providersRouter.get("/quien-hace-en", auth, requireAuth, requirePermission("agenda", "view"), async (c) => {
+  const ids = z.array(z.string().uuid()).max(500);
+  const servicios = ids.safeParse(c.req.queries("servicio") ?? []);
+  const combos = ids.safeParse(c.req.queries("combo") ?? []);
+  if (!servicios.success || !combos.success) throw badRequest("servicio y combo tienen que ser ids");
+  const db = createDb(c.env);
+  return c.json(
+    await quienHaceAlgoDe(db, {
+      servicios: servicios.data,
+      combos: combos.data,
+      depilacion: c.req.query("depilacion") === "true",
+    }),
+  );
+});
 
 providersRouter.get("/:id/services", async (c) => {
   const db = createDb(c.env);

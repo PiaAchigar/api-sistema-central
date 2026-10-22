@@ -50,6 +50,37 @@ export async function quienHaceEsto(db: Db, tipo: TipoDeQue, id: string): Promis
             SELECT ${anclaSql} FROM promotion_target pt
             WHERE pt.promotion_id = ${id}::uuid AND (pt.depilation_combo_id IS NOT NULL OR pt.body_zone_id IS NOT NULL)`;
 
+  return quienesHacen(db, servicios);
+}
+
+/**
+ * Las que hacen algo de una lista: lo que hay en un Área del Nuevo turno
+ * (sin Qué elegido todavía). La agenda arma la lista desde su catálogo, que
+ * ya sabe qué servicio, combo y pack cae en cada área.
+ */
+export async function quienHaceAlgoDe(
+  db: Db,
+  lista: { servicios: string[]; combos: string[]; depilacion: boolean },
+): Promise<QuienLoHace[]> {
+  const partes = [];
+  if (lista.servicios.length) {
+    partes.push(sql`SELECT unnest(${`{${lista.servicios.join(",")}}`}::uuid[]) AS service_id`);
+  }
+  if (lista.combos.length) {
+    partes.push(sql`
+      SELECT cs.service_id FROM combos c JOIN combo_service cs ON cs.combo_id = coalesce(c.pack_of_combo_id, c.id)
+      WHERE c.id = ANY(${`{${lista.combos.join(",")}}`}::uuid[])`);
+  }
+  if (lista.depilacion) {
+    const ancla = await anclaDeDepilacionOpcional(db);
+    if (ancla) partes.push(sql`SELECT ${ancla}::uuid AS service_id`);
+  }
+  if (partes.length === 0) return [];
+  return quienesHacen(db, sql.join(partes, sql` UNION `));
+}
+
+/** Las activas habilitadas en al menos uno de esos servicios, con cuáles y si todos. */
+async function quienesHacen(db: Db, servicios: ReturnType<typeof sql>): Promise<QuienLoHace[]> {
   const filas = (await db.execute(sql`
     WITH necesarios AS (
       SELECT DISTINCT n.service_id FROM (${servicios}) n WHERE n.service_id IS NOT NULL

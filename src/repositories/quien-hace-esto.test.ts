@@ -5,7 +5,7 @@ import { sql } from "drizzle-orm";
 import * as schema from "../db/schema";
 import type { Db } from "../db/client";
 import { anclaDeDepilacion } from "./ancla-de-depilacion.repo";
-import { quienHaceEsto } from "./quien-hace-esto.repo";
+import { quienHaceAlgoDe, quienHaceEsto } from "./quien-hace-esto.repo";
 
 // "¿Quién hace esto?": en el Nuevo turno, elegido el servicio / combo / pack /
 // promo, el desplegable de Prestadora lista a las que hacen alguna parte, con
@@ -127,3 +127,25 @@ describe("quienHaceEsto", () => {
     expect(await quienHaceEsto(db, "combo", "00000000-0000-0000-0000-000000000000")).toEqual([]);
   });
 });
+
+describe("quienHaceAlgoDe (lo de un área)", () => {
+  // Elegida un Área en el Nuevo turno (sin Qué todavía): las que hacen algo de ahí.
+  it("las que hacen al menos un servicio, combo o pack de la lista", async () => {
+    const ids = (r: Awaited<ReturnType<typeof quienHaceAlgoDe>>) => r.map((x) => x.providerId);
+    expect(ids(await quienHaceAlgoDe(db, { servicios: [masaje], combos: [], depilacion: false }))).toEqual([lu]);
+    const conCombo = ids(await quienHaceAlgoDe(db, { servicios: [], combos: [pack], depilacion: false }));
+    expect(conCombo).toContain(lu);
+    expect(conCombo).toContain(gabi);
+  });
+
+  it("depilación: las habilitadas en el ancla", async () => {
+    const r = await quienHaceAlgoDe(db, { servicios: [], combos: [], depilacion: true });
+    expect(r.map((x) => x.providerId)).toContain(gabi);
+    expect(r.map((x) => x.providerId)).not.toContain(lu);
+  });
+
+  it("sin nada: vacío", async () => {
+    expect(await quienHaceAlgoDe(db, { servicios: [], combos: [], depilacion: false })).toEqual([]);
+  });
+});
+
