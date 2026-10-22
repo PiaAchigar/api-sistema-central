@@ -63,6 +63,7 @@ import { isForeignKeyViolation } from "../../lib/db-errors";
 import { anclaDeDepilacionOpcional } from "../../repositories/ancla-de-depilacion.repo";
 import type { AppBindings, Variables } from "../../env";
 import { getOfertaDeProveedora } from "../../repositories/oferta-de-proveedora.repo";
+import { quienHaceEsto } from "../../repositories/quien-hace-esto.repo";
 
 /** Roles con permiso de editar catálogo (nivel E de la matriz de reglas_negocio). */
 const STAFF = ["admin", "manager", "operator"] as const;
@@ -544,6 +545,27 @@ providersRouter.get(
     const db = createDb(c.env);
     const schedules = await getProviderSchedules(db, c.req.valid("query").date);
     return c.json(schedules);
+  },
+);
+
+/**
+ * GET /api/agenda/providers/quien-hace?tipo=&id= — quién hace lo elegido en el
+ * Nuevo turno (servicio, combo/pack, depilación o promo): las que hacen alguna
+ * parte, con qué hace cada una y si hace todo.
+ */
+providersRouter.get(
+  "/quien-hace",
+  auth,
+  requireAuth,
+  requirePermission("agenda", "view"),
+  zValidator(
+    "query",
+    z.object({ tipo: z.enum(["servicio", "combo", "depilacion", "promo"]), id: z.string().uuid() }),
+  ),
+  async (c) => {
+    const db = createDb(c.env);
+    const { tipo, id } = c.req.valid("query");
+    return c.json(await quienHaceEsto(db, tipo, id));
   },
 );
 

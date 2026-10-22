@@ -364,6 +364,15 @@ describe("máquinas de una proveedora (providersRouter)", () => {
     expect(res.status).toBe(401);
   });
 
+  it("GET /quien-hace: 200 con sesión, 400 con tipo inválido, 401 sin token", async () => {
+    const h = { Authorization: `Bearer ${TOKEN}` };
+    const ok = await app.request(`/providers/quien-hace?tipo=servicio&id=${provId}`, { headers: h }, ENV);
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual([]);
+    expect((await app.request(`/providers/quien-hace?tipo=otro&id=${provId}`, { headers: h }, ENV)).status).toBe(400);
+    expect((await app.request(`/providers/quien-hace?tipo=servicio&id=${provId}`, {}, ENV)).status).toBe(401);
+  });
+
   it("GET /oferta: lo que ofrece (con sesión), 401 sin token", async () => {
     const h = { Authorization: `Bearer ${TOKEN}` };
     const res = await app.request(`/providers/${provId}/oferta`, { headers: h }, ENV);
