@@ -7,6 +7,11 @@ import type { Db } from "../db/client";
 import { basePlanificador, intervaloDeLaCompra } from "./planificador.repo";
 import { createCompra } from "./compras.repo";
 import { crearCombo, hardDeleteCombo, leerConfig } from "./depilacion.repo";
+import { usarConfigDeDepilacionDeTest } from "../test-support/depilation-config";
+
+// Escribe la fila única de depilation_pricing_config: toma el lock compartido
+// y deja la fila real como estaba al terminar.
+usarConfigDeDepilacionDeTest();
 
 // Los días sugeridos entre sesiones de una compra (spec 2026-10-22-planificador-de-la-compra).
 // Cada test arma sus propios datos con el prefijo ZZ_QA_PLAN y no depende de lo

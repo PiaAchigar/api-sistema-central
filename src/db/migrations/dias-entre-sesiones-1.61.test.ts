@@ -22,6 +22,11 @@ vi.mock("../../middleware/auth", async (importOriginal) => {
 const { combosRouter } = await import("../../routes/agenda/combos");
 const { promotionsRouter } = await import("../../routes/agenda/promotions");
 const { depilacionRouter } = await import("../../routes/agenda/depilacion");
+const { usarConfigDeDepilacionDeTest } = await import("../../test-support/depilation-config");
+
+// Escribe la fila única de depilation_pricing_config: toma el lock compartido
+// y deja la fila real como estaba al terminar.
+usarConfigDeDepilacionDeTest();
 
 /**
  * Migración 1.61.0 (días entre sesiones) y las APIs de Administración que la
