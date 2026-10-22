@@ -257,6 +257,29 @@ describe("basePlanificador", () => {
     expect((await basePlanificador(db, otra.id))!.sesiones.every((s) => !s.juntos)).toBe(true);
   });
 
+  it("combo_service con el mismo created_at (un solo INSERT): dentro de cada vuelta, alfabético por servicio y estable", async () => {
+    const cli = await clienta("Empate", null);
+    const zeta = await uno(sql`
+      INSERT INTO service (id, name, estimated_duration_minutes, is_active) VALUES (gen_random_uuid(), ${`${QA}_SvcEmpateZeta`}, 40, true) RETURNING id`);
+    const alfa = await uno(sql`
+      INSERT INTO service (id, name, estimated_duration_minutes, is_active) VALUES (gen_random_uuid(), ${`${QA}_SvcEmpateAlfa`}, 25, true) RETURNING id`);
+    const id = await uno(sql`
+      INSERT INTO combos (id, name, price_type, fixed_price, validity_months, area_category_id, kind, services_together)
+      VALUES (gen_random_uuid(), ${`${QA}_BaseEmpate`}, 'fixed', 1000, 3, ${categoria}, 'combo', false) RETURNING id`);
+    // Como writeLines: una sola sentencia multi-fila, así que created_at empata.
+    await db.execute(sql`INSERT INTO combo_service (id, combo_id, service_id, sessions_included, service_price, created_at)
+      VALUES (gen_random_uuid(), ${id}, ${zeta}, 1, 500, '2026-01-01 10:00:00'),
+             (gen_random_uuid(), ${id}, ${alfa}, 1, 500, '2026-01-01 10:00:00')`);
+    const compra = await comprarCombo(cli.id, "Empate", id, 2);
+
+    const a = (await basePlanificador(db, compra.id))!;
+    const b = (await basePlanificador(db, compra.id))!;
+    expect(a.sesiones.map((s) => [s.vuelta, s.orden, s.serviceId])).toEqual([
+      [1, 1, alfa], [1, 2, zeta], [2, 1, alfa], [2, 2, zeta],
+    ]);
+    expect(b.sesiones.map((s) => s.purchaseServiceId)).toEqual(a.sesiones.map((s) => s.purchaseServiceId));
+  });
+
   it("las líneas ya agendadas, consumidas o de capacitación no aparecen", async () => {
     const cli = await clienta("Libres", null);
     const c = await comboDeDosServicios("Libres", true);

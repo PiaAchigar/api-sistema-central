@@ -229,6 +229,8 @@ export async function basePlanificador(db: Db, compraId: string): Promise<BaseDe
       ),
     );
 
+  // combo_service no tiene columna de posición: si `created_at` empata (un solo
+  // INSERT multi-fila), el desempate cae al nombre del servicio y luego al id.
   const ordenadas = lineas.sort(
     (a, b) =>
       (a.repeticion ?? 0) - (b.repeticion ?? 0) ||
