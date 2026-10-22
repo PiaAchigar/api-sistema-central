@@ -98,8 +98,8 @@ describe("quienHaceEsto", () => {
   it("un combo: Lu hace todo, Gabi una parte (con qué hace); 'hacen todo' primero", async () => {
     const r = (await quienHaceEsto(db, "combo", combo)).filter((x) => [lu, gabi].includes(x.providerId));
     expect(r).toEqual([
-      { providerId: lu, nombre: `${QA}_Lu`, hace: [`${QA}_Limpieza`, `${QA}_Masaje`], todo: true },
-      { providerId: gabi, nombre: `${QA}_Gabi`, hace: [`${QA}_Limpieza`], todo: false },
+      { providerId: lu, nombre: `${QA}_Lu`, hace: [`${QA}_Limpieza`, `${QA}_Masaje`], serviceIds: [limpieza, masaje], todo: true },
+      { providerId: gabi, nombre: `${QA}_Gabi`, hace: [`${QA}_Limpieza`], serviceIds: [limpieza], todo: false },
     ]);
   });
 

@@ -23,6 +23,8 @@ export type QuienLoHace = {
   nombre: string | null;
   /** Nombres de los servicios de esto que ella hace */
   hace: string[];
+  /** Sus ids, en el mismo orden (para medir si está libre) */
+  serviceIds: string[];
   todo: boolean;
 };
 
@@ -51,14 +53,19 @@ export async function quienHaceEsto(db: Db, tipo: TipoDeQue, id: string): Promis
   const filas = (await db.execute(sql`
     WITH necesarios AS (
       SELECT DISTINCT n.service_id FROM (${servicios}) n WHERE n.service_id IS NOT NULL
+    ),
+    pares AS (
+      SELECT DISTINCT sps.service_provider_id AS provider_id, ne.service_id
+      FROM necesarios ne
+      JOIN service_provider_service sps ON sps.service_id = ne.service_id AND sps.is_active
     )
     SELECT sp.id AS "providerId", sp.full_name AS nombre,
-           json_agg(DISTINCT s.name ORDER BY s.name) AS hace,
-           count(DISTINCT ne.service_id) = (SELECT count(*) FROM necesarios) AS todo
-    FROM necesarios ne
-    JOIN service_provider_service sps ON sps.service_id = ne.service_id AND sps.is_active
-    JOIN service s ON s.id = ne.service_id AND s.is_active
-    JOIN service_providers sp ON sp.id = sps.service_provider_id AND sp.status = 'active'
+           json_agg(s.name ORDER BY s.name) AS hace,
+           json_agg(s.id ORDER BY s.name) AS "serviceIds",
+           count(*) = (SELECT count(*) FROM necesarios) AS todo
+    FROM pares pa
+    JOIN service s ON s.id = pa.service_id AND s.is_active
+    JOIN service_providers sp ON sp.id = pa.provider_id AND sp.status = 'active'
     GROUP BY sp.id, sp.full_name
     ORDER BY todo DESC, sp.full_name
   `)) as unknown as QuienLoHace[];
