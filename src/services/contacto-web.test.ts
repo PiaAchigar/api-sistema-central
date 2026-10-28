@@ -6,6 +6,7 @@ import * as schema from "../db/schema";
 import { contacts, conversations, messages } from "../db/schema";
 import type { Db } from "../db/client";
 import { recibirContactoWeb } from "./contacto-web.service";
+import { getConversationWithMessages } from "../repositories/conversations.repo";
 
 // El formulario de Contacto de la web (pedido de Pia, 2026-10-28): hasta hoy
 // hacía console.log y las consultas se perdían. Ahora entran al Inbox del CRM
@@ -54,6 +55,15 @@ async function mensajesDe(conversationId: string) {
 }
 
 describe("recibirContactoWeb", () => {
+  it("la conversación trae el teléfono y el mail, para responderle desde el CRM", async () => {
+    const r = await recibirContactoWeb(db, consulta());
+    expect((await getConversationWithMessages(db, r.conversationId))?.conversation).toMatchObject({
+      channel: "web",
+      contactPhone: "+54 9 11 5555-0001",
+      contactEmail: "zz.qa.contacto@ejemplo.com",
+    });
+  });
+
   it("una persona nueva: crea el contacto y una conversación del canal web con su mensaje", async () => {
     const r = await recibirContactoWeb(db, consulta());
 

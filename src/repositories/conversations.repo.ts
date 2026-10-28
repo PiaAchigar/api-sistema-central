@@ -37,6 +37,9 @@ const listItemColumns = {
   id: conversations.id,
   contactId: conversations.contactId,
   contactName: contacts.name,
+  // Para responder por fuera del Inbox lo que no llegó por WhatsApp (canal web).
+  contactPhone: contacts.phone,
+  contactEmail: contacts.email,
   channel: conversations.channel,
   status: conversations.status,
   assignedAgentId: conversations.assignedAgentId,
