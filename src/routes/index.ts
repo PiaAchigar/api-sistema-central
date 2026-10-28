@@ -9,6 +9,7 @@ import { treatments } from "./treatments";
 import { activitiesRouter } from "./activities";
 import { activitySchedulesRouter } from "./activitySchedules";
 import { trainingSubscriptionsRouter } from "./trainingSubscriptions";
+import { contactoWebRouter } from "./web/contacto";
 import { auth } from "../middleware/auth";
 import type { AppBindings, Variables } from "../env";
 
@@ -23,6 +24,7 @@ api.route("/crm", crm);
 api.route("/users", usersRouter);
 api.route("/ai-config", aiConfigRouter);
 api.route("/treatments", treatments);
+api.route("/web/contacto", contactoWebRouter);
 api.route("/", activitiesRouter);
 api.route("/", activitySchedulesRouter);
 api.route("/", trainingSubscriptionsRouter);
