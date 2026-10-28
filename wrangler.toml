@@ -25,7 +25,13 @@ localConnectionString = "postgresql://piubella:piubella@localhost:5499/piubella"
 
 # Variables de entorno no secretas
 [vars]
-ARCA_MODE = "mock"          # "mock" | "afip"
+# ⚠️ Esto es lo que va a PRODUCCIÓN en cada `wrangler deploy`: pisa lo que se
+# haya cambiado en el dashboard de Cloudflare. Hasta el 2026-10-28 decía
+# "mock": Gastón pasó producción a "afip" desde el dashboard (27/10) y el
+# deploy siguiente la volvió a "mock" sin que nadie lo quisiera.
+# En local el modo es "mock" igual: lo pone `.dev.vars` (ARCA_MODE=mock), que
+# `wrangler dev` lee por encima de esto y que nunca se sube.
+ARCA_MODE = "afip"          # "mock" | "afip"
 ARCA_ENV = "homo"           # "homo" (homologación) | "prod" — solo aplica si ARCA_MODE="afip"
 ARCA_POS = "2"              # punto de venta (0002)
 ARCA_INVOICE_TYPE = "C"     # monotributo emite Factura C
