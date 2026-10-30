@@ -43,10 +43,23 @@ async function categoriasDe(servicio: string): Promise<string[]> {
   return rows.map((r) => r.name);
 }
 
+/** Servicios que sólo tienen su área: no aparecen en el menú de la web. */
+async function fueraDelMenu(): Promise<string[]> {
+  const rows = await sql<{ name: string }[]>`
+    SELECT s.name FROM service s
+    WHERE NOT EXISTS (
+      SELECT 1 FROM service_category sc JOIN categories c ON c.id = sc.category_id
+      WHERE sc.service_id = s.id AND c.kind <> 'area')
+    ORDER BY 1`;
+  return rows.map((r) => r.name);
+}
+
 describe.skipIf(!hay)("migración 1.63.0 — Cosmetología y categorías faltantes", () => {
   let antes = 0;
+  let huerfanosAntes: string[] = [];
 
   beforeAll(async () => {
+    huerfanosAntes = await fueraDelMenu();
     aplicarMigracion();
     [{ n: antes }] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM categories`;
   });
@@ -59,22 +72,40 @@ describe.skipIf(!hay)("migración 1.63.0 — Cosmetología y categorías faltant
     expect(await padreDe("Cosmetología Corporal")).toBe("Cosmetología");
   });
 
-  it("lo de la cosmetóloga pasa a Cosmetología Facial; Tratamientos Faciales queda con la aparatología", async () => {
+  it("Tratamientos Faciales deja de existir: sus hijas pasan a Cosmetología Facial", async () => {
+    expect(await sql`SELECT 1 FROM categories WHERE name = 'Tratamientos Faciales'`).toHaveLength(0);
     // "Tratamientos Cosmetológicos" ES Cosmetología Facial, con otro nombre y otro padre.
     expect(await sql`SELECT 1 FROM categories WHERE name = 'Tratamientos Cosmetológicos'`).toHaveLength(0);
-    for (const hoja of ["Limpieza de cutis", "Dermaplaning", "Peeling", "Hidratación de Labios"])
+    for (const hoja of [
+      "Limpieza de cutis", "Dermaplaning", "Peeling", "Hidratación de Labios",
+      "Rejuvenecimiento Facial", "Manchas", "Acné y marcas de acné", "Ojeras", "Rosácea",
+      "Dermapen Tratamiento Facial", "Rutina de cuidado facial",
+    ])
       expect(await padreDe(hoja)).toBe("Cosmetología Facial");
-    for (const hoja of ["Rejuvenecimiento Facial", "Manchas", "Ojeras", "Rosácea"])
-      expect(await padreDe(hoja)).toBe("Tratamientos Faciales");
   });
 
-  it("HIFU e IPL salen de Cosmetología, pero siguen en Tratamientos Faciales y Aparatología", async () => {
-    for (const s of ["HIFU Facial con Papada - Sesión", "IPL Rostro - Sesión"]) {
-      const cats = await categoriasDe(s);
-      expect(cats).not.toContain("Cosmetología Facial");
-      expect(cats).toContain("Rejuvenecimiento Facial");
-      expect(cats).toContain("Aparatología Cosmetológica");
-    }
+  it("los servicios que colgaban directo de Tratamientos Faciales pasan a Cosmetología Facial", async () => {
+    for (const s of ["HIFU Facial con Papada - Sesión", "IPL Rostro - Sesión", "Crio-Radiofrecuencia - 1 zona",
+                     "Limpieza de Cutis Profunda", "Hidratación de Labios"])
+      expect(await categoriasDe(s)).toContain("Cosmetología Facial");
+    // Y siguen en la aparatología.
+    expect(await categoriasDe("HIFU Facial con Papada - Sesión")).toContain("Aparatología Cosmetológica");
+  });
+
+  it("se borran las Facial/Corporal desactivadas que repetían servicios", async () => {
+    for (const vieja of ["Aparatología Facial", "Peeling y Dermaplaning", "Tratamientos Faciales por Sesiones"])
+      expect(await sql`SELECT 1 FROM categories WHERE name = ${vieja}`).toHaveLength(0);
+    expect(
+      await sql`SELECT c.name FROM categories c JOIN categories p ON p.id = c.parent_category_id
+                 WHERE p.name = 'Cosmetología Facial' AND c.name IN ('Facial', 'Corporal')`,
+    ).toHaveLength(0);
+    // Los tratamientos por sesiones siguen en su objetivo.
+    expect(await categoriasDe("Tratamiento de Acné Juvenil - 4 Sesiones")).toContain("Acné y marcas de acné");
+    expect(await categoriasDe("Tratamiento de Rosácea - 4 Sesiones")).toContain("Rosácea");
+  });
+
+  it("Cosmetología Facial no tiene un \"Acné\" repetido", async () => {
+    expect(await sql`SELECT 1 FROM categories WHERE name = 'Acné'`).toHaveLength(0);
   });
 
   it("la limpieza de espalda pasa de Estética Corporal a Cosmetología Corporal (pedido de Laura)", async () => {
@@ -95,7 +126,7 @@ describe.skipIf(!hay)("migración 1.63.0 — Cosmetología y categorías faltant
   });
 
   it.each([
-    ["Cosmetología Facial", ["Acné", "Cicatrices", "Arrugas - Flaccidez", "Piel seca", "Piel grasa", "Quistes de milium"]],
+    ["Cosmetología Facial", ["Cicatrices", "Arrugas - Flaccidez", "Piel seca", "Piel grasa", "Quistes de milium"]],
     ["Cosmetología Corporal", ["Estrías (cosmetología)", "Acné corporal", "Cicatrices de acné corporal", "Celulitis (cosmetología)"]],
     ["Masajes", ["Masajes Reductores", "Drenaje Post Quirúrgico"]],
     ["Dermatología Clínica", ["Dermatoscopia"]],
@@ -128,16 +159,10 @@ describe.skipIf(!hay)("migración 1.63.0 — Cosmetología y categorías faltant
     ).toHaveLength(0);
   });
 
-  it("ningún servicio que se tocó queda sin categoría de catálogo (o sea, fuera del menú)", async () => {
-    // Masaje - HOMBRE - espalda ya estaba sólo en su área antes de esta
-    // migración: no es de acá, queda anotado para Laura.
-    const huerfanos = await sql`
-      SELECT s.name FROM service s
-      WHERE (s.name ILIKE 'HIFU%' OR s.name ILIKE 'IPL%' OR s.name ILIKE 'Limpieza de%')
-        AND NOT EXISTS (
-          SELECT 1 FROM service_category sc JOIN categories c ON c.id = sc.category_id
-          WHERE sc.service_id = s.id AND c.kind <> 'area')`;
-    expect(huerfanos).toHaveLength(0);
+  it("ningún servicio queda fuera del menú por esta migración", async () => {
+    // Los que ya estaban sólo en su área antes (p. ej. "Masaje - HOMBRE -
+    // espalda") no son de acá: quedan anotados para Laura.
+    expect(await fueraDelMenu()).toEqual(huerfanosAntes);
   });
 
   it("correrla dos veces no duplica nada", async () => {

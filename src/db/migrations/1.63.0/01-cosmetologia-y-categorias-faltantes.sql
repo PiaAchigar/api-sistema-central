@@ -2,29 +2,34 @@
 -- 1.63.0 / 01 — Cosmetología como categoría propia, y las que faltaban
 -- ════════════════════════════════════════════════════════════════════════════
 -- Pedido de Laura (2026-10-28, #32 de PENDIENTES.md), sobre su CATEGORIAS.md.
--- Decisión de Pia: Cosmetología y Tratamientos Faciales son categorías
--- HERMANAS. Cosmetología = lo que hace la cosmetóloga (limpiezas, peelings,
--- dermaplaning, hidratación de labios), facial y corporal. Tratamientos
--- Faciales se queda con la aparatología facial (HIFU, IPL, radiofrecuencia)
--- y sus objetivos (rejuvenecimiento, manchas, ojeras, rosácea).
+-- Decisión de Pia (2026-10-30): "Tratamientos Faciales" deja de existir. Todo
+-- lo que tenía (servicios y subcategorías: Rejuvenecimiento, Manchas, Acné y
+-- marcas de acné, Ojeras, Rosácea…) pasa a "Cosmetología Facial", que junto
+-- con "Cosmetología Corporal" cuelga de la raíz nueva "Cosmetología".
 --
 -- Qué hace:
 --   1. Crea "Cosmetología" (raíz) y "Cosmetología Corporal".
 --   2. "Tratamientos Cosmetológicos" pasa a ser "Cosmetología Facial": cambia
 --      de nombre y de padre, y se lleva sus hijas (Limpieza de cutis,
---      Dermaplaning, Peeling). Se le suma "Hidratación de Labios".
---   3. HIFU e IPL salen de Cosmetología Facial. Siguen en Tratamientos
---      Faciales, en sus objetivos y en Aparatología Cosmetológica.
+--      Dermaplaning, Peeling).
+--   3. Las hijas y los servicios de "Tratamientos Faciales" pasan a
+--      Cosmetología Facial, y "Tratamientos Faciales" se borra. También se
+--      borran "Facial" y "Corporal" con lo que cuelga de ellas: estaban
+--      DESACTIVADAS dentro de Tratamientos Cosmetológicos y sólo repetían
+--      servicios que ya están en otras categorías.
 --   4. Limpieza de espalda (y de glúteos) pasa de Estética Corporal a
 --      Cosmetología Corporal: lo pidió Laura. Los objetivos de la cara
 --      (Manchas, Acné y marcas de acné) se le sacan; el área Estética queda.
 --   5. Crea las hojas que faltaban, cada una bajo el padre que indica Laura,
---      y engancha los tres servicios que ya existían con ese nombre.
+--      y engancha los tres servicios que ya existían con ese nombre. "Acné"
+--      no se crea: ya está "Acné y marcas de acné", que llega desde
+--      Tratamientos Faciales.
 --   6. "Alisado de cejas" pasa a "Laminado y alisado de cejas".
 --
 -- La web esconde las categorías sin servicios: lo nuevo aparece en el menú
 -- recién cuando Laura le asigna un servicio. Lo que sí cambia el menú ya es
--- Cosmetología (con lo que se mueve) y lo que sale de Estética Corporal.
+-- Cosmetología (con todo lo de Tratamientos Faciales) y lo que sale de
+-- Estética Corporal.
 --
 -- Nombres únicos a propósito: las migraciones buscan categorías por nombre.
 -- Donde el de Laura ya existía en otra rama, va con sufijo, igual que las de
@@ -39,16 +44,18 @@ DECLARE
   v_facial       uuid;
   v_corporal     uuid;
   v_padre        uuid;
-  v_hoja         uuid;
+  v_tf           uuid;
+  v_borrar       uuid[];
+  v_hay_activa   boolean;
   v_orden        int;
   r              record;
 BEGIN
-  -- ── 1. Cosmetología (raíz), al lado de Tratamientos Faciales ─────────────
+  -- ── 1. Cosmetología (raíz), en el lugar de Tratamientos Faciales ─────────
   SELECT id INTO v_cosmetologia FROM categories WHERE name = 'Cosmetología';
   IF v_cosmetologia IS NULL THEN
     INSERT INTO categories (id, name, parent_category_id, kind, is_active, display_order)
     VALUES (gen_random_uuid(), 'Cosmetología', NULL, 'tecnica', true,
-            (SELECT display_order FROM categories WHERE name = 'Tratamientos Faciales'))
+            COALESCE((SELECT display_order FROM categories WHERE name = 'Tratamientos Faciales'), 1))
     RETURNING id INTO v_cosmetologia;
   END IF;
 
@@ -71,19 +78,46 @@ BEGIN
     RETURNING id INTO v_corporal;
   END IF;
 
-  UPDATE categories SET parent_category_id = v_facial
-   WHERE name = 'Hidratación de Labios' AND parent_category_id IS DISTINCT FROM v_facial;
+  -- ── 3. Tratamientos Faciales se vacía en Cosmetología Facial y se borra ─
+  SELECT id INTO v_tf FROM categories WHERE name = 'Tratamientos Faciales';
+  IF v_tf IS NOT NULL THEN
+    -- Las hijas, detrás de las que ya tiene Cosmetología Facial.
+    SELECT COALESCE(max(display_order), 0) INTO v_orden
+      FROM categories WHERE parent_category_id = v_facial;
+    UPDATE categories SET parent_category_id = v_facial, display_order = display_order + v_orden
+     WHERE parent_category_id = v_tf;
 
-  -- ── 3. HIFU e IPL no son cosmetología ───────────────────────────────────
-  DELETE FROM service_category sc
-   USING service s
-   WHERE sc.service_id = s.id AND sc.category_id = v_facial
-     AND (s.name ILIKE 'HIFU%' OR s.name ILIKE 'IPL%');
+    INSERT INTO service_category (service_id, category_id)
+    SELECT sc.service_id, v_facial FROM service_category sc
+     WHERE sc.category_id = v_tf
+       AND NOT EXISTS (SELECT 1 FROM service_category x
+                        WHERE x.service_id = sc.service_id AND x.category_id = v_facial);
+    DELETE FROM service_category WHERE category_id = v_tf;
+    DELETE FROM categories WHERE id = v_tf;
+  END IF;
+
+  -- "Facial" y "Corporal" desactivadas, con todo lo que cuelga de ellas.
+  -- Ordenadas de la hoja a la raíz: el FK al padre no es en cascada.
+  WITH RECURSIVE sub AS (
+    SELECT id, is_active, 0 AS nivel FROM categories
+     WHERE parent_category_id = v_facial AND name IN ('Facial', 'Corporal') AND is_active = false
+    UNION ALL
+    SELECT c.id, c.is_active, sub.nivel + 1 FROM categories c JOIN sub ON c.parent_category_id = sub.id
+  )
+  SELECT array_agg(id ORDER BY nivel DESC), bool_or(is_active) INTO v_borrar, v_hay_activa FROM sub;
+  IF v_hay_activa THEN
+    RAISE EXCEPTION 'Debajo de las Facial/Corporal desactivadas hay una categoría activa: revisar antes de borrar';
+  END IF;
+  IF v_borrar IS NOT NULL THEN
+    DELETE FROM service_category WHERE category_id = ANY (v_borrar);
+    FOREACH v_padre IN ARRAY v_borrar LOOP
+      DELETE FROM categories WHERE id = v_padre;
+    END LOOP;
+  END IF;
 
   -- ── 5. Las hojas que faltaban (antes que el 4: usa "Acné corporal") ─────
   FOR r IN
     SELECT * FROM (VALUES
-      ('Cosmetología Facial',   'Acné',                               'objetivo'),
       ('Cosmetología Facial',   'Cicatrices',                         'objetivo'),
       ('Cosmetología Facial',   'Arrugas - Flaccidez',                'objetivo'),
       ('Cosmetología Facial',   'Piel seca',                          'objetivo'),
