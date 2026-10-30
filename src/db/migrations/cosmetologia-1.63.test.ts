@@ -4,7 +4,7 @@ import postgres from "postgres";
 import { execSync } from "node:child_process";
 
 /**
- * Migración 1.62.0: Cosmetología como categoría propia y las categorías que
+ * Migración 1.63.0: Cosmetología como categoría propia y las categorías que
  * faltaban según CATEGORIAS.md de Laura (pedido del 2026-10-28, #32).
  *
  * Es una migración de DATOS sobre el catálogo real: sólo corre si la base
@@ -13,7 +13,7 @@ import { execSync } from "node:child_process";
  */
 const URL_DB = "postgresql://piubella:piubella@localhost:5499/piubella";
 const sql = postgres(URL_DB, { max: 1, fetch_types: false, prepare: false });
-const ARCHIVO = "src/db/migrations/1.62.0/01-cosmetologia-y-categorias-faltantes.sql";
+const ARCHIVO = "src/db/migrations/1.63.0/01-cosmetologia-y-categorias-faltantes.sql";
 
 function aplicarMigracion() {
   execSync(
@@ -43,7 +43,7 @@ async function categoriasDe(servicio: string): Promise<string[]> {
   return rows.map((r) => r.name);
 }
 
-describe.skipIf(!hay)("migración 1.62.0 — Cosmetología y categorías faltantes", () => {
+describe.skipIf(!hay)("migración 1.63.0 — Cosmetología y categorías faltantes", () => {
   let antes = 0;
 
   beforeAll(async () => {

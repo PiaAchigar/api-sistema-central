@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════════════════
--- 1.62.0 / 01 — Cosmetología como categoría propia, y las que faltaban
+-- 1.63.0 / 01 — Cosmetología como categoría propia, y las que faltaban
 -- ════════════════════════════════════════════════════════════════════════════
 -- Pedido de Laura (2026-10-28, #32 de PENDIENTES.md), sobre su CATEGORIAS.md.
 -- Decisión de Pia: Cosmetología y Tratamientos Faciales son categorías
@@ -151,7 +151,7 @@ BEGIN
    WHERE name = 'Alisado de cejas'
      AND NOT EXISTS (SELECT 1 FROM categories WHERE name = 'Laminado y alisado de cejas');
 
-  RAISE NOTICE '1.62.0 aplicada: Cosmetología %, Facial %, Corporal %', v_cosmetologia, v_facial, v_corporal;
+  RAISE NOTICE '1.63.0 aplicada: Cosmetología %, Facial %, Corporal %', v_cosmetologia, v_facial, v_corporal;
 END $$;
 
 -- Verificación (correr aparte):
