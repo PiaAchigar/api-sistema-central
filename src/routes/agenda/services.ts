@@ -78,7 +78,8 @@ const listQuery = z.object({
 });
 
 // `auth` no bloquea: permite que un usuario staff sume los archivados con
-// ?includeInactive=true sin afectar el GET público de agenda/web.
+// ?includeInactive=true sin afectar el GET público de agenda/web, y separa lo
+// que ve la web (sin sesión) de lo que ve el staff.
 services.get("/", auth, zValidator("query", listQuery), async (c) => {
   const db = createDb(c.env);
   const filters = c.req.valid("query");
@@ -88,6 +89,10 @@ services.get("/", auth, zValidator("query", listQuery), async (c) => {
     q: filters.q,
     featured: filters.featured,
     includeInactive: canSeeInactive && filters.includeInactive === "true",
+    // La web pide sin sesión: ahí no van los que Laura ocultó en Sitio Web →
+    // Visibles. El dashboard y la agenda piden con sesión y los ven igual,
+    // porque ocultar de la web no saca el servicio del catálogo.
+    soloVisiblesEnLaWeb: !c.get("userId"),
   });
 
   const serviceIds = rows.map((r) => r.id);

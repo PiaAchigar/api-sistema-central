@@ -144,6 +144,7 @@ export class ActivitiesRepository {
       serviceProviderId?: string | null;
       classesPerMonth?: number;
       monthlyBasePrice?: number | string;
+      isVisibleWeb?: boolean;
     }
   ) {
     const db = this.getDb();
@@ -162,6 +163,7 @@ export class ActivitiesRepository {
           ? data.monthlyBasePrice
           : String(data.monthlyBasePrice);
     }
+    if (data.isVisibleWeb !== undefined) updateData.isVisibleWeb = data.isVisibleWeb;
     updateData.updatedAt = new Date();
 
     const rows = await db

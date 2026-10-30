@@ -151,6 +151,7 @@ services:
       # tablas que a esta altura ya existen.
       - ./src/db/migrations/1.54.0/01-limpiar-clasificaciones-muertas.sql:/docker-entrypoint-initdb.d/48-limpiar-clasificaciones-muertas.sql:ro
       - ./src/db/migrations/1.57.0/01-el-vector-del-servicio-se-invalida.sql:/docker-entrypoint-initdb.d/49-el-vector-del-servicio-se-invalida.sql:ro
+      - ./src/db/migrations/1.64.0/01-actividades-visibles-en-la-web.sql:/docker-entrypoint-initdb.d/50-actividades-visibles-en-la-web.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]

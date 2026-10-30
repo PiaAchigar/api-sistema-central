@@ -36,7 +36,14 @@ const serviceSummary = {
 
 export async function listServices(
   db: Db,
-  filters: { categoryId?: string; q?: string; featured?: boolean; includeInactive?: boolean },
+  filters: {
+    categoryId?: string;
+    q?: string;
+    featured?: boolean;
+    includeInactive?: boolean;
+    /** Sólo los tildados en Sitio Web → Visibles: lo que pide la web, sin sesión. */
+    soloVisiblesEnLaWeb?: boolean;
+  },
 ) {
   const conditions: SQL[] = [];
   // El servicio ancla de depilación queda afuera: no es un servicio que Laura
@@ -55,6 +62,7 @@ export async function listServices(
   if (!filters.includeInactive) conditions.push(eq(service.isActive, true));
   if (filters.q) conditions.push(ilike(service.name, `%${filters.q}%`));
   if (filters.featured) conditions.push(eq(service.isFeatured, true));
+  if (filters.soloVisiblesEnLaWeb) conditions.push(eq(service.isVisible, true));
 
   if (filters.categoryId) {
     return db

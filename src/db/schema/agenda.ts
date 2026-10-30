@@ -466,6 +466,9 @@ export const activities = pgTable("activities", {
   classesPerMonth: integer("classes_per_month").default(0), // Hard limit; 0 for machines
   monthlyBasePrice: decimal("monthly_base_price", { precision: 10, scale: 2 }),
   isActive: boolean("is_active").default(true),
+  // Check "Publicar en la web" (1.64.0). Archivar (`isActive`) la saca también
+  // de la agenda; esto sólo la saca de la web.
+  isVisibleWeb: boolean("is_visible_web").notNull().default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

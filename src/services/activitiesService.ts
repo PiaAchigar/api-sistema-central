@@ -108,6 +108,7 @@ export class ActivitiesService {
       serviceProviderId?: string | null;
       classesPerMonth?: number;
       monthlyBasePrice?: number | string;
+      isVisibleWeb?: boolean;
     }
   ) {
     // Verify activity exists
