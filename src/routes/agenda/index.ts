@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { activitiesPublicRouter } from "./activities-public";
+import { ajusteDePreciosRouter } from "./ajuste-de-precios";
 import { appointmentsRouter } from "./appointments";
 import { availability } from "./availability";
 import { categoriesRouter } from "./categories";
@@ -36,5 +37,6 @@ agenda.route("/machines", machinesRouter);
 agenda.route("/supplies", suppliesRouter);
 agenda.route("/web", webRouter);
 agenda.route("/faq", faqRouter);
+agenda.route("/precios", ajusteDePreciosRouter);
 
 export { agenda };

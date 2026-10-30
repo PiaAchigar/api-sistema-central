@@ -44,6 +44,7 @@ async function verifySupabaseJWT(
 export const auth: MiddlewareHandler<HonoCtx> = async (c, next) => {
   c.set("userId", null);
   c.set("userRole", null);
+  c.set("userEmail", null);
 
   // API key estática (x-api-key o Bearer con la key)
   if (c.env.API_KEY) {
@@ -68,6 +69,7 @@ export const auth: MiddlewareHandler<HonoCtx> = async (c, next) => {
       c.set("userId", payload.sub ?? null);
       const meta = payload.app_metadata as { role?: string } | undefined;
       c.set("userRole", meta?.role ?? null);
+      c.set("userEmail", typeof payload.email === "string" ? payload.email : null);
     }
   }
 

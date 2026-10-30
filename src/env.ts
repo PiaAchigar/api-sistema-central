@@ -2,6 +2,8 @@ export type Variables = {
   requestId: string;
   userId: string | null;
   userRole: string | null;
+  /** Email del token Supabase; null sin sesión o con API key. */
+  userEmail: string | null;
 };
 
 export type AppBindings = Omit<Env, "ARCA_MODE"> & {
