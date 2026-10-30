@@ -137,6 +137,12 @@ services:
       - ./src/db/migrations/1.58.0/01-reagendar-con-proveedora.sql:/docker-entrypoint-initdb.d/44-reagendar-con-proveedora.sql:ro
       - ./src/db/migrations/1.60.0/01-proveedora-por-horario.sql:/docker-entrypoint-initdb.d/45-proveedora-por-horario.sql:ro
       - ./src/db/migrations/1.61.0/01-dias-entre-sesiones.sql:/docker-entrypoint-initdb.d/46-dias-entre-sesiones.sql:ro
+      # 1.54.0 y 1.57.0 nunca se montaron: el reset dejaba la base sin el trigger
+      # que invalida el vector del servicio y con las clasificaciones muertas
+      # adentro. Van al final porque los dos son idempotentes y sólo dependen de
+      # tablas que a esta altura ya existen.
+      - ./src/db/migrations/1.54.0/01-limpiar-clasificaciones-muertas.sql:/docker-entrypoint-initdb.d/48-limpiar-clasificaciones-muertas.sql:ro
+      - ./src/db/migrations/1.57.0/01-el-vector-del-servicio-se-invalida.sql:/docker-entrypoint-initdb.d/49-el-vector-del-servicio-se-invalida.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]
