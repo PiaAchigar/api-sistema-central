@@ -64,8 +64,9 @@ export async function generateInvoicePdf(db: Db, env: AppBindings, invoiceId: st
   });
 
   const html = renderInvoiceHtml({
-    companyName: config?.companyName ?? "PiuBella",
+    companyName: config?.companyName ?? "Piu Bella Estética Pilates",
     address: config?.address ?? null,
+    telephone: config?.phone ?? "5491133775014",
     cuit: creds.cuit,
     invoiceType,
     ptoVta,
@@ -108,6 +109,7 @@ function escapeHtml(s: string): string {
 type InvoiceHtmlData = {
   companyName: string;
   address: string | null;
+  telephone: string | null;
   cuit: string;
   invoiceType: string;
   ptoVta: number;
@@ -169,6 +171,7 @@ function renderInvoiceHtml(d: InvoiceHtmlData): string {
     <div class="emisor">
       <div class="company">${escapeHtml(d.companyName)}</div>
       ${d.address ? `<div class="muted">${escapeHtml(d.address)}</div>` : ""}
+      ${d.telephone ? `<div class="muted">Tel.: ${escapeHtml(d.telephone)}</div>` : ""}
       <div class="muted">CUIT: ${escapeHtml(d.cuit)}</div>
       <div class="muted">Responsable Monotributo</div>
     </div>
