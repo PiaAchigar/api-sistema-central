@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { createDb } from "../../db/client";
 import { activities } from "../../db/schema";
 import type { AppBindings, Variables } from "../../env";
@@ -36,7 +36,8 @@ activitiesPublicRouter.get("/", async (c) => {
       monthlyBasePrice: activities.monthlyBasePrice,
     })
     .from(activities)
-    .where(eq(activities.isActive, true))
+    // Sólo las que Laura dejó tildadas en "Publicar en la web" (1.64.0).
+    .where(and(eq(activities.isActive, true), eq(activities.isVisibleWeb, true)))
     .orderBy(asc(activities.name));
   return c.json(rows.map(buildPublicActivity));
 });

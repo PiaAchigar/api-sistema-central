@@ -158,6 +158,7 @@ activitiesRouter.post(
  *   serviceProviderId?: string | null
  *   classesPerMonth?: number
  *   monthlyBasePrice?: number | string
+ *   isVisibleWeb?: boolean
  * }
  */
 activitiesRouter.patch(
@@ -173,6 +174,8 @@ activitiesRouter.patch(
       serviceProviderId: z.string().uuid().nullable().optional(),
       classesPerMonth: z.number().int().min(0).optional(),
       monthlyBasePrice: z.union([z.number(), z.string()]).optional(),
+      // Check "Publicar en la web" (1.64.0).
+      isVisibleWeb: z.boolean().optional(),
     })
   ),
   async (c) => {
