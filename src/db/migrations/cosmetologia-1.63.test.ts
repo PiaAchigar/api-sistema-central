@@ -22,8 +22,9 @@ function aplicarMigracion() {
   );
 }
 
-const [{ hay }] = await sql<{ hay: boolean }[]>`
+const [catalogoReal] = await sql<{ hay: boolean }[]>`
   SELECT EXISTS (SELECT 1 FROM categories WHERE name IN ('Tratamientos Cosmetológicos', 'Cosmetología Facial')) AS hay`;
+const hay = catalogoReal?.hay ?? false;
 
 async function padreDe(nombre: string): Promise<string | null> {
   const rows = await sql<{ padre: string | null }[]>`
@@ -61,7 +62,7 @@ describe.skipIf(!hay)("migración 1.63.0 — Cosmetología y categorías faltant
   beforeAll(async () => {
     huerfanosAntes = await fueraDelMenu();
     aplicarMigracion();
-    [{ n: antes }] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM categories`;
+    antes = (await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM categories`)[0]!.n;
   });
 
   afterAll(() => sql.end());
@@ -212,11 +213,11 @@ describe.skipIf(!hay)("migración 1.63.0 — Cosmetología y categorías faltant
 
   it("correrla dos veces no duplica nada", async () => {
     aplicarMigracion();
-    const [{ n }] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM categories`;
+    const n = (await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM categories`)[0]!.n;
     expect(n).toBe(antes);
-    const [{ links }] = await sql<{ links: number }[]>`
+    const links = (await sql<{ links: number }[]>`
       SELECT count(*)::int AS links FROM (
-        SELECT service_id, category_id FROM service_category GROUP BY 1, 2 HAVING count(*) > 1) d`;
+        SELECT service_id, category_id FROM service_category GROUP BY 1, 2 HAVING count(*) > 1) d`)[0]!.links;
     expect(links).toBe(0);
   });
 });
