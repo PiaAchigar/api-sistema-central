@@ -390,3 +390,37 @@ describe("máquinas de una proveedora (providersRouter)", () => {
     expect((await app.request(`/providers/${provId}/oferta`, {}, ENV)).status).toBe(401);
   });
 });
+
+describe("GET /api/agenda/services — el check \"Visible\" de Sitio Web", () => {
+  // La web pide el listado sin credenciales: ahí un servicio oculto no va.
+  // El dashboard y la agenda piden con sesión y lo siguen viendo, porque
+  // ocultarlo de la web no lo saca del catálogo ni de la agenda.
+  const OCULTO = `${QA_PREFIX}OCULTO_EN_LA_WEB`;
+  const VISIBLE = `${QA_PREFIX}VISIBLE_EN_LA_WEB`;
+
+  beforeAll(async () => {
+    await limpiarQA();
+    await testDb.insert(service).values([
+      { name: OCULTO, isActive: true, isVisible: false },
+      { name: VISIBLE, isActive: true, isVisible: true },
+    ]);
+  });
+
+  afterAll(async () => {
+    await limpiarQA();
+  });
+
+  const nombres = async (headers: Record<string, string>) => {
+    const res = await app.request(`/?q=${QA_PREFIX}`, { headers }, ENV);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { name: string }[]).map((s) => s.name).sort();
+  };
+
+  it("sin sesión (la web) no devuelve los ocultos", async () => {
+    expect(await nombres({})).toEqual([VISIBLE]);
+  });
+
+  it("con sesión (dashboard, agenda) devuelve todos", async () => {
+    expect(await nombres({ Authorization: `Bearer ${TOKEN}` })).toEqual([OCULTO, VISIBLE].sort());
+  });
+});
