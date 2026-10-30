@@ -34,6 +34,11 @@ const invoiceSummary = {
   issuerId: invoices.issuerId,
   issuerName: arcaIssuers.name,
   issuerCuit: arcaIssuers.cuit,
+  /** Punto de venta del facturador. El número de comprobante no identifica
+   *  nada por sí solo: ARCA numera por (punto de venta, tipo), así que la
+   *  0002-00000010 de Laura y la 0004-00000010 de Lucía son comprobantes
+   *  distintos. Viaja en el resumen para que el front no tenga que cablearlo. */
+  issuerPointOfSale: arcaIssuers.pointOfSale,
   /** No NULL = esta fila es una nota de crédito, no una factura (1.49.0). Va
    *  en el resumen compartido para que la lista y la ficha puedan
    *  distinguirlas sin una consulta aparte. */

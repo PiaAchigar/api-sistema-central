@@ -221,16 +221,28 @@ export async function emitInvoice(db: Db, env: AppBindings, invoiceId: string) {
  */
 export async function emitBatch(db: Db, env: AppBindings, invoiceIds?: string[]) {
   const ids = invoiceIds ?? (await listDraftInvoiceIds(db));
-  const results: { invoiceId: string; ok: boolean; cae?: string; invoiceNumber?: number; error?: string }[] = [];
+  const results: {
+    invoiceId: string;
+    ok: boolean;
+    cae?: string;
+    pointOfSale?: number;
+    invoiceNumber?: number;
+    error?: string;
+  }[] = [];
   for (const id of ids) {
     try {
       const invoice = await emitInvoice(db, env, id);
       const logs = await getArcaLogsForInvoice(db, id);
       const lastSuccess = logs.filter((l) => l.status === "success").pop();
+      // `emitInvoice` devuelve la fila cruda de invoices, que no sabe el punto
+      // de venta: ese dato vive en el facturador. Lo releemos con el join para
+      // poder informar el número completo, 0002-00000010 y no 00000010 suelto.
+      const conFacturador = await getInvoiceById(db, id);
       results.push({
         invoiceId: id,
         ok: true,
         cae: lastSuccess?.cae ?? undefined,
+        pointOfSale: conFacturador?.issuerPointOfSale ?? undefined,
         invoiceNumber: invoice.invoiceNumber ?? undefined,
       });
     } catch (err) {
