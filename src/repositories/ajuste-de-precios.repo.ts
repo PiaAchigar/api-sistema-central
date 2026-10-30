@@ -17,7 +17,9 @@ export type FilaSimulada = {
   estado: EstadoFila;
 };
 
-export type ComboAfectado = { id: string; nombre: string; areaId: string | null };
+/** `kind` distingue combo de pack (columna `combos.kind`); los packs también congelan
+ *  `combo_service.service_price`, por eso entran al aviso. */
+export type ComboAfectado = { id: string; nombre: string; areaId: string | null; kind: "combo" | "pack" };
 
 export type ServicioAAplicar = { id: string; listaVista: number | null; efectivoVista: number | null };
 
@@ -73,13 +75,13 @@ export async function simularAjuste(
   });
 
   const cs = await db
-    .selectDistinct({ id: combos.id, name: combos.name, areaId: combos.areaCategoryId })
+    .selectDistinct({ id: combos.id, name: combos.name, areaId: combos.areaCategoryId, kind: combos.kind })
     .from(combos)
     .innerJoin(comboService, eq(comboService.comboId, combos.id))
     .where(sql`${combos.isActive} = true AND ${inArray(comboService.serviceId, ids)}`)
     .orderBy(combos.name);
 
-  return { servicios, combos: cs.map((c) => ({ id: c.id, nombre: c.name ?? "", areaId: c.areaId })) };
+  return { servicios, combos: cs.map((c) => ({ id: c.id, nombre: c.name ?? "", areaId: c.areaId, kind: c.kind === "pack" ? "pack" : "combo" })) };
 }
 
 export async function aplicarAjuste(

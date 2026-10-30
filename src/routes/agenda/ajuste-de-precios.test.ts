@@ -23,6 +23,16 @@ const app = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 app.use("*", auth);
 app.route("/api/agenda", agenda);
 
+// Mismo router pero con un rol sin `catalogo.edit` (sales): el requirePermission es el real.
+const appSales = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
+appSales.use("*", async (c, next) => {
+  c.set("userId", "u-sales");
+  c.set("userRole", "sales");
+  c.set("userEmail", null);
+  await next();
+});
+appSales.route("/api/agenda", agenda);
+
 const ajuste = { direccion: "subir", modo: "porcentaje", valor: 10, redondeo: 1 };
 const H = { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" };
 const post = (path: string, body: unknown, headers: Record<string, string> = H) =>
@@ -60,6 +70,14 @@ describe("POST /api/agenda/precios", () => {
   it("sin token → 401", async () => {
     const r = await post("simular", { categoryId: cat, ajuste }, { "Content-Type": "application/json" });
     expect(r.status).toBe(401);
+  });
+
+  it("rol sin catalogo.edit → 403 en simular y en aplicar", async () => {
+    const pide = (path: string, body: unknown) =>
+      appSales.request(`/api/agenda/precios/${path}`, { method: "POST", headers: H, body: JSON.stringify(body) }, ENV);
+    expect((await pide("simular", { categoryId: cat, ajuste })).status).toBe(403);
+    const r = await pide("aplicar", { categoryId: cat, ajuste, servicios: [{ id: sid, listaVista: 10000, efectivoVista: 9000 }] });
+    expect(r.status).toBe(403);
   });
 
   it("ajuste inválido → 400", async () => {

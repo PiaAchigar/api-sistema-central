@@ -7,7 +7,10 @@
 -- deshacer a mano si hace falta.
 --
 -- `category_id` va SIN FK: la categoría puede borrarse y el historial queda.
--- Dos sentencias, una por tabla, idempotentes.
+-- Cuatro sentencias sueltas (SQL Editor de Supabase: autocommit por sentencia), idempotentes.
+-- RLS activado como en el resto de las tablas de `public`: sin esto la clave publishable
+-- podría leer y reescribir el historial por la Data API. El Worker entra como dueño
+-- (postgres) y no se ve afectado.
 -- ════════════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS price_adjustments (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -31,6 +34,9 @@ CREATE TABLE IF NOT EXISTS price_adjustment_items (
   cash_before   numeric(10,2),
   cash_after    numeric(10,2)
 );
+ALTER TABLE price_adjustments ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE price_adjustment_items ENABLE ROW LEVEL SECURITY;
 
 -- Verificación (correr aparte):
 -- SELECT a.created_at, a.user_email, a.direction, a.mode, a.value, a.services_count FROM price_adjustments a ORDER BY 1 DESC;

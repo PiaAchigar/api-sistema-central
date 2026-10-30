@@ -30,7 +30,7 @@ const usuario = { id: "u-qa", email: "qa@piubella.test" };
 
 let padre: string, hija: string, nieta: string, otra: string;
 let sHija: string, sNieta: string, sAmbas: string, sInactivo: string, sNoVendible: string, sSinEfectivo: string, sAfuera: string;
-let comboActivo: string, comboInactivo: string;
+let comboActivo: string, comboInactivo: string, packActivo: string;
 const adjustmentIds: string[] = [];
 
 async function crearServicio(nombre: string, lista: string | null, efectivo: string | null, extra: Partial<typeof service.$inferInsert> = {}) {
@@ -88,13 +88,16 @@ beforeAll(async () => {
 
   comboActivo = crypto.randomUUID();
   comboInactivo = crypto.randomUUID();
+  packActivo = crypto.randomUUID();
   await db.insert(combos).values([
     { id: comboActivo, name: P + "combo", isActive: true, priceType: "fixed", fixedPrice: "1000.00", validityMonths: 6, kind: "combo", areaCategoryId: padre },
     { id: comboInactivo, name: P + "combo inactivo", isActive: false, priceType: "fixed", fixedPrice: "1000.00", validityMonths: 6, kind: "combo", areaCategoryId: padre },
+    { id: packActivo, name: P + "pack", isActive: true, priceType: "fixed", fixedPrice: "1000.00", validityMonths: 6, kind: "pack", packSessions: 4, areaCategoryId: padre },
   ]);
   await db.insert(comboService).values([
     { comboId: comboActivo, serviceId: sHija, sessionsIncluded: 1, servicePrice: "10000.00" },
     { comboId: comboInactivo, serviceId: sNieta, sessionsIncluded: 1, servicePrice: "20000.00" },
+    { comboId: packActivo, serviceId: sHija, sessionsIncluded: 4, servicePrice: "10000.00" },
   ]);
 });
 
@@ -125,7 +128,12 @@ describe("simularAjuste", () => {
     const { combos: cs } = await simularAjuste(db, { categoryId: padre, ajuste: subir10 });
     expect(cs.map((c) => c.id)).toContain(comboActivo);
     expect(cs.map((c) => c.id)).not.toContain(comboInactivo);
-    expect(cs.find((c) => c.id === comboActivo)).toMatchObject({ nombre: P + "combo", areaId: padre });
+    expect(cs.find((c) => c.id === comboActivo)).toMatchObject({ nombre: P + "combo", areaId: padre, kind: "combo" });
+  });
+
+  it("trae también los packs y los marca con kind 'pack'", async () => {
+    const { combos: cs } = await simularAjuste(db, { categoryId: padre, ajuste: subir10 });
+    expect(cs.find((c) => c.id === packActivo)).toMatchObject({ nombre: P + "pack", areaId: padre, kind: "pack" });
   });
 });
 
@@ -192,6 +200,18 @@ describe("aplicarAjuste", () => {
     expect(await precios(sAmbas)).toEqual(antes);
     expect(await precios(sHija)).toEqual({ l: 11000, c: 9900 });
     expect((await db.select().from(priceAdjustments)).length).toBe(cuantos);
+  });
+
+  it("409 si cambió sólo el efectivo (la lista visto coincide); nada cambia", async () => {
+    const antes = await precios(sHija);
+    const err = await aplicarAjuste(db, {
+      categoryId: padre, ajuste: subir10,
+      servicios: [{ id: sHija, listaVista: antes.l, efectivoVista: (antes.c ?? 0) + 1 }],
+      usuario,
+    }).catch((e) => e);
+    expect(err.status).toBe(409);
+    expect(err.conflictos).toEqual([sHija]);
+    expect(await precios(sHija)).toEqual(antes);
   });
 
   it("400 si un id está fuera de la rama; nada cambia", async () => {
