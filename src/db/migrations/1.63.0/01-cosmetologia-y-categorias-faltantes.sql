@@ -25,6 +25,15 @@
 --      no se crea: ya está "Acné y marcas de acné", que llega desde
 --      Tratamientos Faciales.
 --   6. "Alisado de cejas" pasa a "Laminado y alisado de cejas".
+--   7. "Dermatología" pasa a ser raíz y "Tratamientos Médicos" se borra: lo
+--      que tenía además de Dermatología (Medicina Regenerativa, Terapéutica,
+--      Cirugía Dermatológica) y sus servicios directos pasan a Dermatología.
+--   8. "Depilación Definitiva" (con Crystal 3D Plus) y "Actividades" pasan a
+--      tener también una categoría de verdad, no sólo el área. Se mudan ahí
+--      las hijas que estaban colgadas del área (Depilación Facial/Corporal,
+--      Pilates Reformer, Pilates Power 360, Thermobike). Comparten el nombre
+--      con su área: el código distingue las áreas por `kind = 'area'`.
+--   9. Las raíces quedan en el orden de CATEGORIAS.md.
 --
 -- La web esconde las categorías sin servicios: lo nuevo aparece en el menú
 -- recién cuando Laura le asigna un servicio. Lo que sí cambia el menú ya es
@@ -45,6 +54,9 @@ DECLARE
   v_corporal     uuid;
   v_padre        uuid;
   v_tf           uuid;
+  v_derm         uuid;
+  v_tm           uuid;
+  v_raiz         uuid;
   v_borrar       uuid[];
   v_hay_activa   boolean;
   v_orden        int;
@@ -184,6 +196,57 @@ BEGIN
   UPDATE categories SET name = 'Laminado y alisado de cejas'
    WHERE name = 'Alisado de cejas'
      AND NOT EXISTS (SELECT 1 FROM categories WHERE name = 'Laminado y alisado de cejas');
+
+  -- ── 7. Dermatología como raíz; Tratamientos Médicos se borra ────────────
+  SELECT id INTO v_derm FROM categories WHERE name = 'Dermatología' AND kind <> 'area';
+  SELECT id INTO v_tm FROM categories WHERE name = 'Tratamientos Médicos';
+  IF v_derm IS NULL THEN
+    RAISE EXCEPTION 'No está "Dermatología": ¿es el catálogo real?';
+  END IF;
+  UPDATE categories SET parent_category_id = NULL WHERE id = v_derm;
+  IF v_tm IS NOT NULL THEN
+    SELECT COALESCE(max(display_order), 0) INTO v_orden
+      FROM categories WHERE parent_category_id = v_derm;
+    UPDATE categories SET parent_category_id = v_derm, display_order = display_order + v_orden
+     WHERE parent_category_id = v_tm;
+
+    INSERT INTO service_category (service_id, category_id)
+    SELECT sc.service_id, v_derm FROM service_category sc
+     WHERE sc.category_id = v_tm
+       AND NOT EXISTS (SELECT 1 FROM service_category x
+                        WHERE x.service_id = sc.service_id AND x.category_id = v_derm);
+    DELETE FROM service_category WHERE category_id = v_tm;
+    DELETE FROM categories WHERE id = v_tm;
+  END IF;
+
+  -- ── 8. Depilación Definitiva y Actividades como categorías ──────────────
+  FOR r IN SELECT * FROM (VALUES ('Depilación Definitiva'), ('Actividades')) AS t(nombre) LOOP
+    SELECT id INTO v_raiz FROM categories WHERE name = r.nombre AND kind <> 'area';
+    IF v_raiz IS NULL THEN
+      INSERT INTO categories (id, name, parent_category_id, kind, is_active, display_order)
+      VALUES (gen_random_uuid(), r.nombre, NULL, 'tecnica', true, 0)
+      RETURNING id INTO v_raiz;
+    END IF;
+    -- Las hijas que estaban colgadas del área se mudan a la categoría.
+    UPDATE categories SET parent_category_id = v_raiz
+     WHERE parent_category_id IN (SELECT id FROM categories WHERE name = r.nombre AND kind = 'area');
+    IF r.nombre = 'Depilación Definitiva'
+       AND NOT EXISTS (SELECT 1 FROM categories WHERE name = 'Crystal 3D Plus') THEN
+      INSERT INTO categories (id, name, parent_category_id, kind, is_active, display_order)
+      VALUES (gen_random_uuid(), 'Crystal 3D Plus', v_raiz, 'maquina', true, 0);
+    END IF;
+  END LOOP;
+
+  -- ── 9. Raíces en el orden de CATEGORIAS.md; las que no están, después ───
+  FOR r IN SELECT * FROM (VALUES
+      ('Actividades', 1), ('Estética Corporal', 2), ('Cosmetología', 3),
+      ('Depilación Definitiva', 4), ('Belleza', 5), ('Masajes', 6),
+      ('Manicuría y Pedicuría', 7), ('Dermatología', 8), ('Aparatología', 9)
+    ) AS t(nombre, orden)
+  LOOP
+    UPDATE categories SET display_order = r.orden
+     WHERE name = r.nombre AND kind <> 'area' AND parent_category_id IS NULL;
+  END LOOP;
 
   RAISE NOTICE '1.63.0 aplicada: Cosmetología %, Facial %, Corporal %', v_cosmetologia, v_facial, v_corporal;
 END $$;

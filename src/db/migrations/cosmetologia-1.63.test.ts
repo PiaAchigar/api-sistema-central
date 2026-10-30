@@ -29,7 +29,7 @@ async function padreDe(nombre: string): Promise<string | null> {
   const rows = await sql<{ padre: string | null }[]>`
     SELECT p.name AS padre FROM categories c
     LEFT JOIN categories p ON p.id = c.parent_category_id
-    WHERE c.name = ${nombre}`;
+    WHERE c.name = ${nombre} AND c.kind <> 'area'`;
   expect(rows, `"${nombre}" tiene que existir una sola vez`).toHaveLength(1);
   return rows[0]!.padre;
 }
@@ -157,6 +157,50 @@ describe.skipIf(!hay)("migración 1.63.0 — Cosmetología y categorías faltant
     expect(
       await sql`SELECT name FROM categories WHERE name IN ('Cosmetología', 'Acné corporal', 'PDRN+') AND is_active IS NOT TRUE`,
     ).toHaveLength(0);
+  });
+
+  it("Dermatología es raíz y Tratamientos Médicos ya no existe", async () => {
+    expect(await padreDe("Dermatología")).toBeNull();
+    expect(await sql`SELECT 1 FROM categories WHERE name = 'Tratamientos Médicos'`).toHaveLength(0);
+    for (const hija of ["Dermatología Clínica", "Dermatología Estética", "Medicina Regenerativa",
+                        "Medicina Terapéutica", "Cirugía Dermatológica"])
+      expect(await padreDe(hija)).toBe("Dermatología");
+    // Lo que colgaba directo de Tratamientos Médicos sigue en Dermatología.
+    expect(await categoriasDe("Biopsia con Extracción y Estudio Patológico")).toContain("Dermatología");
+  });
+
+  it("Depilación Definitiva y Actividades tienen categoría, además de su área", async () => {
+    const raices = await sql<{ name: string; kind: string }[]>`
+      SELECT name, kind FROM categories
+       WHERE name IN ('Depilación Definitiva', 'Actividades') AND parent_category_id IS NULL
+       ORDER BY name, kind`;
+    expect(raices.map((r) => `${r.name}/${r.kind}`)).toEqual([
+      "Actividades/area", "Actividades/tecnica",
+      "Depilación Definitiva/area", "Depilación Definitiva/tecnica",
+    ]);
+    const hijas = await sql<{ padre: string; name: string }[]>`
+      SELECT p.name AS padre, c.name FROM categories c JOIN categories p ON p.id = c.parent_category_id
+       WHERE p.name IN ('Depilación Definitiva', 'Actividades') AND p.kind <> 'area' ORDER BY 1, 2`;
+    expect(hijas.map((h) => `${h.padre} > ${h.name}`)).toEqual([
+      "Actividades > Pilates Power 360", "Actividades > Pilates Reformer", "Actividades > Thermobike",
+      "Depilación Definitiva > Crystal 3D Plus",
+      "Depilación Definitiva > Depilación Definitiva Corporal", "Depilación Definitiva > Depilación Definitiva Facial",
+    ]);
+    // Las áreas quedan sin hijas: son sólo las pestañas.
+    expect(await sql`
+      SELECT 1 FROM categories c JOIN categories p ON p.id = c.parent_category_id
+       WHERE p.kind = 'area' AND p.name IN ('Depilación Definitiva', 'Actividades')`).toHaveLength(0);
+  });
+
+  it("las raíces quedan en el orden de CATEGORIAS.md", async () => {
+    const raices = await sql<{ name: string }[]>`
+      SELECT name FROM categories
+       WHERE parent_category_id IS NULL AND kind <> 'area' AND is_active
+       ORDER BY display_order, name`;
+    expect(raices.map((r) => r.name).slice(0, 9)).toEqual([
+      "Actividades", "Estética Corporal", "Cosmetología", "Depilación Definitiva", "Belleza",
+      "Masajes", "Manicuría y Pedicuría", "Dermatología", "Aparatología",
+    ]);
   });
 
   it("ningún servicio queda fuera del menú por esta migración", async () => {
