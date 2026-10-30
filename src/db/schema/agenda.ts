@@ -598,3 +598,31 @@ export const comboService = pgTable("combo_service", {
   servicePrice: decimal("service_price", { precision: 10, scale: 2 }),
   createdAt: createdAt(),
 });
+
+// ── Ajuste de precios en bloque (migración 1.65.0) ──────────────────────────
+// Una fila por ajuste aplicado + una por servicio tocado, con antes/después.
+// `category_id` sin FK a propósito: si se borra la categoría, el historial queda.
+export const priceAdjustments = pgTable("price_adjustments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  userId: text("user_id"),
+  userEmail: text("user_email"),
+  categoryId: uuid("category_id"),
+  direction: varchar("direction", { length: 10 }).notNull(),
+  mode: varchar("mode", { length: 12 }).notNull(),
+  value: numeric("value", { precision: 12, scale: 2 }).notNull(),
+  rounding: integer("rounding").notNull(),
+  servicesCount: integer("services_count").notNull(),
+});
+
+export const priceAdjustmentItems = pgTable("price_adjustment_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  adjustmentId: uuid("adjustment_id")
+    .notNull()
+    .references(() => priceAdjustments.id, { onDelete: "cascade" }),
+  serviceId: uuid("service_id").notNull(),
+  listBefore: numeric("list_before", { precision: 10, scale: 2 }),
+  listAfter: numeric("list_after", { precision: 10, scale: 2 }),
+  cashBefore: numeric("cash_before", { precision: 10, scale: 2 }),
+  cashAfter: numeric("cash_after", { precision: 10, scale: 2 }),
+});
