@@ -1,6 +1,11 @@
 services:
   db:
-    image: ankane/pgvector:latest
+    # Fijada a PG16 a proposito: el volumen piubella-pgdata tiene un data
+    # dir inicializado por PostgreSQL 16, y ankane/pgvector:latest paso a
+    # servir 15.4, que no lo puede abrir ("database files are incompatible
+    # with server" y el contenedor sale con codigo 1). Con un tag movil
+    # cualquier docker pull vuelve a romper el arranque de la base local.
+    image: pgvector/pgvector:pg16
     container_name: piubella-db
     ports:
       - "5499:5432"
@@ -137,6 +142,9 @@ services:
       - ./src/db/migrations/1.58.0/01-reagendar-con-proveedora.sql:/docker-entrypoint-initdb.d/44-reagendar-con-proveedora.sql:ro
       - ./src/db/migrations/1.60.0/01-proveedora-por-horario.sql:/docker-entrypoint-initdb.d/45-proveedora-por-horario.sql:ro
       - ./src/db/migrations/1.61.0/01-dias-entre-sesiones.sql:/docker-entrypoint-initdb.d/46-dias-entre-sesiones.sql:ro
+      # 47: dropea el indice unico que crea la 1.9.0 (10-) y lo reemplaza por
+      # uno que incluye `environment`. Tiene que ir DESPUES de la 1.9.0.
+      - ./src/db/migrations/1.62.0/01-facturador-por-ambiente.sql:/docker-entrypoint-initdb.d/47-facturador-por-ambiente.sql:ro
       # 1.54.0 y 1.57.0 nunca se montaron: el reset dejaba la base sin el trigger
       # que invalida el vector del servicio y con las clasificaciones muertas
       # adentro. Van al final porque los dos son idempotentes y sólo dependen de
