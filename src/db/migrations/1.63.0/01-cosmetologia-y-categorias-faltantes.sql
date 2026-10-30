@@ -28,8 +28,9 @@
 --   7. "Dermatología" pasa a ser raíz y "Tratamientos Médicos" se borra: lo
 --      que tenía además de Dermatología (Medicina Regenerativa, Terapéutica,
 --      Cirugía Dermatológica) y sus servicios directos pasan a Dermatología.
---   8. "Depilación Definitiva" (con Crystal 3D Plus) y "Actividades" pasan a
---      tener también una categoría de verdad, no sólo el área. Se mudan ahí
+--   8. "Depilación Definitiva" (con Crystal 3D Plus), "Actividades" y
+--      "Capacitaciones" pasan a tener también una categoría de verdad, no
+--      sólo el área. Se mudan ahí
 --      las hijas que estaban colgadas del área (Depilación Facial/Corporal,
 --      Pilates Reformer, Pilates Power 360, Thermobike). Comparten el nombre
 --      con su área: el código distingue las áreas por `kind = 'area'`.
@@ -219,8 +220,8 @@ BEGIN
     DELETE FROM categories WHERE id = v_tm;
   END IF;
 
-  -- ── 8. Depilación Definitiva y Actividades como categorías ──────────────
-  FOR r IN SELECT * FROM (VALUES ('Depilación Definitiva'), ('Actividades')) AS t(nombre) LOOP
+  -- ── 8. Depilación, Actividades y Capacitaciones como categorías ─────────
+  FOR r IN SELECT * FROM (VALUES ('Depilación Definitiva'), ('Actividades'), ('Capacitaciones')) AS t(nombre) LOOP
     SELECT id INTO v_raiz FROM categories WHERE name = r.nombre AND kind <> 'area';
     IF v_raiz IS NULL THEN
       INSERT INTO categories (id, name, parent_category_id, kind, is_active, display_order)
@@ -241,7 +242,8 @@ BEGIN
   FOR r IN SELECT * FROM (VALUES
       ('Actividades', 1), ('Estética Corporal', 2), ('Cosmetología', 3),
       ('Depilación Definitiva', 4), ('Belleza', 5), ('Masajes', 6),
-      ('Manicuría y Pedicuría', 7), ('Dermatología', 8), ('Aparatología', 9)
+      ('Manicuría y Pedicuría', 7), ('Dermatología', 8), ('Capacitaciones', 9),
+      ('Aparatología', 10)
     ) AS t(nombre, orden)
   LOOP
     UPDATE categories SET display_order = r.orden

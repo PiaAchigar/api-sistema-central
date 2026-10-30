@@ -169,13 +169,14 @@ describe.skipIf(!hay)("migración 1.63.0 — Cosmetología y categorías faltant
     expect(await categoriasDe("Biopsia con Extracción y Estudio Patológico")).toContain("Dermatología");
   });
 
-  it("Depilación Definitiva y Actividades tienen categoría, además de su área", async () => {
+  it("Depilación Definitiva, Actividades y Capacitaciones tienen categoría, además de su área", async () => {
     const raices = await sql<{ name: string; kind: string }[]>`
       SELECT name, kind FROM categories
-       WHERE name IN ('Depilación Definitiva', 'Actividades') AND parent_category_id IS NULL
+       WHERE name IN ('Depilación Definitiva', 'Actividades', 'Capacitaciones') AND parent_category_id IS NULL
        ORDER BY name, kind`;
     expect(raices.map((r) => `${r.name}/${r.kind}`)).toEqual([
       "Actividades/area", "Actividades/tecnica",
+      "Capacitaciones/area", "Capacitaciones/tecnica",
       "Depilación Definitiva/area", "Depilación Definitiva/tecnica",
     ]);
     const hijas = await sql<{ padre: string; name: string }[]>`
@@ -197,9 +198,9 @@ describe.skipIf(!hay)("migración 1.63.0 — Cosmetología y categorías faltant
       SELECT name FROM categories
        WHERE parent_category_id IS NULL AND kind <> 'area' AND is_active
        ORDER BY display_order, name`;
-    expect(raices.map((r) => r.name).slice(0, 9)).toEqual([
+    expect(raices.map((r) => r.name).slice(0, 10)).toEqual([
       "Actividades", "Estética Corporal", "Cosmetología", "Depilación Definitiva", "Belleza",
-      "Masajes", "Manicuría y Pedicuría", "Dermatología", "Aparatología",
+      "Masajes", "Manicuría y Pedicuría", "Dermatología", "Capacitaciones", "Aparatología",
     ]);
   });
 
