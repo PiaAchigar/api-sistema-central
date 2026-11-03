@@ -270,8 +270,8 @@ export const comboDepilacionBody = z
       .int("El redondeo tiene que ser un número entero")
       .positive("El redondeo tiene que ser mayor a cero")
       .nullish(),
-    // 1.56.0 — Meses de vigencia del pack. Vacío/null = no vence.
-    validityMonths: z
+    // Semanas de vigencia del pack (1.66.0). Vacío/null = no vence.
+    validityWeeks: z
       .number({ invalid_type_error: "La vigencia tiene que ser un número" })
       .int("La vigencia tiene que ser un número entero")
       .positive("La vigencia tiene que ser mayor a cero")

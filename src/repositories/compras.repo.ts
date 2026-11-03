@@ -91,6 +91,8 @@ export type CompraInput = {
   /** El nombre de la promo, congelado al vender (1.53.0). */
   promotionName?: string | null;
   expiresAt?: Date | null;
+  /** Con qué precio se cobró (1.66.0). Ausente = 'lista'. */
+  priceMode?: "lista" | "efectivo";
   notes?: string | null;
   /**
    * Cuánto del saldo a favor de la clienta se aplica a esta compra. `null` o
@@ -203,6 +205,7 @@ export async function createCompra(db: Db, input: CompraInput) {
         expiresAt: input.expiresAt ?? null,
         notes: input.notes ?? null,
         esPaqueteDePromo: input.esPaquete === true,
+        priceMode: input.priceMode ?? "lista",
       })
       .returning(compraFields);
 

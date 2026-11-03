@@ -1105,7 +1105,7 @@ describe("assembleDepilationCombo — invariante central: un guardado nunca mues
       packSessions: null,
       packDiscountPercentage: null,
       packRoundingBase: null,
-      validityMonths: null,
+      validityWeeks: null,
       sessionIntervalDays: null,
       isPublishedWeb: false,
       displayOrder: 0,
@@ -1128,7 +1128,7 @@ describe("assembleDepilationCombo — invariante central: un guardado nunca mues
       packSessions: null,
       packDiscountPercentage: null,
       packRoundingBase: null,
-      validityMonths: null,
+      validityWeeks: null,
       sessionIntervalDays: null,
       isPublishedWeb: false,
       displayOrder: 0,
@@ -1172,6 +1172,12 @@ describe("comboDepilacionBody", () => {
   const B = "22222222-2222-2222-2222-222222222222";
   const guardadoValido = { name: "Combo X", kind: "guardado" as const, zonaIds: [A] };
   const packFijoValido = { name: "Pack X", kind: "pack_fijo" as const, fixedPrice: 50000, zonaIds: [A] };
+
+  it("guarda validityWeeks", () => {
+    const r = comboDepilacionBody.safeParse({ ...guardadoValido, validityWeeks: 26 });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.validityWeeks).toBe(26);
+  });
 
   it("acepta un combo guardado sin precio", () => {
     expect(comboDepilacionBody.safeParse(guardadoValido).success).toBe(true);

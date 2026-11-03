@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cotizar, type ItemVendible } from "./cotizacion";
+import { cotizar, vencimientoDesde, type ItemVendible } from "./cotizacion";
 
 const GLOBAL = { sesiones: 6, descuentoPct: 15, redondeo: 500 };
 const COMPRA = new Date("2026-09-08T15:00:00Z");
@@ -10,14 +10,16 @@ const combo: ItemVendible = {
   nombre: "Combo Facial Premium",
   base: 60000,
   conDescuento: 51000,
-  validityMonths: 6,
+  baseEfectivo: 55000,
+  conDescuentoEfectivo: 46000,
+  validityWeeks: 26,
 };
 
 const zona: ItemVendible = {
   origen: "depilacion",
   id: "d1",
   nombre: "Media pierna",
-  unitario: 10000,
+  unitario: 10000, unitarioEfectivo: 10000,
   politica: GLOBAL,
 };
 
@@ -25,7 +27,7 @@ const servicio: ItemVendible = {
   origen: "servicio",
   id: "s1",
   nombre: "Venus Legacy 1 zona",
-  unitario: 10000,
+  unitario: 10000, unitarioEfectivo: 10000,
   politica: GLOBAL,
 };
 
@@ -37,12 +39,12 @@ describe("cotizar — combo genérico", () => {
     expect(q).toMatchObject({ sessionsTotal: 1, baseAmount: 60000, discountedAmount: 51000, finalAmount: 51000 });
   });
 
-  it("vence a los meses de vigencia del combo", () => {
-    expect(cotizar(combo, 1, null, COMPRA).expiresAt).toEqual(new Date("2027-03-08T15:00:00Z"));
+  it("vence a las semanas de vigencia del combo", () => {
+    expect(cotizar(combo, 1, null, COMPRA).expiresAt).toEqual(new Date("2027-03-09T15:00:00Z"));
   });
 
   it("sin vigencia cargada, no vence", () => {
-    expect(cotizar({ ...combo, validityMonths: null }, 1, null, COMPRA).expiresAt).toBeNull();
+    expect(cotizar({ ...combo, validityWeeks: null }, 1, null, COMPRA).expiresAt).toBeNull();
   });
 
   it("la descripción dice qué se vendió", () => {
@@ -93,7 +95,7 @@ describe("cotizar — sesiones que no son las del pack", () => {
       origen: "capacitacion",
       id: "t1",
       nombre: "Instructorado de Pilates",
-      unitario: 403000,
+      unitario: 403000, unitarioEfectivo: 403000,
       politica: { sesiones: 1, descuentoPct: 0, redondeo: 1 },
     };
     expect(cotizar(capacitacion, 1, null, COMPRA).description).toBe("Instructorado de Pilates");
@@ -123,7 +125,7 @@ describe("cotizar — la promo va encima de todo", () => {
   });
 
   it("también aplica a un combo genérico", () => {
-    expect(cotizar(combo, 1, promo, COMPRA).finalAmount).toBe(45900);
+    expect(cotizar(combo, 1, promo, COMPRA).finalAmount).toBe(41400); // 46000 en efectivo × 0,90: con promo se cobra siempre en efectivo
   });
 
   it("una promo en pesos se resta", () => {
@@ -201,7 +203,9 @@ describe("cotizar — un pack de catálogo", () => {
     base: 240000,
     // Ya viene con el descuento del pack aplicado por `conPrecioDePack`.
     conDescuento: 204000,
-    validityMonths: 6,
+    baseEfectivo: 220000,
+    conDescuentoEfectivo: 190000,
+    validityWeeks: 26,
     packSesiones: 4,
   };
 
@@ -230,13 +234,13 @@ describe("cotizar — un pack de catálogo", () => {
 describe("cotizar — la depilación ahora puede vencer (1.56.0)", () => {
   const pack = {
     origen: "depilacion" as const, id: "d1", nombre: "Pierna entera",
-    unitario: 19000, validityMonths: 12,
+    unitario: 19000, unitarioEfectivo: 19000, validityWeeks: 52,
     politica: { sesiones: 3, descuentoPct: 15, redondeo: 1000 },
   };
 
   it("calcula el vencimiento desde la fecha de compra", () => {
     const q = cotizar(pack, 3, null, new Date("2026-09-23T12:00:00Z"));
-    expect(q.expiresAt?.toISOString().slice(0, 10)).toBe("2027-09-23");
+    expect(q.expiresAt?.toISOString().slice(0, 10)).toBe("2027-09-22");
   });
 
   /**
@@ -245,7 +249,39 @@ describe("cotizar — la depilación ahora puede vencer (1.56.0)", () => {
    * existía cuando compró.
    */
   it("sin meses cargados no vence, como todas las compras anteriores", () => {
-    const q = cotizar({ ...pack, validityMonths: null }, 3, null, new Date());
+    const q = cotizar({ ...pack, validityWeeks: null }, 3, null, new Date());
     expect(q.expiresAt).toBeNull();
+  });
+});
+
+describe("cotizar — precio de lista o efectivo (1.66.0)", () => {
+  it("combo en efectivo cobra conDescuentoEfectivo", () => {
+    const q = cotizar(combo, 1, null, COMPRA, "efectivo");
+    expect(q).toMatchObject({ baseAmount: 55000, discountedAmount: 46000, finalAmount: 46000 });
+  });
+
+  it("servicio en efectivo usa unitarioEfectivo", () => {
+    const s: ItemVendible = { ...servicio, unitarioEfectivo: 9000 } as ItemVendible;
+    expect(cotizar(s, 1, null, COMPRA, "efectivo").finalAmount).toBe(9000);
+    expect(cotizar(s, 1, null, COMPRA, "lista").finalAmount).toBe(10000);
+  });
+
+  it("con promo se cobra sobre el efectivo aunque pidan lista", () => {
+    const c: ItemVendible = { ...combo, base: 50000, conDescuento: 50000, baseEfectivo: 45000, conDescuentoEfectivo: 45000 } as ItemVendible;
+    const promo = { id: "p", name: "10", promotionType: "percentage", precioDelPaquete: null, discountPercentage: 10, discountAmount: null, destinos: [] };
+    expect(cotizar(c, 1, promo, COMPRA, "lista").finalAmount).toBe(40500);
+  });
+
+  it("depilación ignora el modo", () => {
+    expect(cotizar(zona, 1, null, COMPRA, "efectivo").finalAmount).toBe(10000);
+  });
+});
+
+describe("vencimientoDesde", () => {
+  it("vencimientoDesde suma 7×N días", () => {
+    expect(vencimientoDesde(new Date("2026-11-02T12:00:00Z"), 5)?.toISOString().slice(0, 10)).toBe("2026-12-07");
+  });
+  it("null si no hay plazo", () => {
+    expect(vencimientoDesde(new Date(), null)).toBeNull();
   });
 });

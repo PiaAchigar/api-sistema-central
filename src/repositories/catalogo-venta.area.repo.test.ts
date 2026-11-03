@@ -128,7 +128,7 @@ describe("el área de cada item del catálogo de venta", () => {
     const cat = await listCatalogoVendible(db);
     const s = cat.servicios.find((i) => i.id === servicioConAreaId)!;
     expect(Object.keys(s).sort()).toEqual(
-      ["area", "desglose", "descripcion", "id", "nombre", "origen", "packDescuentoPct", "packSesiones", "politica", "precioDesde", "unitario"].sort(),
+      ["area", "desglose", "descripcion", "id", "nombre", "origen", "packDescuentoPct", "packSesiones", "politica", "precioDesde", "precioEfectivo", "unitario", "unitarioEfectivo"].sort(),
     );
   });
 });

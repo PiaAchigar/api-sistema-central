@@ -565,8 +565,8 @@ export type DepilationComboRow = {
   packSessions: number | null;
   packDiscountPercentage: number | null;
   packRoundingBase: number | null;
-  /** 1.56.0 — Meses de vigencia del pack. NULL = no vence. */
-  validityMonths: number | null;
+  /** Semanas de vigencia del pack. NULL = no vence. */
+  validityWeeks: number | null;
   /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL = usa el de la config. */
   sessionIntervalDays: number | null;
   isPublishedWeb: boolean;
@@ -600,8 +600,8 @@ export type DepilationComboAssembled = {
   packSessions: number | null;
   packDiscountPercentage: number | null;
   packRoundingBase: number | null;
-  /** 1.56.0 — Meses de vigencia del pack. NULL = no vence. */
-  validityMonths: number | null;
+  /** Semanas de vigencia del pack. NULL = no vence. */
+  validityWeeks: number | null;
   /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL = usa el de la config. */
   sessionIntervalDays: number | null;
   isPublishedWeb: boolean;
@@ -701,7 +701,7 @@ export function assembleDepilationCombo(
     packSessions: combo.packSessions,
     packDiscountPercentage: combo.packDiscountPercentage,
     packRoundingBase: combo.packRoundingBase,
-    validityMonths: combo.validityMonths,
+    validityWeeks: combo.validityWeeks,
     sessionIntervalDays: combo.sessionIntervalDays,
     isPublishedWeb: combo.isPublishedWeb,
     displayOrder: combo.displayOrder,
@@ -731,7 +731,7 @@ const comboFields = {
   packSessions: depilationCombo.packSessions,
   packDiscountPercentage: depilationCombo.packDiscountPercentage,
   packRoundingBase: depilationCombo.packRoundingBase,
-  validityMonths: depilationCombo.validityMonths,
+  validityWeeks: depilationCombo.validityWeeks,
   sessionIntervalDays: depilationCombo.sessionIntervalDays,
   isPublishedWeb: depilationCombo.isPublishedWeb,
   displayOrder: depilationCombo.displayOrder,
@@ -792,8 +792,8 @@ export type DepilationComboInput = {
   packSessions?: number | null;
   packDiscountPercentage?: number | null;
   packRoundingBase?: number | null;
-  /** 1.56.0 — Meses de vigencia del pack. NULL/ausente = no vence. */
-  validityMonths?: number | null;
+  /** Semanas de vigencia del pack. NULL/ausente = no vence. */
+  validityWeeks?: number | null;
   /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL/ausente = usa el de la config. */
   sessionIntervalDays?: number | null;
 };
@@ -872,7 +872,7 @@ export async function crearCombo(
         packSessions: input.packSessions ?? null,
         packDiscountPercentage: input.packDiscountPercentage ?? null,
         packRoundingBase: input.packRoundingBase ?? null,
-        validityMonths: input.validityMonths ?? null,
+        validityWeeks: input.validityWeeks ?? null,
         sessionIntervalDays: input.sessionIntervalDays ?? null,
         isPublishedWeb: input.isPublishedWeb ?? false,
         displayOrder: input.displayOrder ?? 0,
@@ -906,7 +906,7 @@ export async function actualizarCombo(
         packSessions: input.packSessions ?? null,
         packDiscountPercentage: input.packDiscountPercentage ?? null,
         packRoundingBase: input.packRoundingBase ?? null,
-        validityMonths: input.validityMonths ?? null,
+        validityWeeks: input.validityWeeks ?? null,
         sessionIntervalDays: input.sessionIntervalDays ?? null,
         isPublishedWeb: input.isPublishedWeb ?? false,
         displayOrder: input.displayOrder ?? 0,

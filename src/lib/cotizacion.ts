@@ -41,10 +41,14 @@ export type ItemVendible =
       nombre: string;
       /** Suma de las líneas, sin el descuento del combo. */
       base: number;
-      /** Lo que el combo cuesta según el catálogo. */
+      /** Lo que el combo cuesta según el catálogo (precio de lista). */
       conDescuento: number;
-      /** Meses de vigencia. NULL = no vence. */
-      validityMonths: number | null;
+      /** Igual que `base`, pero sumando los precios en efectivo. */
+      baseEfectivo: number;
+      /** Lo que el combo cuesta pagando en efectivo. */
+      conDescuentoEfectivo: number;
+      /** Semanas de vigencia. NULL = no vence. */
+      validityWeeks: number | null;
       /**
        * Sesiones que se lleva la clienta si esta fila es un PACK (1.50.0).
        *
@@ -63,18 +67,20 @@ export type ItemVendible =
       origen: "depilacion" | "servicio" | "capacitacion";
       id: string;
       nombre: string;
-      /** Lo que sale UNA sesión, sin ningún descuento. */
+      /** Lo que sale UNA sesión a precio de lista, sin ningún descuento. */
       unitario: number;
+      /** Lo que sale UNA sesión en efectivo; la lista si no hay efectivo. */
+      unitarioEfectivo: number;
       politica: PackPolitica;
       /**
-       * Meses de vigencia del pack. NULL = no vence.
+       * Semanas de vigencia del pack. NULL = no vence.
        *
-       * Sólo depilación lo carga hoy (1.56.0, `depilation_combo.validity_months`);
+       * Sólo depilación lo carga hoy (`depilation_combo.validity_weeks`);
        * servicio y capacitación quedan sin plazo, como siempre. Opcional (no
        * `null` a secas) para no obligar a todos los constructores viejos de
        * esta variante a declararlo.
        */
-      validityMonths?: number | null;
+      validityWeeks?: number | null;
     };
 
 export type PromoVendible = {
@@ -94,10 +100,17 @@ export type Cotizacion = PrecioDeCompra & {
   expiresAt: Date | null;
 };
 
-/** `purchasedAt + n meses`. Usa UTC igual que el resto de las fechas del worker. */
-function sumarMeses(desde: Date, meses: number): Date {
-  const d = new Date(desde);
-  d.setUTCMonth(d.getUTCMonth() + meses);
+/** Con qué precio se cobra: el de lista o el de efectivo. */
+export type ModoDePrecio = "lista" | "efectivo";
+
+/**
+ * `compradoEl + N×7 días`, o `null` si no hay plazo. El plazo es sólo en
+ * semanas; usa UTC igual que el resto de las fechas del worker.
+ */
+export function vencimientoDesde(compradoEl: Date, semanas: number | null): Date | null {
+  if (semanas == null) return null;
+  const d = new Date(compradoEl);
+  d.setUTCDate(d.getUTCDate() + semanas * 7);
   return d;
 }
 
@@ -122,7 +135,11 @@ export function cotizar(
   sesiones: number,
   promo: PromoVendible | null | undefined,
   compradoEl: Date,
+  modo: ModoDePrecio = "lista",
 ): Cotizacion {
+  // Las promos sólo se cobran en efectivo: con promo el modo se fuerza. El
+  // mensaje al usuario (si pidió lista) lo da la ruta, no esta función.
+  const enEfectivo = promo != null || modo === "efectivo";
   if (!Number.isInteger(sesiones) || sesiones < 1) {
     throw new Error("La compra necesita al menos una sesión");
   }
@@ -133,7 +150,7 @@ export function cotizar(
     if (sesiones !== 1) {
       throw new Error("Un combo se vende de a uno: las sesiones ya están en sus líneas");
     }
-    if (item.conDescuento <= 0) {
+    if ((enEfectivo ? item.conDescuentoEfectivo : item.conDescuento) <= 0) {
       throw new Error(`"${item.nombre}" está sin precio en el catálogo: no se puede vender`);
     }
     return {
@@ -142,24 +159,27 @@ export function cotizar(
       // ("Facial × 4"), así que no se le agrega nada.
       sessionsTotal: item.packSesiones ?? 1,
       promotionId: promo?.id ?? null,
-      expiresAt: item.validityMonths == null ? null : sumarMeses(compradoEl, item.validityMonths),
-      baseAmount: item.base,
-      discountedAmount: item.conDescuento,
-      finalAmount: aplicarPromo(item.conDescuento, promo),
+      expiresAt: vencimientoDesde(compradoEl, item.validityWeeks),
+      baseAmount: enEfectivo ? item.baseEfectivo : item.base,
+      discountedAmount: enEfectivo ? item.conDescuentoEfectivo : item.conDescuento,
+      finalAmount: aplicarPromo(enEfectivo ? item.conDescuentoEfectivo : item.conDescuento, promo),
     };
   }
 
-  if (item.unitario <= 0) {
+  // Depilación no tiene precio de efectivo propio: ignora el modo.
+  const unitario =
+    enEfectivo && item.origen !== "depilacion" ? item.unitarioEfectivo : item.unitario;
+  if (unitario <= 0) {
     throw new Error(`"${item.nombre}" está sin precio cargado: no se puede vender`);
   }
 
   const esPack = sesiones === item.politica.sesiones;
   const precios = precioDeCompra(
-    item.unitario,
+    unitario,
     sesiones,
     esPack
       ? { forma: "formula", config: politicaComoConfig(item.politica), propia: item.politica }
-      : { forma: "fijo", precioFijo: item.unitario },
+      : { forma: "fijo", precioFijo: unitario },
     promo,
   );
 
@@ -169,10 +189,9 @@ export function cotizar(
     sessionsTotal: sesiones,
     promotionId: promo?.id ?? null,
     // Depilación puede vencer desde la 1.56.0; los servicios sueltos siguen
-    // sin plazo. `validityMonths` NULL = no vence, que es lo que valía para
+    // sin plazo. `validityWeeks` NULL = no vence, que es lo que valía para
     // todas las compras anteriores.
-    expiresAt:
-      item.validityMonths == null ? null : sumarMeses(compradoEl, item.validityMonths),
+    expiresAt: vencimientoDesde(compradoEl, item.validityWeeks ?? null),
   };
 }
 

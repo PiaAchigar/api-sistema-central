@@ -150,4 +150,58 @@ describe("POST /purchases/quote (integración real)", () => {
     const hombre = await pedir(idClientaHombre);
     expect(hombre.finalAmount).toBeGreaterThan(mujer.finalAmount);
   });
+
+  describe("precio de lista o efectivo (1.66.0)", () => {
+    const PROMO = "22222222-2222-2222-2222-222222222222";
+
+    it("quote con promo y precio lista → 400 'Las promos se cobran sólo en efectivo.'", async () => {
+      const res = await pedirQuote({
+        origen: "depilacion", id: packId, sessions: 1, customerId: idClientaMujer,
+        promotionId: PROMO, precio: "lista",
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("Las promos se cobran sólo en efectivo.");
+    });
+
+    it("POST con promo y precio lista → 400", async () => {
+      const res = await app.request(
+        "/purchases",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            customerId: idClientaMujer, depilationComboId: packId, description: "x", sessionsTotal: 1,
+            baseAmount: 1000, discountedAmount: 1000, finalAmount: 900, promotionId: PROMO, precio: "lista",
+          }),
+        },
+        ENV,
+      );
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("Las promos se cobran sólo en efectivo.");
+    });
+
+    it("POST guarda price_mode", async () => {
+      const res = await app.request(
+        "/purchases",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            customerId: idClientaMujer, depilationComboId: packId, description: "QA price_mode", sessionsTotal: 1,
+            baseAmount: 1000, discountedAmount: 1000, finalAmount: 1000, precio: "efectivo",
+          }),
+        },
+        ENV,
+      );
+      expect(res.status).toBe(201);
+      const { id } = (await res.json()) as { id: string };
+      const [fila] = await testDb
+        .select({ priceMode: schema.customerPurchase.priceMode })
+        .from(schema.customerPurchase)
+        .where(eq(schema.customerPurchase.id, id));
+      expect(fila?.priceMode).toBe("efectivo");
+      // Se borra la compra de prueba (la clienta se limpia en afterAll).
+      await testDb.delete(schema.customerPurchase).where(eq(schema.customerPurchase.id, id));
+    });
+  });
 });

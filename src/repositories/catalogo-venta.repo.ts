@@ -10,7 +10,7 @@ import {
   serviceCategory,
   training,
 } from "../db/schema";
-import { precioDeServicio } from "../lib/combo-pricing";
+import { precioDeServicio, precioDeServicioEfectivo } from "../lib/combo-pricing";
 import {
   type FilaDeDesglose,
   desgloseDeCombo,
@@ -71,6 +71,18 @@ function precioDeListaDeCombo(c: ComboArmado): number {
   return porVuelta * vueltas;
 }
 
+/**
+ * Lo mismo que `precioDeListaDeCombo`, sobre los precios en efectivo: la suma
+ * de las líneas en efectivo, o N vueltas del efectivo por vuelta en un pack.
+ */
+function precioBaseEfectivoDeCombo(c: ComboArmado): number {
+  const subtotal = (c.servicesSubtotalCash as number | null) ?? c.servicesSubtotal;
+  if (c.kind !== "pack") return subtotal;
+  const vueltas = (c.packEffectiveSessions as number | null) ?? 1;
+  const porVuelta = (c.packUnitAmountCash as number | null) ?? subtotal;
+  return porVuelta * vueltas;
+}
+
 function comboVendible(c: ComboArmado): ItemVendible {
   return {
     origen: "combo",
@@ -80,7 +92,9 @@ function comboVendible(c: ComboArmado): ItemVendible {
     // En un pack esto ya viene con el descuento del pack aplicado
     // (`conPrecioDePack`), así que la cotización no vuelve a multiplicar.
     conDescuento: c.finalAmount,
-    validityMonths: (c.validityMonths as number | null) ?? null,
+    baseEfectivo: precioBaseEfectivoDeCombo(c),
+    conDescuentoEfectivo: (c.finalAmountCash as number | null) ?? c.finalAmount,
+    validityWeeks: (c.validityWeeks as number | null) ?? null,
     // Sólo en un pack: las sesiones que se lleva la clienta (1.50.0).
     packSesiones: c.kind === "pack" ? ((c.packSessions as number | null) ?? null) : null,
   };
@@ -144,6 +158,8 @@ export type ItemDeCatalogo = ItemVendible & {
   packDescuentoPct: number | null;
   /** Precio de lista de la venta más común, para ordenar y mostrar. */
   precioDesde: number;
+  /** Lo mismo en efectivo, para que los fronts muestren los dos. */
+  precioEfectivo: number;
   /** La descripción cargada en el catálogo. `null` si está vacía. */
   descripcion: string | null;
   /**
@@ -185,6 +201,7 @@ function aItemDeCatalogo(item: ItemVendible, mostrar: ParaMostrar = {}): ItemDeC
         // mostrarlo como porcentaje suelto invitaría a aplicarlo dos veces.
         packDescuentoPct: null,
         precioDesde: item.conDescuento,
+        precioEfectivo: item.conDescuentoEfectivo,
       }
     : {
         ...item,
@@ -192,6 +209,7 @@ function aItemDeCatalogo(item: ItemVendible, mostrar: ParaMostrar = {}): ItemDeC
         packSesiones: item.politica.sesiones,
         packDescuentoPct: item.politica.descuentoPct,
         precioDesde: item.unitario,
+        precioEfectivo: item.unitarioEfectivo,
       };
 }
 
@@ -276,8 +294,10 @@ export async function listCatalogoVendible(db: Db) {
             id: c.id,
             nombre: c.name,
             unitario: c.precioFinal,
+            // Depilación no tiene precio de efectivo propio: es el mismo.
+            unitarioEfectivo: c.precioFinal,
             politica: { sesiones: c.pack.sesiones, descuentoPct: c.pack.descuentoPct, redondeo: c.pack.redondeo },
-            validityMonths: c.validityMonths,
+            validityWeeks: c.validityWeeks,
           },
           {
             descripcion: texto(c.description),
@@ -293,6 +313,7 @@ export async function listCatalogoVendible(db: Db) {
           id: s.id,
           nombre: s.name ?? "Sin nombre",
           unitario: precioDeServicio(s.unitPriceList, s.unitPriceCash),
+          unitarioEfectivo: precioDeServicioEfectivo(s.unitPriceList, s.unitPriceCash),
           politica: global,
         },
         { area: areas.deServicio(s.id) },
@@ -308,6 +329,7 @@ export async function listCatalogoVendible(db: Db) {
           id: t.id,
           nombre: t.name ?? "Sin nombre",
           unitario: precioDeServicio(t.listPrice, t.cashPrice),
+          unitarioEfectivo: precioDeServicioEfectivo(t.listPrice, t.cashPrice),
           politica: { sesiones: 1, descuentoPct: 0, redondeo: 1 },
         },
         { area: areas.capacitaciones },
@@ -346,12 +368,13 @@ export async function obtenerItemVendible(
       id: c.id,
       nombre: c.name,
       unitario: c.precioFinal,
+      unitarioEfectivo: c.precioFinal,
       politica: {
         sesiones: c.pack.sesiones,
         descuentoPct: c.pack.descuentoPct,
         redondeo: c.pack.redondeo,
       },
-      validityMonths: c.validityMonths,
+      validityWeeks: c.validityWeeks,
     };
   }
 
@@ -372,6 +395,7 @@ export async function obtenerItemVendible(
       id: t.id,
       nombre: t.name ?? "Sin nombre",
       unitario: precioDeServicio(t.listPrice, t.cashPrice),
+      unitarioEfectivo: precioDeServicioEfectivo(t.listPrice, t.cashPrice),
       politica: { sesiones: 1, descuentoPct: 0, redondeo: 1 },
     };
   }
@@ -394,6 +418,7 @@ export async function obtenerItemVendible(
     id: s.id,
     nombre: s.name ?? "Sin nombre",
     unitario: precioDeServicio(s.unitPriceList, s.unitPriceCash),
+    unitarioEfectivo: precioDeServicioEfectivo(s.unitPriceList, s.unitPriceCash),
     politica: {
       sesiones: config.packSesiones,
       descuentoPct: config.packDescuentoPct,

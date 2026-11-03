@@ -29,7 +29,7 @@ import {
   preciosDeListaDe,
 } from "../../repositories/catalogo-venta.repo";
 import { sexoDeLaClienta } from "../../repositories/clientes-sexo.repo";
-import { cotizar } from "../../lib/cotizacion";
+import { cotizar, type ModoDePrecio } from "../../lib/cotizacion";
 import { cotizarPaquete, razonParaNoVenderElPaquete } from "../../lib/cotizacion-de-paquete";
 import { razonParaNoAplicarPromoSuelta } from "../../lib/promo-aplica";
 import type { AppBindings, Variables } from "../../env";
@@ -82,6 +82,19 @@ comprasRouter.get(
  * mantiene del diseño es que la venta CONGELA lo cotizado: la pantalla manda
  * de vuelta estos tres montos, que son los que Laura vio.
  */
+/** Con qué precio se cobra: lista o efectivo. Opcional (ver `modoDePrecio`). */
+const precioBody = z.enum(["lista", "efectivo"]).optional();
+
+/**
+ * Las promos se cobran sólo en efectivo: pedir una promo con precio de lista
+ * explícito es un error. Sin `precio`, la promo implica efectivo y lo demás,
+ * lista.
+ */
+function modoDePrecio(precio: ModoDePrecio | undefined, promotionId: string | null | undefined): ModoDePrecio {
+  if (promotionId && precio === "lista") throw badRequest("Las promos se cobran sólo en efectivo.");
+  return precio ?? (promotionId ? "efectivo" : "lista");
+}
+
 comprasRouter.post(
   "/purchases/quote",
   auth,
@@ -96,18 +109,21 @@ comprasRouter.post(
         sessions: z.number().int().positive(),
         promotionId: z.string().uuid().nullish(),
         customerId: z.string().uuid(),
+        precio: precioBody,
       }),
       // Un paquete no tiene "origen": lo que lleva sale de la promo.
       z.object({
         origen: z.literal("paquete"),
         promotionId: z.string().uuid(),
         customerId: z.string().uuid(),
+        precio: precioBody,
       }),
     ]),
   ),
   async (c) => {
     const db = createDb(c.env);
     const body = c.req.valid("json");
+    const modo = modoDePrecio(body.precio, body.promotionId);
 
     if (body.origen === "paquete") {
       const promo = await obtenerPromoVendible(db, body.promotionId);
@@ -163,7 +179,7 @@ comprasRouter.post(
     }
 
     try {
-      const q = cotizar(item, sessions, promo, new Date());
+      const q = cotizar(item, sessions, promo, new Date(), modo);
       return c.json({
         ...q,
         expiresAt: q.expiresAt?.toISOString() ?? null,
@@ -206,6 +222,8 @@ export const compraBody = z
     notes: z.string().max(2000).nullish(),
     /** Cuánto del saldo a favor aplicar. El backend lo topea igual. */
     usarSaldo: z.number().nonnegative().nullish(),
+    /** Con qué precio se cotizó (1.66.0). Los montos de arriba ya vienen de ahí. */
+    precio: precioBody,
   })
   .refine(
     (v) => {
@@ -235,6 +253,8 @@ comprasRouter.post(
   async (c) => {
     const db = createDb(c.env);
     const b = c.req.valid("json");
+    // Con promo y 'lista' explícito, 400 antes de tocar nada.
+    const modoPedido = modoDePrecio(b.precio, b.promotionId);
 
     // Sólo depilación cobra distinto según a quién se le vende, pero se
     // resuelve UNA vez acá, para los dos caminos: si el pack de depilación va
@@ -255,6 +275,8 @@ comprasRouter.post(
         const compra = await createCompra(db, {
           ...b,
           sexo,
+          // Un paquete tiene su precio propio, que es el de la promo: efectivo.
+          priceMode: "efectivo",
           promotionName: promo.name ?? null,
           expiresAt: b.expiresAt ? new Date(b.expiresAt) : null,
         });
@@ -292,6 +314,8 @@ comprasRouter.post(
       const compra = await createCompra(db, {
         ...b,
         sexo,
+        // Depilación no tiene precio de efectivo propio: se guarda efectivo.
+        priceMode: origen === "depilacion" ? "efectivo" : modoPedido,
         promotionName: promo?.name ?? null,
         expiresAt: b.expiresAt ? new Date(b.expiresAt) : null,
       });

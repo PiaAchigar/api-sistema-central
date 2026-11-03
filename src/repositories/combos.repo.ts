@@ -80,7 +80,6 @@ const comboFields = {
   fixedPrice: combos.fixedPrice,
   fixedPriceCash: combos.fixedPriceCash,
   discountPercentage: combos.discountPercentage,
-  validityMonths: combos.validityMonths,
   validityWeeks: combos.validityWeeks,
   sessionIntervalDays: combos.sessionIntervalDays,
   isActive: combos.isActive,
