@@ -22,7 +22,7 @@ import {
 } from "../db/schema";
 import type { Db } from "../db/client";
 import { createCompra, cancelCompra } from "./compras.repo";
-import { createPromotion, deletePromotionPermanently } from "./promotions.repo";
+import { createPromotion as createPromotionValidada, deletePromotionPermanently } from "./promotions.repo";
 import { obtenerPromoVendible, preciosDeListaDe } from "./catalogo-venta.repo";
 import { crearCombo } from "./depilacion.repo";
 import { cotizarPaquete } from "../lib/cotizacion-de-paquete";
@@ -156,6 +156,30 @@ async function limpiar() {
     await db.delete(areaPackPolicy).where(eq(areaPackPolicy.areaCategoryId, a.id));
     await db.delete(categories).where(eq(categories.id, a.id));
   }
+}
+
+/**
+ * Arma la promo SALTEANDO la regla "el paquete sale menos que la suma de sus
+ * partes" que ahora aplica `createPromotion`. Estos fixtures usan precios
+ * redondos a propósito (varios valen exactamente la suma) para probar el
+ * reparto y la cotización, que son otra cosa que la validación al guardar.
+ * Se crea con precio 1 y se pisa el precio directo en la base.
+ */
+async function createPromotion(
+  db: Db,
+  header: Parameters<typeof createPromotionValidada>[1],
+  destinos: Parameters<typeof createPromotionValidada>[2],
+  pagos: Parameters<typeof createPromotionValidada>[3],
+) {
+  if (header.promotionType !== "paquete" || header.precioDelPaquete == null) {
+    return createPromotionValidada(db, header, destinos, pagos);
+  }
+  const creada = await createPromotionValidada(db, { ...header, precioDelPaquete: 1 }, destinos, pagos);
+  await db
+    .update(promotions)
+    .set({ precioDelPaquete: String(header.precioDelPaquete) })
+    .where(eq(promotions.id, creada!.id));
+  return { ...creada!, precioDelPaquete: header.precioDelPaquete };
 }
 
 beforeAll(async () => {

@@ -138,11 +138,11 @@ describe("createPromotion", () => {
   it("guarda el precio del paquete y la cantidad de cada destino", async () => {
     const creada = await createPromotion(
       db,
-      { ...header, promotionType: "paquete", precioDelPaquete: 250000 },
+      { ...header, promotionType: "paquete", precioDelPaquete: 1000 },
       [{ tipo: "servicio", id: servicioId, cantidad: 3 }],
       [],
     );
-    expect(creada!.precioDelPaquete).toBe(250000);
+    expect(creada!.precioDelPaquete).toBe(1000);
     expect(creada!.destinos[0]).toMatchObject({ id: servicioId, cantidad: 3 });
   });
 
@@ -690,7 +690,7 @@ describe("listPromosVendibles — paquetes", () => {
       {
         name: NOMBRE_PROMO_DE_PRUEBA,
         promotionType: "paquete",
-        precioDelPaquete: 250000,
+        precioDelPaquete: 1000,
         validFrom: null,
         validUntil: null,
       },
@@ -701,7 +701,7 @@ describe("listPromosVendibles — paquetes", () => {
     const vendibles = await listPromosVendibles(db);
     const mia = vendibles.find((p) => p.id === creada!.id)!;
     expect(mia.promotionType).toBe("paquete");
-    expect(mia.precioDelPaquete).toBe(250000);
+    expect(mia.precioDelPaquete).toBe(1000);
     expect(mia.destinos[0]).toMatchObject({ tipo: "servicio", id: servicioId, cantidad: 3 });
   });
 });

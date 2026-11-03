@@ -435,7 +435,38 @@ export async function listPublicCombos(db: Db) {
   // Sin esta pasada un pack se publicaría con el precio de sus renglones —
   // cero, si repite un combo— en vez del precio del pack.
   const conPrecio = await conPrecioDePack(db, out);
-  return conAreaYClasificaciones(db, conPrecio);
+  const conClasificaciones = await conAreaYClasificaciones(db, conPrecio);
+  return conClasificaciones.map((c) => ({ ...c, ...sumaDeLasPartesDeCombo(c) }));
+}
+
+/**
+ * Lo que costaría comprar por separado lo que incluye un combo o pack: contra
+ * eso la web muestra el ahorro y el precio final tiene que ser menor.
+ *
+ * Un combo suma el subtotal de sus renglones; un pack, lo que repite × las
+ * sesiones que se cobran. Un pack sin tarifario (`packEffectiveSessions` null)
+ * cae en 0, igual que el chequeo de `razonPrecioNoMenor`: no hay contra qué
+ * comparar.
+ */
+export function sumaDeLasPartesDeCombo(c: {
+  kind: string;
+  servicesSubtotal: number;
+  servicesSubtotalCash: number;
+  packUnitAmount?: number;
+  packUnitAmountCash?: number;
+  packEffectiveSessions?: number;
+}): { sumaDeLasPartes: number; sumaDeLasPartesEfectivo: number } {
+  if (c.kind === "pack") {
+    const sesiones = c.packEffectiveSessions ?? 0;
+    return {
+      sumaDeLasPartes: (c.packUnitAmount ?? 0) * sesiones,
+      sumaDeLasPartesEfectivo: (c.packUnitAmountCash ?? 0) * sesiones,
+    };
+  }
+  return {
+    sumaDeLasPartes: c.servicesSubtotal,
+    sumaDeLasPartesEfectivo: c.servicesSubtotalCash,
+  };
 }
 
 /**

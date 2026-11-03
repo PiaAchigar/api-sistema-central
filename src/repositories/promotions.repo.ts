@@ -12,10 +12,13 @@ import {
   service,
   serviceProviders,
 } from "../db/schema";
+import { razonSiNoEsMenor } from "../lib/combo-pricing";
 import { badRequest } from "../lib/errors";
+import { aplicarPromo } from "../lib/pack-pricing";
 import type { TipoDeDestino } from "../lib/promo-aplica";
 import { promoEstaVigente } from "../lib/promo-vigente";
 import { todayLocal } from "../lib/time";
+import { preciosDeListaDe } from "./catalogo-venta.repo";
 
 export async function listActivePromotions(
   db: Db,
@@ -42,6 +45,7 @@ export async function listActivePromotions(
       validFrom: promotions.validFrom,
       validUntil: promotions.validUntil,
       isFeatured: promotions.isFeatured,
+      precioDelPaquete: promotions.precioDelPaquete,
     })
     .from(promotions)
     .where(and(...conditions))
@@ -58,14 +62,70 @@ export async function listActivePromotions(
 
   const out = [];
   for (const p of activePromos) {
+    const targets = await destinosDe(db, p.id);
+    const discountPercentage = p.discountPercentage != null ? Number(p.discountPercentage) : null;
+    const discountAmount = p.discountAmount != null ? Number(p.discountAmount) : null;
+    const precioDelPaquete = num(p.precioDelPaquete);
+    const suma = await sumaDeLosDestinos(db, targets);
     out.push({
       ...p,
-      discountPercentage: p.discountPercentage != null ? Number(p.discountPercentage) : null,
-      discountAmount: p.discountAmount != null ? Number(p.discountAmount) : null,
-      targets: await destinosDe(db, p.id),
+      discountPercentage,
+      discountAmount,
+      precioDelPaquete,
+      targets,
+      // Lo que costaría comprar todo suelto y lo que la clienta paga con la
+      // promo, para que la web muestre el ahorro sin rehacer la cuenta.
+      // Los dos son null si alguna parte no tiene precio: un número a medias
+      // mostraría un ahorro inventado.
+      sumaDeLasPartes: suma,
+      precioFinal:
+        suma == null
+          ? null
+          : p.promotionType === TIPO_PAQUETE
+            ? precioDelPaquete
+            : aplicarPromo(suma, { discountPercentage, discountAmount }),
     });
   }
   return out;
+}
+
+/**
+ * Suma de los precios de lista de los destinos (× cantidad), en mujer, o null
+ * si alguno no tiene precio o la promo no tiene destinos. Es el mismo catálogo
+ * que usa la venta, para que lo público y lo cobrado no se separen.
+ */
+async function sumaDeLosDestinos(
+  db: Db,
+  destinos: readonly { tipo: TipoDeDestino; id: string; cantidad: number }[],
+): Promise<number | null> {
+  if (destinos.length === 0) return null;
+  const { precios } = await preciosDeListaDe(db, destinos, "mujer");
+  let total = 0;
+  for (const d of destinos) {
+    const precio = precios.get(d.id);
+    if (precio == null) return null;
+    total += precio * Math.max(1, d.cantidad);
+  }
+  return total;
+}
+
+/**
+ * "Siempre menor": un paquete a un precio igual o mayor que la suma de lo que
+ * lleva no es una promo. Se chequea al guardar, y sólo si TODAS las partes
+ * tienen precio: con una parte sin precio no hay suma contra qué comparar.
+ */
+async function razonPaqueteNoEsMenor(
+  db: Db,
+  header: PromoHeaderInput,
+  destinos: readonly PromoDestinoInput[],
+): Promise<string | null> {
+  if (header.promotionType !== TIPO_PAQUETE || header.precioDelPaquete == null) return null;
+  const suma = await sumaDeLosDestinos(
+    db,
+    destinos.map((d) => ({ tipo: d.tipo, id: d.id, cantidad: d.cantidad ?? 1 })),
+  );
+  if (suma == null || suma <= 0) return null;
+  return razonSiNoEsMenor(header.precioDelPaquete, suma);
 }
 
 export async function updatePromotionFeatured(
@@ -316,6 +376,8 @@ export async function createPromotion(
   // en vez de "un paquete necesita un precio", que es lo único que la deja
   // arreglarlo.
   if (razones.length > 0) throw badRequest(razones.join("; "));
+  const noMenor = await razonPaqueteNoEsMenor(db, header, destinos);
+  if (noMenor) throw badRequest(noMenor);
 
   const [created] = await db
     .insert(promotions)
@@ -356,6 +418,8 @@ export async function updatePromotion(
   // en vez de "un paquete necesita un precio", que es lo único que la deja
   // arreglarlo.
   if (razones.length > 0) throw badRequest(razones.join("; "));
+  const noMenor = await razonPaqueteNoEsMenor(db, header, destinos);
+  if (noMenor) throw badRequest(noMenor);
 
   const updated = await db
     .update(promotions)

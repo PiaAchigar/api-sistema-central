@@ -20,6 +20,7 @@ import {
   type Sexo,
   type ZonaParaCotizar,
 } from "../lib/depilation-pricing";
+import { razonSiNoEsMenor } from "../lib/combo-pricing";
 import { precioDePackFijo } from "../lib/precio-de-pack-fijo";
 
 // ── Zonas ────────────────────────────────────────────────────────────────
@@ -461,7 +462,43 @@ export type PackPublico = {
   choiceZoneCount: number;
   /** Nombres de las zonas que el pack incluye siempre. */
   zonas: string[];
+  /**
+   * Lo que cuestan sus zonas sueltas, una sesión cada una (mujer). Contra esto
+   * la web muestra el ahorro. NULL si el pack es a elección: las zonas que la
+   * clienta elige todavía no existen y no hay suma honesta que mostrar.
+   */
+  sumaDeLasPartes: number | null;
 };
+
+/**
+ * Suma de los precios sueltos de las zonas, una sesión cada una: es lo que
+ * lista hoy el tarifario para UNA zona (`precioLista[sexo][categoria]`), no la
+ * fórmula del combo, que ya abarata la 2ª y la 3ª. Pura, sin base.
+ */
+export function sumaDeZonasSueltas(
+  categorias: readonly Categoria[],
+  config: DepilationConfig,
+  sexo: Sexo = "mujer",
+): number {
+  return categorias.reduce((acc, c) => acc + config.precioLista[sexo][c], 0);
+}
+
+/**
+ * "Siempre menor" para un pack fijo de depilación: por qué su precio no puede
+ * guardarse, o null. Un pack a elección no se chequea (no hay suma completa).
+ */
+export function razonPackNoMenor(
+  fixedPrice: number | null | undefined,
+  choiceZoneCount: number | null | undefined,
+  categorias: readonly Categoria[],
+  config: DepilationConfig,
+): string | null {
+  if (fixedPrice == null || (choiceZoneCount ?? 0) > 0) return null;
+  const suma = sumaDeZonasSueltas(categorias, config);
+  // Con suma 0 (sin zonas, o tarifa sin cargar) no hay contra qué comparar.
+  if (suma <= 0) return null;
+  return razonSiNoEsMenor(fixedPrice, suma);
+}
 
 export async function listarPacksPublicos(db: Db): Promise<PackPublico[]> {
   const packs = await db
@@ -485,8 +522,13 @@ export async function listarPacksPublicos(db: Db): Promise<PackPublico[]> {
 
   if (packs.length === 0) return [];
 
+  const config = await leerConfig(db);
   const zoneRows = await db
-    .select({ comboId: depilationComboZone.comboId, zoneName: bodyZone.name })
+    .select({
+      comboId: depilationComboZone.comboId,
+      zoneName: bodyZone.name,
+      category: bodyZone.category,
+    })
     .from(depilationComboZone)
     .innerJoin(bodyZone, eq(bodyZone.id, depilationComboZone.zoneId))
     .where(
@@ -497,10 +539,14 @@ export async function listarPacksPublicos(db: Db): Promise<PackPublico[]> {
     );
 
   const zonasPorPack = new Map<string, string[]>();
+  const categoriasPorPack = new Map<string, Categoria[]>();
   for (const r of zoneRows) {
     const lista = zonasPorPack.get(r.comboId) ?? [];
     lista.push(r.zoneName);
     zonasPorPack.set(r.comboId, lista);
+    const cats = categoriasPorPack.get(r.comboId) ?? [];
+    cats.push(r.category as Categoria);
+    categoriasPorPack.set(r.comboId, cats);
   }
 
   return packs.map((p) => ({
@@ -513,6 +559,10 @@ export async function listarPacksPublicos(db: Db): Promise<PackPublico[]> {
     // Alfabético: el orden de inserción de `depilation_combo_zone` no significa
     // nada y la clienta lee esta lista.
     zonas: (zonasPorPack.get(p.id) ?? []).sort((a, b) => a.localeCompare(b, "es")),
+    sumaDeLasPartes:
+      p.choiceZoneCount > 0
+        ? null
+        : sumaDeZonasSueltas(categoriasPorPack.get(p.id) ?? [], config),
   }));
 }
 

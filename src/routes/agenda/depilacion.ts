@@ -26,6 +26,7 @@ import {
   hardDeleteCombo,
   hardDeleteZona,
   leerConfig,
+  razonPackNoMenor,
   listarCombos,
   listarExclusiones,
   listarPacksFijos,
@@ -778,6 +779,22 @@ async function validarSinExclusionesEnConflicto(
   }
 }
 
+/**
+ * "Siempre menor": el precio fijo de un pack no puede ser igual o mayor que
+ * sus zonas sueltas. Se chequea en alta y en edición, con el mismo texto que
+ * el dashboard.
+ */
+async function validarPackMasBaratoQueSusZonas(
+  db: Db,
+  body: { kind: string; fixedPrice?: number | null; choiceZoneCount?: number | null; zonaIds: string[] },
+  activas: Map<string, ZonaRow>,
+): Promise<void> {
+  if (body.kind !== "pack_fijo") return;
+  const categorias = body.zonaIds.map((id) => activas.get(id)!.category as Categoria);
+  const razon = razonPackNoMenor(body.fixedPrice, body.choiceZoneCount, categorias, await leerConfig(db));
+  if (razon) throw badRequest(razon);
+}
+
 depilacionRouter.get(
   "/combos",
   auth,
@@ -807,6 +824,7 @@ depilacionRouter.post(
     const faltante = body.zonaIds.find((id) => !activas.has(id));
     if (faltante) throw badRequest(`La zona "${faltante}" no existe o no está activa`);
     await validarSinExclusionesEnConflicto(db, body.zonaIds, activas);
+    await validarPackMasBaratoQueSusZonas(db, body, activas);
 
     const created = await crearCombo(db, body);
     return c.json(created, 201);
@@ -855,6 +873,7 @@ depilacionRouter.patch(
     const faltante = body.zonaIds.find((id) => !activas.has(id));
     if (faltante) throw badRequest(`La zona "${faltante}" no existe o no está activa`);
     await validarSinExclusionesEnConflicto(db, body.zonaIds, activas);
+    await validarPackMasBaratoQueSusZonas(db, body, activas);
 
     const updated = await actualizarCombo(db, id, body);
     if (!updated) throw notFound("Combo");

@@ -1734,7 +1734,7 @@ describe("PATCH /combos/:id — no puede cambiar el kind ni borrar el precio de 
         body: JSON.stringify({
           name: `${QA_PREFIX}PACK_KIND`,
           kind: "pack_fijo",
-          fixedPrice: 50000,
+          fixedPrice: 10000,
           zonaIds: [zonaX],
         }),
       },
@@ -1744,7 +1744,7 @@ describe("PATCH /combos/:id — no puede cambiar el kind ni borrar el precio de 
     const created = (await res.json()) as { id: string; kind: string; fixedPrice: number | null };
     packId = created.id;
     expect(created.kind).toBe("pack_fijo");
-    expect(created.fixedPrice).toBe(50000);
+    expect(created.fixedPrice).toBe(10000);
   });
 
   it('PATCH con kind: "guardado" sobre un pack fijo -> 400, no lo convierte', async () => {
@@ -1778,7 +1778,7 @@ describe("PATCH /combos/:id — no puede cambiar el kind ni borrar el precio de 
     }>;
     const pack = combos.find((c) => c.id === packId);
     expect(pack?.kind).toBe("pack_fijo");
-    expect(pack?.fixedPrice).toBe(50000);
+    expect(pack?.fixedPrice).toBe(10000);
   });
 
   it("PATCH con el mismo kind (pack_fijo) y un precio nuevo -> 200, sí se puede editar el precio", async () => {
@@ -1790,7 +1790,7 @@ describe("PATCH /combos/:id — no puede cambiar el kind ni borrar el precio de 
         body: JSON.stringify({
           name: `${QA_PREFIX}PACK_KIND`,
           kind: "pack_fijo",
-          fixedPrice: 55000,
+          fixedPrice: 11000,
           zonaIds: [zonaX],
         }),
       },
@@ -1799,7 +1799,7 @@ describe("PATCH /combos/:id — no puede cambiar el kind ni borrar el precio de 
     expect(res.status).toBe(200);
     const updated = (await res.json()) as { kind: string; fixedPrice: number | null };
     expect(updated.kind).toBe("pack_fijo");
-    expect(updated.fixedPrice).toBe(55000);
+    expect(updated.fixedPrice).toBe(11000);
   });
 
   it('PATCH con kind: "pack_fijo" sobre un combo guardado -> 400, tampoco se puede ir en la otra dirección', async () => {
@@ -2600,5 +2600,88 @@ describe("equipos de depilación", () => {
     expect(((await get2.json()) as { machineId: string }[]).map((m) => m.machineId)).not.toContain(
       maqId,
     );
+  });
+});
+
+// ── Suma de las partes y "siempre menor" en los packs de depilación ─────────
+// Con la config de test, UNA zona chica suelta cuesta $12.000 (mujer).
+describe("packs de depilación — suma de las partes y siempre menor (integración real)", () => {
+  let zonaA = "";
+  let zonaB = "";
+  const packIds: string[] = [];
+
+  beforeAll(async () => {
+    zonaA = (await crearZonaQA("SUMA_A")).id;
+    zonaB = (await crearZonaQA("SUMA_B")).id;
+  });
+
+  afterAll(async () => {
+    for (const id of packIds) await testDb.delete(depilationCombo).where(eq(depilationCombo.id, id));
+    await testDb.delete(bodyZone).where(inArray(bodyZone.id, [zonaA, zonaB]));
+  });
+
+  const crear = (nombre: string, extra: Record<string, unknown>) =>
+    testApp.request(
+      "/combos",
+      {
+        method: "POST",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({ name: `${QA_PREFIX}${nombre}`, kind: "pack_fijo", ...extra }),
+      },
+      ADMIN_ENV,
+    );
+
+  it("rechaza guardar un pack de depilación más caro que sus zonas", async () => {
+    // 2 zonas chicas sueltas = 24.000; 24.000 empata y 30.000 se pasa.
+    const igual = await crear("SUMA_IGUAL", { fixedPrice: 24000, zonaIds: [zonaA, zonaB] });
+    expect(igual.status).toBe(400);
+    expect(((await igual.json()) as { error: string }).error).toMatch(/\$24\.000.*\$24\.000/);
+    const mas = await crear("SUMA_MAS", { fixedPrice: 30000, zonaIds: [zonaA, zonaB] });
+    expect(mas.status).toBe(400);
+  });
+
+  it("al editar también se rechaza, y un precio menor se guarda", async () => {
+    const ok = await crear("SUMA_OK", { fixedPrice: 20000, zonaIds: [zonaA, zonaB] });
+    expect(ok.status).toBe(201);
+    const id = ((await ok.json()) as { id: string }).id;
+    packIds.push(id);
+    const mal = await testApp.request(
+      `/combos/${id}`,
+      {
+        method: "PATCH",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({
+          name: `${QA_PREFIX}SUMA_OK`,
+          kind: "pack_fijo",
+          fixedPrice: 24000,
+          zonaIds: [zonaA, zonaB],
+        }),
+      },
+      ADMIN_ENV,
+    );
+    expect(mal.status).toBe(400);
+  });
+
+  it("pack de depilación público trae la suma de sus zonas; null si es a elección", async () => {
+    const fijo = await crear("SUMA_PUB", {
+      fixedPrice: 20000,
+      zonaIds: [zonaA, zonaB],
+      isPublishedWeb: true,
+    });
+    const eleccion = await crear("SUMA_ELEC", {
+      fixedPrice: 20000,
+      choiceZoneCount: 1,
+      zonaIds: [zonaA, zonaB],
+      isPublishedWeb: true,
+    });
+    expect(fijo.status).toBe(201);
+    expect(eleccion.status).toBe(201);
+    packIds.push(((await fijo.json()) as { id: string }).id);
+    packIds.push(((await eleccion.json()) as { id: string }).id);
+
+    const res = await testApp.request("/packs-publicos", {}, ADMIN_ENV);
+    const lista = (await res.json()) as { name: string; sumaDeLasPartes: number | null }[];
+    expect(lista.find((p) => p.name === `${QA_PREFIX}SUMA_PUB`)?.sumaDeLasPartes).toBe(24000);
+    expect(lista.find((p) => p.name === `${QA_PREFIX}SUMA_ELEC`)?.sumaDeLasPartes).toBeNull();
   });
 });
