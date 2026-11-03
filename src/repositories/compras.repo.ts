@@ -75,6 +75,7 @@ const compraFields = {
   cancelledAt: customerPurchase.cancelledAt,
   notes: customerPurchase.notes,
   esPaqueteDePromo: customerPurchase.esPaqueteDePromo,
+  priceMode: customerPurchase.priceMode,
 };
 
 export type CompraInput = {

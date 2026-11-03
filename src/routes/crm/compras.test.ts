@@ -220,6 +220,9 @@ describe("POST /purchases/quote (integración real)", () => {
         .from(schema.customerPurchase)
         .where(eq(schema.customerPurchase.id, id));
       expect(fila?.priceMode).toBe("efectivo");
+      // La lista de compras de la clienta también tiene que devolverlo (lo lee el CRM).
+      const lista = await listComprasDeCliente(testDb, idClientaMujer);
+      expect(lista.find((x) => x.id === id)?.priceMode).toBe("efectivo");
       // Se borra la compra de prueba (la clienta se limpia en afterAll).
       await testDb.delete(schema.customerPurchase).where(eq(schema.customerPurchase.id, id));
     });
