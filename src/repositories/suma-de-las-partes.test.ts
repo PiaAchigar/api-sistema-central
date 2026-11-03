@@ -12,7 +12,7 @@ import {
   listActivePromotions,
   updatePromotion,
 } from "./promotions.repo";
-import { precioDeServicio } from "../lib/combo-pricing";
+import { precioDeServicio, precioDeServicioEfectivo } from "../lib/combo-pricing";
 
 const LOCAL_DB_URL = "postgresql://piubella:piubella@localhost:5499/piubella";
 const pgClient = postgres(LOCAL_DB_URL, { max: 1, fetch_types: false, prepare: false });
@@ -21,6 +21,7 @@ const db = drizzle(pgClient, { schema }) as unknown as Db;
 const QA = "ZZ_QA_SUMA_PARTES";
 let servicioId = "";
 let precio = 0;
+let efectivo = 0;
 
 async function limpiar() {
   const previas = await db.select({ id: promotions.id }).from(promotions).where(eq(promotions.name, QA));
@@ -33,10 +34,11 @@ beforeAll(async () => {
     `select id, unit_price_list as l, unit_price_cash as c from service
       where is_active = true and name not like 'ZZ_QA%'
         and coalesce(unit_price_list, unit_price_cash) > 0
-      order by id limit 1` as never,
+      order by (unit_price_cash is not null and unit_price_cash < unit_price_list) desc, id limit 1` as never,
   );
   servicioId = s!.id;
   precio = precioDeServicio(s!.l, s!.c);
+  efectivo = precioDeServicioEfectivo(s!.l, s!.c);
 });
 
 afterAll(async () => {
@@ -71,7 +73,7 @@ describe("promos públicas — suma y precio final", () => {
     isVisibleWeb: true,
   };
 
-  it("promo de 10% sobre un servicio → suma = precio de lista, precioFinal con 10% menos", async () => {
+  it("promo de 10% sobre un servicio → suma = precio en EFECTIVO, precioFinal con 10% menos", async () => {
     const creada = await createPromotion(
       db,
       { ...base, promotionType: "percentage", discountPercentage: 10 },
@@ -79,8 +81,9 @@ describe("promos públicas — suma y precio final", () => {
       [],
     );
     const publica = (await listActivePromotions(db)).find((p) => p.id === creada!.id);
-    expect(publica?.sumaDeLasPartes).toBe(precio);
-    expect(publica?.precioFinal).toBe(Math.round((precio * 90) / 100));
+    // Las promos se cobran sobre el efectivo: la web no puede mostrar la lista.
+    expect(publica?.sumaDeLasPartes).toBe(efectivo);
+    expect(publica?.precioFinal).toBe(Math.round((efectivo * 90) / 100));
   });
 
   it("promo de paquete pública trae suma y precio", async () => {
@@ -92,7 +95,7 @@ describe("promos públicas — suma y precio final", () => {
       [],
     );
     const publica = (await listActivePromotions(db)).find((p) => p.id === creada!.id);
-    expect(publica?.sumaDeLasPartes).toBe(precio * 2);
+    expect(publica?.sumaDeLasPartes).toBe(efectivo * 2);
     expect(publica?.precioFinal).toBe(paquete);
   });
 

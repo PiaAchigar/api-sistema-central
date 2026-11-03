@@ -53,7 +53,7 @@ import {
 import type { Db } from "../../db/client";
 import type { AppBindings } from "../../env";
 import type { DepilationConfig } from "../../lib/depilation-pricing";
-import { usarConfigDeDepilacionDeTest } from "../../test-support/depilation-config";
+import { CONFIG_DE_TEST, usarConfigDeDepilacionDeTest } from "../../test-support/depilation-config";
 
 // La config de depilación la edita Laura: el archivo arma la suya (ver test-support).
 usarConfigDeDepilacionDeTest();
@@ -2604,7 +2604,9 @@ describe("equipos de depilación", () => {
 });
 
 // ── Suma de las partes y "siempre menor" en los packs de depilación ─────────
-// Con la config de test, UNA zona chica suelta cuesta $12.000 (mujer).
+// Los montos salen de CONFIG_DE_TEST (la config que el archivo arma para sí),
+// no de lo que Laura tenga cargado: UNA zona chica suelta cuesta `CHICA` (mujer).
+const CHICA = CONFIG_DE_TEST.priceFemaleChica;
 describe("packs de depilación — suma de las partes y siempre menor (integración real)", () => {
   let zonaA = "";
   let zonaB = "";
@@ -2632,16 +2634,18 @@ describe("packs de depilación — suma de las partes y siempre menor (integraci
     );
 
   it("rechaza guardar un pack de depilación más caro que sus zonas", async () => {
-    // 2 zonas chicas sueltas = 24.000; 24.000 empata y 30.000 se pasa.
-    const igual = await crear("SUMA_IGUAL", { fixedPrice: 24000, zonaIds: [zonaA, zonaB] });
+    // 2 zonas chicas sueltas = 2×CHICA; ese precio empata y uno mayor se pasa.
+    const suma = 2 * CHICA;
+    const igual = await crear("SUMA_IGUAL", { fixedPrice: suma, zonaIds: [zonaA, zonaB] });
     expect(igual.status).toBe(400);
-    expect(((await igual.json()) as { error: string }).error).toMatch(/\$24\.000.*\$24\.000/);
-    const mas = await crear("SUMA_MAS", { fixedPrice: 30000, zonaIds: [zonaA, zonaB] });
+    const miles = new Intl.NumberFormat("es-AR").format(suma);
+    expect(((await igual.json()) as { error: string }).error).toContain(`$${miles}`);
+    const mas = await crear("SUMA_MAS", { fixedPrice: suma + 6000, zonaIds: [zonaA, zonaB] });
     expect(mas.status).toBe(400);
   });
 
   it("al editar también se rechaza, y un precio menor se guarda", async () => {
-    const ok = await crear("SUMA_OK", { fixedPrice: 20000, zonaIds: [zonaA, zonaB] });
+    const ok = await crear("SUMA_OK", { fixedPrice: 2 * CHICA - 1000, zonaIds: [zonaA, zonaB] });
     expect(ok.status).toBe(201);
     const id = ((await ok.json()) as { id: string }).id;
     packIds.push(id);
@@ -2653,7 +2657,7 @@ describe("packs de depilación — suma de las partes y siempre menor (integraci
         body: JSON.stringify({
           name: `${QA_PREFIX}SUMA_OK`,
           kind: "pack_fijo",
-          fixedPrice: 24000,
+          fixedPrice: 2 * CHICA,
           zonaIds: [zonaA, zonaB],
         }),
       },
@@ -2664,12 +2668,12 @@ describe("packs de depilación — suma de las partes y siempre menor (integraci
 
   it("pack de depilación público trae la suma de sus zonas; null si es a elección", async () => {
     const fijo = await crear("SUMA_PUB", {
-      fixedPrice: 20000,
+      fixedPrice: 2 * CHICA - 1000,
       zonaIds: [zonaA, zonaB],
       isPublishedWeb: true,
     });
     const eleccion = await crear("SUMA_ELEC", {
-      fixedPrice: 20000,
+      fixedPrice: 2 * CHICA - 1000,
       choiceZoneCount: 1,
       zonaIds: [zonaA, zonaB],
       isPublishedWeb: true,
@@ -2681,7 +2685,62 @@ describe("packs de depilación — suma de las partes y siempre menor (integraci
 
     const res = await testApp.request("/packs-publicos", {}, ADMIN_ENV);
     const lista = (await res.json()) as { name: string; sumaDeLasPartes: number | null }[];
-    expect(lista.find((p) => p.name === `${QA_PREFIX}SUMA_PUB`)?.sumaDeLasPartes).toBe(24000);
+    expect(lista.find((p) => p.name === `${QA_PREFIX}SUMA_PUB`)?.sumaDeLasPartes).toBe(2 * CHICA);
     expect(lista.find((p) => p.name === `${QA_PREFIX}SUMA_ELEC`)?.sumaDeLasPartes).toBeNull();
+  });
+});
+
+// ── Revisión final, fix 1 ───────────────────────────────────────────────────
+// Un dashboard viejo, abierto antes del deploy, manda `validityMonths`; zod lo
+// descarta y el body llega SIN `validityWeeks`. Eso no puede borrar el plazo.
+describe("PATCH /combos/:id — sin validityWeeks no toca el plazo (integración real)", () => {
+  let zonaP = "";
+  let comboId = "";
+
+  beforeAll(async () => {
+    zonaP = (await crearZonaQA("PLAZO_P")).id;
+  });
+
+  afterAll(async () => {
+    if (comboId) await testDb.delete(depilationCombo).where(eq(depilationCombo.id, comboId));
+    await testDb.delete(bodyZone).where(eq(bodyZone.id, zonaP));
+  });
+
+  const patch = (body: Record<string, unknown>) =>
+    testApp.request(
+      `/combos/${comboId}`,
+      {
+        method: "PATCH",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({ name: `${QA_PREFIX}PLAZO`, kind: "guardado", zonaIds: [zonaP], ...body }),
+      },
+      ADMIN_ENV,
+    );
+
+  it("PATCH sin validityWeeks deja el plazo; con null explícito lo borra", async () => {
+    const createRes = await testApp.request(
+      "/combos",
+      {
+        method: "POST",
+        headers: ADMIN_HEADERS,
+        body: JSON.stringify({
+          name: `${QA_PREFIX}PLAZO`,
+          kind: "guardado",
+          validityWeeks: 26,
+          zonaIds: [zonaP],
+        }),
+      },
+      ADMIN_ENV,
+    );
+    expect(createRes.status).toBe(201);
+    comboId = ((await createRes.json()) as { id: string }).id;
+
+    const sinCampo = await patch({ validityMonths: 6 });
+    expect(sinCampo.status).toBe(200);
+    expect(((await sinCampo.json()) as { validityWeeks: number | null }).validityWeeks).toBe(26);
+
+    const conNull = await patch({ validityWeeks: null });
+    expect(conNull.status).toBe(200);
+    expect(((await conNull.json()) as { validityWeeks: number | null }).validityWeeks).toBeNull();
   });
 });

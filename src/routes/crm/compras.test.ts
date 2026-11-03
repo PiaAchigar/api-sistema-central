@@ -281,6 +281,17 @@ describe("POST /purchases/quote (integración real)", () => {
       expect(filas[0]!.userEmail).toBe("laura@piubella.test");
     });
 
+    it("una fecha aaaa-mm-dd vence a fin de ESE día en Argentina, no el día anterior", async () => {
+      const id = await nuevaCompra(idClientaMujer, VENCE);
+      const res = await postergar(comoSales, id, { nuevaFecha: "2099-12-15" });
+      expect(res.status).toBe(200);
+      const [c] = await testDb.select({ e: schema.customerPurchase.expiresAt }).from(schema.customerPurchase).where(eq(schema.customerPurchase.id, id));
+      // 15/12 23:59:59 en Argentina (UTC-3) = 16/12 02:59:59 UTC.
+      expect(c!.e!.toISOString()).toBe("2099-12-16T02:59:59.000Z");
+      const enAr = c!.e!.toLocaleDateString("en-CA", { timeZone: "America/Argentina/Buenos_Aires" });
+      expect(enAr).toBe("2099-12-15");
+    });
+
     it("dos aplazos quedan los dos en aplazos[]", async () => {
       const id = await nuevaCompra(idClientaMujer, VENCE);
       expect((await postergar(comoSales, id, { nuevaFecha: "2099-03-01T12:00:00Z" })).status).toBe(200);

@@ -11,6 +11,7 @@ import {
   deleteComboPermanently,
   freezePrices,
   getComboById,
+  updateCombo,
   validarPrecioMenor,
 } from "./combos.repo";
 
@@ -266,5 +267,24 @@ describe("validarPrecioMenor", () => {
       .toBeNull();
     expect(await validarPrecioMenor(db, header({ name: "x", priceType: "fixed", fixedPrice: 500, fixedPriceCash: 400 }), []))
       .toBeNull();
+  });
+});
+
+describe("updateCombo — el plazo (revisión final, fix 1)", () => {
+  it("sin validityWeeks no toca el plazo; con null explícito lo borra", async () => {
+    const c = await createCombo(
+      db,
+      header({ name: `${QA}_PLAZO`, priceType: "fixed", fixedPrice: 1000, kind: "combo", validityWeeks: 26 }),
+      [{ serviceId: sA, sessionsIncluded: 1 }, { serviceId: sB, sessionsIncluded: 1 }],
+    );
+    expect(c!.validityWeeks).toBe(26);
+    // Un dashboard viejo manda `validityMonths`, que zod descarta: llega sin el campo.
+    const sinCampo = header({ name: `${QA}_PLAZO`, priceType: "fixed", fixedPrice: 1000, kind: "combo" });
+    delete (sinCampo as Record<string, unknown>).validityWeeks;
+    await updateCombo(db, c!.id, sinCampo);
+    expect((await getComboById(db, c!.id))!.validityWeeks).toBe(26);
+
+    await updateCombo(db, c!.id, header({ name: `${QA}_PLAZO`, priceType: "fixed", fixedPrice: 1000, kind: "combo", validityWeeks: null }));
+    expect((await getComboById(db, c!.id))!.validityWeeks).toBeNull();
   });
 });

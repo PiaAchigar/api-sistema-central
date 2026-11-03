@@ -369,7 +369,12 @@ comprasRouter.post(
   async (c) => {
     const db = createDb(c.env);
     const b = c.req.valid("json");
-    const nuevaFecha = new Date(b.nuevaFecha);
+    // `aaaa-mm-dd` pelado es 00:00 UTC, o sea el día ANTERIOR a las 21:00 en
+    // Argentina: la compra vencería un día antes de lo que eligió Laura. Una
+    // fecha sola vale hasta el final de ese día en Argentina; una ISO completa
+    // se respeta tal cual.
+    const soloFecha = /^\d{4}-\d{2}-\d{2}$/.test(b.nuevaFecha.trim());
+    const nuevaFecha = new Date(soloFecha ? `${b.nuevaFecha.trim()}T23:59:59-03:00` : b.nuevaFecha);
     if (Number.isNaN(nuevaFecha.getTime())) throw badRequest("La fecha nueva no es válida.");
 
     // `user_id` es uuid: la API key estática pone "api-key" y eso no es una

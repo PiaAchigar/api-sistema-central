@@ -956,7 +956,9 @@ export async function actualizarCombo(
         packSessions: input.packSessions ?? null,
         packDiscountPercentage: input.packDiscountPercentage ?? null,
         packRoundingBase: input.packRoundingBase ?? null,
-        validityWeeks: input.validityWeeks ?? null,
+        // undefined = "no me mandaron el plazo" (dashboard viejo): no se toca.
+        // Sólo un null explícito lo borra.
+        ...(input.validityWeeks !== undefined && { validityWeeks: input.validityWeeks }),
         sessionIntervalDays: input.sessionIntervalDays ?? null,
         isPublishedWeb: input.isPublishedWeb ?? false,
         displayOrder: input.displayOrder ?? 0,

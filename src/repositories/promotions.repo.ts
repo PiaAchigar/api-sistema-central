@@ -18,7 +18,7 @@ import { aplicarPromo } from "../lib/pack-pricing";
 import type { TipoDeDestino } from "../lib/promo-aplica";
 import { promoEstaVigente } from "../lib/promo-vigente";
 import { todayLocal } from "../lib/time";
-import { preciosDeListaDe } from "./catalogo-venta.repo";
+import { obtenerItemVendible, preciosDeListaDe } from "./catalogo-venta.repo";
 
 export async function listActivePromotions(
   db: Db,
@@ -66,7 +66,7 @@ export async function listActivePromotions(
     const discountPercentage = p.discountPercentage != null ? Number(p.discountPercentage) : null;
     const discountAmount = p.discountAmount != null ? Number(p.discountAmount) : null;
     const precioDelPaquete = num(p.precioDelPaquete);
-    const suma = await sumaDeLosDestinos(db, targets);
+    const suma = await sumaDeLosDestinos(db, targets, { efectivo: true });
     out.push({
       ...p,
       discountPercentage,
@@ -90,16 +90,31 @@ export async function listActivePromotions(
 }
 
 /**
- * Suma de los precios de lista de los destinos (× cantidad), en mujer, o null
+ * Suma de los precios de lista (o de efectivo, con `efectivo`) de los destinos
+ * (× cantidad), en mujer, o null
  * si alguno no tiene precio o la promo no tiene destinos. Es el mismo catálogo
  * que usa la venta, para que lo público y lo cobrado no se separen.
  */
 async function sumaDeLosDestinos(
   db: Db,
   destinos: readonly { tipo: TipoDeDestino; id: string; cantidad: number }[],
+  opciones: { efectivo?: boolean } = {},
 ): Promise<number | null> {
   if (destinos.length === 0) return null;
-  const { precios } = await preciosDeListaDe(db, destinos, "mujer");
+  const { precios: preciosDeLista } = await preciosDeListaDe(db, destinos, "mujer");
+  const precios = new Map(preciosDeLista);
+  // Las promos se cobran sobre el precio en EFECTIVO: lo que la web muestra
+  // tiene que ser lo que se cobra. Un pack de depilación ya viene en efectivo
+  // (no tiene precio de lista aparte); el resto se pisa con su efectivo.
+  if (opciones.efectivo) {
+    for (const d of destinos) {
+      if (d.tipo === "depilacion" || !precios.has(d.id)) continue;
+      const item = await obtenerItemVendible(db, d.tipo, d.id);
+      if (!item) continue;
+      const efectivo = item.origen === "combo" ? item.conDescuentoEfectivo : item.unitarioEfectivo;
+      if (efectivo > 0) precios.set(d.id, efectivo);
+    }
+  }
   let total = 0;
   for (const d of destinos) {
     const precio = precios.get(d.id);

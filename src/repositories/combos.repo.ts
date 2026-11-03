@@ -756,7 +756,9 @@ export async function updateCombo(db: Db, id: string, header: ComboEditInput) {
       fixedPrice: dec(header.fixedPrice ?? null),
       fixedPriceCash: dec(header.fixedPriceCash ?? null),
       discountPercentage: dec(header.discountPercentage ?? null),
-      validityWeeks: header.validityWeeks ?? null,
+      // undefined = "no me mandaron el plazo" (dashboard viejo): no se toca.
+      // Sólo un null explícito lo borra.
+      ...(header.validityWeeks !== undefined && { validityWeeks: header.validityWeeks }),
       sessionIntervalDays: header.sessionIntervalDays ?? null,
       isVisibleWeb: header.isVisibleWeb ?? true,
       displayOrder: header.displayOrder ?? 0,
