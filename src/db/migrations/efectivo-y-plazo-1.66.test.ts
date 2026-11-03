@@ -30,7 +30,7 @@ async function servicio(lista: number, efectivo: number | null): Promise<string>
   return r!.id;
 }
 
-async function combo(meses: number): Promise<string> {
+async function combo(meses: number | null): Promise<string> {
   const [area] = await sql<{ id: string }[]>`SELECT id FROM categories LIMIT 1`;
   const [r] = await sql<{ id: string }[]>`
     INSERT INTO combos (name, price_type, fixed_price, validity_months, area_category_id)
@@ -51,9 +51,9 @@ describe("migración 1.66.0 — efectivo de combos y plazo en semanas", () => {
   beforeAll(() => aplicarMigracion());
 
   afterAll(async () => {
-    await sql`DELETE FROM combos WHERE id IN ${sql(creados.combos)}`;
-    await sql`DELETE FROM depilation_combo WHERE id IN ${sql(creados.depi)}`;
-    await sql`DELETE FROM service WHERE id IN ${sql(creados.servicios)}`;
+    if (creados.combos.length) await sql`DELETE FROM combos WHERE id IN ${sql(creados.combos)}`;
+    if (creados.depi.length) await sql`DELETE FROM depilation_combo WHERE id IN ${sql(creados.depi)}`;
+    if (creados.servicios.length) await sql`DELETE FROM service WHERE id IN ${sql(creados.servicios)}`;
     await sql.end();
   });
 
@@ -96,15 +96,14 @@ describe("migración 1.66.0 — efectivo de combos y plazo en semanas", () => {
 
   it("convierte los meses a semanas redondeando para arriba", async () => {
     const casos: [number | null, number | null][] = [[1, 5], [2, 9], [12, 52], [null, null]];
-    // combos.validity_months es NOT NULL en la base: el NULL sólo se prueba en depilación.
     const ids = [];
     for (const [m] of casos) {
-      ids.push({ combo: m === null ? null : await combo(m), depi: await packDepi(m) });
+      ids.push({ combo: await combo(m), depi: await packDepi(m) });
     }
     aplicarMigracion();
     for (const [i, [, semanas]] of casos.entries()) {
       const { combo: cid, depi } = ids[i]!;
-      if (cid) {
+      {
         const [r] = await sql<{ w: number | null }[]>`SELECT validity_weeks AS w FROM combos WHERE id = ${cid}`;
         expect(r!.w).toBe(semanas);
       }
@@ -123,6 +122,14 @@ describe("migración 1.66.0 — efectivo de combos y plazo en semanas", () => {
     const [x] = await sql<{ w: number }[]>`SELECT validity_weeks AS w FROM depilation_combo WHERE id = ${d}`;
     expect(r!.w).toBe(20);
     expect(x!.w).toBe(20);
+  });
+
+  it("permite un combo con solo validity_weeks (validity_months NULL)", async () => {
+    const c = await combo(null);
+    await sql`UPDATE combos SET validity_weeks = 8 WHERE id = ${c}`;
+    const [r] = await sql<{ m: number | null; w: number }[]>`
+      SELECT validity_months AS m, validity_weeks AS w FROM combos WHERE id = ${c}`;
+    expect(r).toEqual({ m: null, w: 8 });
   });
 
   it("no toca validity_months ni los precios de lista", async () => {

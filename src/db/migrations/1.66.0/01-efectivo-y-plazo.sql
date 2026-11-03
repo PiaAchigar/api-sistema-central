@@ -30,6 +30,10 @@ ALTER TABLE depilation_combo ADD COLUMN IF NOT EXISTS validity_weeks integer
 ALTER TABLE customer_purchase ADD COLUMN IF NOT EXISTS price_mode varchar(10)
   CONSTRAINT ck_customer_purchase_price_mode CHECK (price_mode IN ('lista', 'efectivo'));
 
+-- `validity_months` era NOT NULL desde 1.30.0: sin soltarlo no se puede crear un
+-- combo que solo tenga `validity_weeks`. Se conserva el CHECK (> 0).
+ALTER TABLE combos ALTER COLUMN validity_months DROP NOT NULL;
+
 CREATE TABLE IF NOT EXISTS purchase_expiry_postponements (
   id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   purchase_id         uuid NOT NULL REFERENCES customer_purchase(id) ON DELETE CASCADE,
