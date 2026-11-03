@@ -335,7 +335,7 @@ beforeAll(async () => {
   // `finalAmount` = 12.000 × 4 = $48.000 (descuento 0).
   const [pack] = await db
     .insert(combos)
-    .values({ name: `${QA}_PACK_4`, priceType: "fixed", fixedPrice: "12000", validityMonths: 12,
+    .values({ name: `${QA}_PACK_4`, priceType: "percentage", discountPercentage: "0", validityMonths: 12,
              isActive: true, isVisibleWeb: false, areaCategoryId: areaDePackId,
              kind: "pack", packOfComboId: comboDelPackId, packSessions: 4, servicesTogether: false })
     .returning({ id: combos.id });

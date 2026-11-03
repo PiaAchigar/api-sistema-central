@@ -190,7 +190,7 @@ beforeAll(async () => {
       name: `${QA}_COMBO_PACK`,
       priceType: "percentage",
       discountPercentage: 10,
-      validityMonths: 12,
+      validityWeeks: 52,
       areaCategoryId: area!.id,
       kind: "pack",
       packSessions: 3,

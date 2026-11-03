@@ -17,6 +17,7 @@ import {
   setComboStatus,
   updateCombo,
   validarPack,
+  validarPrecioMenor,
 } from "../../repositories/combos.repo";
 import type { AppBindings, Variables } from "../../env";
 
@@ -71,10 +72,17 @@ export const comboBody = z
       .min(0, "El porcentaje no puede ser negativo")
       .max(100, "El porcentaje no puede superar el 100%")
       .nullish(),
-    validityMonths: z
+    // 1.66.0 — Precio en efectivo. Vacío = no cargado: el efectivo es la lista.
+    fixedPriceCash: z
+      .number({ invalid_type_error: "El precio en efectivo tiene que ser un número" })
+      .nonnegative("El precio en efectivo no puede ser negativo")
+      .nullish(),
+    // 1.66.0 — La vigencia es sólo en semanas (ya no se acepta `validityMonths`).
+    validityWeeks: z
       .number({ invalid_type_error: "La vigencia tiene que ser un número" })
-      .int("La vigencia tiene que ser un número entero de meses")
-      .min(1, "La vigencia tiene que ser de al menos 1 mes"),
+      .int("La vigencia tiene que ser un número entero de semanas")
+      .positive("La vigencia tiene que ser de al menos 1 semana")
+      .nullish(),
     // 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. Vacío = no cargado.
     sessionIntervalDays: z
       .number({ invalid_type_error: "Los días entre sesiones tienen que ser un número" })
@@ -147,6 +155,20 @@ export const comboBody = z
           message: "Un pack no define si los servicios se hacen juntos: eso lo dice el combo",
         });
       }
+    }
+
+    // Un pack A MANO (precio fijo) cobra lo que se escribió: no tiene fórmula,
+    // así que un descuento o redondeo propio no tendría a qué aplicarse.
+    if (
+      v.kind === "pack" &&
+      v.priceType === "fixed" &&
+      (v.packDiscountPercentage != null || v.packRoundingBase != null)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["packDiscountPercentage"],
+        message: "Un pack a mano cobra lo que escribas: no lleva descuento ni redondeo propios",
+      });
     }
 
     // Los dos campos del descuento propio van de a dos o ninguno, igual que en
@@ -345,6 +367,11 @@ combosRouter.post(
     // El aviso viaja con la respuesta además de estar en su propio endpoint:
     // así, si alguien crea sin pasar por la pantalla, el duplicado igual queda
     // registrado en la respuesta en vez de pasar en silencio.
+    // "Siempre menor": se arma el precio como quedaría y se chequea ANTES de
+    // escribir, para no tener que deshacer nada.
+    const noEsMenor = await validarPrecioMenor(db, header, lines);
+    if (noEsMenor) return c.json({ error: noEsMenor }, 400);
+
     const duplicados = await duplicadosDe(db, header, lines);
     const created = await createCombo(db, header, lines);
     return c.json({ ...created!, duplicados }, 201);
@@ -370,6 +397,8 @@ combosRouter.patch(
     const db = createDb(c.env);
     const { lines: _lines, areaCategoryId: _area, kind: _kind, packOfComboId: _pack, packSessions: _n, ...header } =
       c.req.valid("json");
+    const noEsMenor = await validarPrecioMenor(db, header, [], c.req.param("id"));
+    if (noEsMenor) return c.json({ error: noEsMenor }, 400);
     const updated = await updateCombo(db, c.req.param("id"), header);
     if (!updated) throw notFound("Combo");
     return c.json(updated);

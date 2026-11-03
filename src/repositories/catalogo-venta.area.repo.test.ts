@@ -71,7 +71,7 @@ beforeAll(async () => {
 
   const combo = await createCombo(
     db,
-    { name: `${QA}_COMBO`, priceType: "percentage", discountPercentage: 10, validityMonths: 12, areaCategoryId: areaId, kind: "combo" },
+    { name: `${QA}_COMBO`, priceType: "percentage", discountPercentage: 10, validityWeeks: 52, areaCategoryId: areaId, kind: "combo" },
     [{ serviceId: servicioConAreaId, sessionsIncluded: 1 }],
   );
   comboId = combo!.id;

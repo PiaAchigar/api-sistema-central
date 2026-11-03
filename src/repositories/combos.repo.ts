@@ -9,7 +9,13 @@ import {
   promotionTarget,
   service,
 } from "../db/schema";
-import { computeComboFinalPrice, computeComboSubtotal, precioDeServicio } from "../lib/combo-pricing";
+import {
+  computeComboFinalPrice,
+  computeComboSubtotal,
+  precioDeServicio,
+  precioDeServicioEfectivo,
+  razonSiNoEsMenor,
+} from "../lib/combo-pricing";
 import {
   agruparClasificaciones,
   type Clasificacion,
@@ -33,8 +39,11 @@ export type ComboHeaderInput = {
   description?: string | null;
   priceType: "fixed" | "percentage";
   fixedPrice?: number | null;
+  /** 1.66.0 — Precio en efectivo. NULL = no cargado: el efectivo es la lista. */
+  fixedPriceCash?: number | null;
   discountPercentage?: number | null;
-  validityMonths: number;
+  /** 1.66.0 — Vigencia en semanas. NULL = no cargada. */
+  validityWeeks?: number | null;
   /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL = no cargado. */
   sessionIntervalDays?: number | null;
   isVisibleWeb?: boolean | null;
@@ -69,8 +78,10 @@ const comboFields = {
   description: combos.description,
   priceType: combos.priceType,
   fixedPrice: combos.fixedPrice,
+  fixedPriceCash: combos.fixedPriceCash,
   discountPercentage: combos.discountPercentage,
   validityMonths: combos.validityMonths,
+  validityWeeks: combos.validityWeeks,
   sessionIntervalDays: combos.sessionIntervalDays,
   isActive: combos.isActive,
   isVisibleWeb: combos.isVisibleWeb,
@@ -93,6 +104,7 @@ async function linesFor(db: Db, comboId: string) {
       serviceIsActive: service.isActive,
       sessionsIncluded: comboService.sessionsIncluded,
       servicePrice: comboService.servicePrice,
+      servicePriceCash: comboService.servicePriceCash,
     })
     .from(comboService)
     .leftJoin(service, eq(comboService.serviceId, service.id))
@@ -115,6 +127,7 @@ export function assembleCombo(
     serviceIsActive: boolean | null;
     sessionsIncluded: number | null;
     servicePrice: string | number | null;
+    servicePriceCash?: string | number | null;
   }[],
 ) {
   const priced = lines.map((l) => ({
@@ -129,9 +142,28 @@ export function assembleCombo(
     num(combo.discountPercentage),
   );
 
+  // El efectivo: un renglón viejo (creado antes de la 1.66.0) no tiene
+  // `service_price_cash` y usa el de lista, así no aparece un combo en $0.
+  const pricedCash = lines.map((l) => ({
+    servicePrice: Number(l.servicePriceCash ?? l.servicePrice ?? 0),
+    sessionsIncluded: l.sessionsIncluded ?? 0,
+  }));
+  const servicesSubtotalCash = computeComboSubtotal(pricedCash);
+  // Un combo a mano sin efectivo escrito cobra la lista, nunca 0: por eso el
+  // precio cerrado es `fixedPriceCash ?? fixedPrice`.
+  const finalAmountCash = computeComboFinalPrice(
+    servicesSubtotalCash,
+    (combo.priceType as string | null) ?? null,
+    num(combo.fixedPriceCash) ?? num(combo.fixedPrice),
+    num(combo.discountPercentage),
+  );
+
   return {
     ...combo,
+    priceType: (combo.priceType as string | null) ?? null,
     fixedPrice: num(combo.fixedPrice),
+    fixedPriceCash: num(combo.fixedPriceCash),
+    validityWeeks: num(combo.validityWeeks),
     discountPercentage: num(combo.discountPercentage),
     kind: (combo.kind as string | null) ?? "combo",
     servicesTogether: combo.servicesTogether === true,
@@ -145,10 +177,12 @@ export function assembleCombo(
     packDiscountPercentage: (combo.packDiscountPercentage as number | null) ?? null,
     packRoundingBase: (combo.packRoundingBase as number | null) ?? null,
     servicesSubtotal,
+    servicesSubtotalCash,
     // En un PACK esto se pisa después, en `conPrecioDePack`: el precio de un
     // pack no sale de sus renglones sino de repetir lo que apunta. Se deja
     // calculado igual para que un pack mal formado no muestre `undefined`.
     finalAmount,
+    finalAmountCash,
     hasInactiveService: lines.some((l) => l.serviceIsActive === false),
     lines: lines.map((l) => ({
       id: l.id,
@@ -157,6 +191,7 @@ export function assembleCombo(
       serviceIsActive: l.serviceIsActive,
       sessionsIncluded: l.sessionsIncluded,
       servicePrice: num(l.servicePrice),
+      servicePriceCash: num(l.servicePriceCash),
     })),
   };
 }
@@ -215,38 +250,62 @@ async function conPrecioDePack(db: Db, filas: FilaArmada[]): Promise<FilaArmada[
     ...new Set(packs.map((p) => p.areaCategoryId).filter((x): x is string => !!x)),
   ]);
 
-  // El precio de los combos que los packs repiten.
+  // El precio de los combos que los packs repiten, en lista y en efectivo.
   const refIds = [...new Set(packs.map((p) => p.packOfComboId).filter((x): x is string => !!x))];
-  const precioDelCombo = new Map<string, number>();
+  const precioDelCombo = new Map<string, { lista: number; efectivo: number }>();
   for (const id of refIds) {
     const c = await getComboById(db, id);
-    if (c) precioDelCombo.set(id, c.finalAmount);
+    if (c) precioDelCombo.set(id, { lista: c.finalAmount, efectivo: c.finalAmountCash });
   }
 
   return filas.map((f) => {
     if (f.kind !== "pack") return f;
+
+    // Lo que se repite, por unidad, en lista y en efectivo. Es la base del
+    // pack tanto si el precio se calcula como si se escribe a mano (la regla
+    // "siempre menor" compara contra `base × sesiones`).
+    const ref = f.packOfComboId ? precioDelCombo.get(f.packOfComboId) : undefined;
+    const base = f.packOfComboId ? (ref?.lista ?? 0) : f.servicesSubtotal;
+    const baseCash = f.packOfComboId ? (ref?.efectivo ?? 0) : f.servicesSubtotalCash;
+
+    // Pack A MANO: cobra lo que se escribió. Se resuelve antes de mirar el
+    // área porque no necesita tarifario, y no pasa por `precioPack`.
+    if (f.priceType === "fixed" && f.fixedPrice != null && f.packSessions != null) {
+      return {
+        ...f,
+        packUnitAmount: base,
+        packUnitAmountCash: baseCash,
+        finalAmount: f.fixedPrice,
+        // Sin efectivo escrito, el efectivo es la lista: nunca 0.
+        finalAmountCash: f.fixedPriceCash ?? f.fixedPrice,
+        packDiscountSource: "a_mano",
+        packEffectiveDiscount: 0,
+        // Sin tarifario ni fórmula: las sesiones que se cobran son las declaradas.
+        packEffectiveSessions: f.packSessions,
+      };
+    }
+
     const area = f.areaCategoryId ? areas.get(f.areaCategoryId) : undefined;
     if (!area) return f;
 
     const politica = politicaDeUnPack(f, area);
     if (!politica) return f;
 
-    const base = f.packOfComboId ? (precioDelCombo.get(f.packOfComboId) ?? 0) : f.servicesSubtotal;
+    const config = {
+      packSesiones: politica.sesiones,
+      packDescuentoPct: area.packDiscountPercentage,
+      packRedondeo: area.packRoundingBase,
+    };
 
     return {
       ...f,
       /** Lo que se repite, por unidad. Va al front para poder mostrar
        *  "4 × $12.000" y que se entienda de dónde sale el total. */
       packUnitAmount: base,
-      finalAmount: precioPack(
-        base,
-        {
-          packSesiones: politica.sesiones,
-          packDescuentoPct: area.packDiscountPercentage,
-          packRedondeo: area.packRoundingBase,
-        },
-        politica,
-      ),
+      packUnitAmountCash: baseCash,
+      finalAmount: precioPack(base, config, politica),
+      // Misma política y mismo redondeo, sobre la base de efectivo.
+      finalAmountCash: precioPack(baseCash, config, politica),
       /** De dónde salió el descuento, para que la pantalla lo diga. */
       packDiscountSource: f.packDiscountPercentage == null ? "area" : "propio",
       packEffectiveDiscount: politica.descuentoPct,
@@ -266,8 +325,8 @@ async function conPrecioDePack(db: Db, filas: FilaArmada[]): Promise<FilaArmada[
   });
 }
 
-/** Congela el precio de lista de cada servicio elegido, igual que las promos. */
-async function freezePrices(db: Db, lines: ComboLineInput[]) {
+/** Congela el precio de lista Y el de efectivo de cada servicio elegido, igual que las promos. */
+export async function freezePrices(db: Db, lines: ComboLineInput[]) {
   const ids = lines.map((l) => l.serviceId);
   const priced = ids.length
     ? await db
@@ -281,14 +340,27 @@ async function freezePrices(db: Db, lines: ComboLineInput[]) {
     : [];
   // Lista si hay, y si no efectivo: 79 de 213 servicios activos en producción
   // no tienen precio de lista. Ver precioDeServicio().
-  const priceById = new Map(priced.map((p) => [p.id, precioDeServicio(p.priceList, p.priceCash)]));
-  return lines.map((l) => ({ ...l, servicePrice: priceById.get(l.serviceId) ?? 0 }));
+  const priceById = new Map(
+    priced.map((p) => [
+      p.id,
+      {
+        lista: precioDeServicio(p.priceList, p.priceCash),
+        // Simétrico: efectivo si hay, y si no la lista.
+        efectivo: precioDeServicioEfectivo(p.priceList, p.priceCash),
+      },
+    ]),
+  );
+  return lines.map((l) => ({
+    ...l,
+    servicePrice: priceById.get(l.serviceId)?.lista ?? 0,
+    servicePriceCash: priceById.get(l.serviceId)?.efectivo ?? 0,
+  }));
 }
 
 async function writeLines(
   db: Db,
   comboId: string,
-  frozen: (ComboLineInput & { servicePrice: number })[],
+  frozen: (ComboLineInput & { servicePrice: number; servicePriceCash: number })[],
 ) {
   await db.delete(comboService).where(eq(comboService.comboId, comboId));
   if (frozen.length === 0) return;
@@ -298,6 +370,7 @@ async function writeLines(
       serviceId: l.serviceId,
       sessionsIncluded: l.sessionsIncluded,
       servicePrice: dec(l.servicePrice),
+      servicePriceCash: dec(l.servicePriceCash),
     })),
   );
 }
@@ -600,8 +673,9 @@ export async function createCombo(db: Db, header: ComboHeaderInput, lines: Combo
         description: header.description ?? null,
         priceType: header.priceType,
         fixedPrice: dec(header.fixedPrice ?? null),
+        fixedPriceCash: dec(header.fixedPriceCash ?? null),
         discountPercentage: dec(header.discountPercentage ?? null),
-        validityMonths: header.validityMonths,
+        validityWeeks: header.validityWeeks ?? null,
         sessionIntervalDays: header.sessionIntervalDays ?? null,
         isActive: true,
         isVisibleWeb: header.isVisibleWeb ?? true,
@@ -650,8 +724,9 @@ export async function updateCombo(db: Db, id: string, header: ComboEditInput) {
       description: header.description ?? null,
       priceType: header.priceType,
       fixedPrice: dec(header.fixedPrice ?? null),
+      fixedPriceCash: dec(header.fixedPriceCash ?? null),
       discountPercentage: dec(header.discountPercentage ?? null),
-      validityMonths: header.validityMonths,
+      validityWeeks: header.validityWeeks ?? null,
       sessionIntervalDays: header.sessionIntervalDays ?? null,
       isVisibleWeb: header.isVisibleWeb ?? true,
       displayOrder: header.displayOrder ?? 0,
@@ -853,4 +928,99 @@ export async function lineasParaVender(db: Db, comboId: string): Promise<LineaDe
       // que la clienta pagó (1.52.0).
       price: l.servicePrice == null ? null : Number(l.servicePrice),
     }));
+}
+
+// ── La regla "siempre menor" ────────────────────────────────────────────────
+
+/**
+ * Dado un combo o pack ya armado (con `conPrecioDePack` aplicado si es pack),
+ * dice por qué el precio no es menor que la suma de lo que incluye, o null.
+ *
+ * La suma de un combo es el subtotal de sus renglones; la de un pack, lo que
+ * repite × las sesiones que se cobran. El efectivo se chequea sólo si se
+ * cargó a mano: el derivado de un porcentaje no puede dar distinto que la lista.
+ */
+export function razonPrecioNoMenor(armado: {
+  kind: string;
+  finalAmount: number;
+  finalAmountCash: number;
+  fixedPriceCash: number | null;
+  servicesSubtotal: number;
+  servicesSubtotalCash: number;
+  packUnitAmount?: number;
+  packUnitAmountCash?: number;
+  packEffectiveSessions?: number;
+}): string | null {
+  let suma = armado.servicesSubtotal;
+  let sumaCash = armado.servicesSubtotalCash;
+  if (armado.kind === "pack") {
+    // Un pack sin tarifario no tiene precio calculado: no hay nada que comparar.
+    if (armado.packEffectiveSessions == null) return null;
+    suma = (armado.packUnitAmount ?? 0) * armado.packEffectiveSessions;
+    sumaCash = (armado.packUnitAmountCash ?? 0) * armado.packEffectiveSessions;
+  }
+  const deLista = razonSiNoEsMenor(armado.finalAmount, suma);
+  if (deLista) return deLista;
+  if (armado.fixedPriceCash != null) return razonSiNoEsMenor(armado.finalAmountCash, sumaCash);
+  return null;
+}
+
+/**
+ * Arma el combo como quedaría y lo chequea, ANTES de escribir nada.
+ *
+ * Alta: `idExistente` es null y los renglones salen de congelar los precios
+ * vivos de `lines`. Edición: los renglones son los ya guardados (la composición
+ * no cambia) y el resto sale del combo existente con el encabezado nuevo.
+ *
+ * Devuelve el motivo del rechazo, o null. En edición, null también si el combo
+ * no existe (de eso se ocupa el 404 de la ruta).
+ */
+export async function validarPrecioMenor(
+  db: Db,
+  header: ComboHeaderInput | ComboEditInput,
+  lines: ComboLineInput[],
+  idExistente: string | null = null,
+): Promise<string | null> {
+  const nuevos = {
+    name: header.name,
+    priceType: header.priceType,
+    fixedPrice: header.fixedPrice ?? null,
+    fixedPriceCash: header.fixedPriceCash ?? null,
+    discountPercentage: header.discountPercentage ?? null,
+    packDiscountPercentage: header.packDiscountPercentage ?? null,
+    packRoundingBase: header.packRoundingBase ?? null,
+  };
+
+  let combo: Record<string, unknown>;
+  let renglones: Parameters<typeof assembleCombo>[1];
+  if (idExistente) {
+    const actual = await getComboById(db, idExistente);
+    if (!actual) return null;
+    combo = { ...actual, ...nuevos };
+    renglones = actual.lines;
+  } else {
+    const h = header as ComboHeaderInput;
+    combo = {
+      ...nuevos,
+      id: "nuevo",
+      kind: h.kind ?? "combo",
+      areaCategoryId: h.areaCategoryId,
+      packOfComboId: h.packOfComboId ?? null,
+      packSessions: h.packSessions ?? null,
+    };
+    const congelados = await freezePrices(db, lines);
+    renglones = congelados.map((l, i) => ({
+      id: String(i),
+      serviceId: l.serviceId,
+      serviceName: null,
+      serviceIsActive: true,
+      sessionsIncluded: l.sessionsIncluded,
+      servicePrice: l.servicePrice,
+      servicePriceCash: l.servicePriceCash,
+    }));
+  }
+
+  const armado = assembleCombo(combo, renglones);
+  const [conPrecio] = armado.kind === "pack" ? await conPrecioDePack(db, [armado]) : [armado];
+  return razonPrecioNoMenor((conPrecio ?? armado) as Parameters<typeof razonPrecioNoMenor>[0]);
 }

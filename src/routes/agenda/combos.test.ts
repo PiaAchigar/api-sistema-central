@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { comboBody, combosRouter } from "./combos";
+import { assembleCombo, razonPrecioNoMenor } from "../../repositories/combos.repo";
 
 const AREA = "aaaaaaaa-1111-1111-1111-111111111111";
 const LIMPIEZA = "11111111-1111-1111-1111-111111111111";
@@ -10,7 +11,7 @@ const valido = {
   name: "Depilación cuerpo completo",
   priceType: "fixed" as const,
   fixedPrice: 120000,
-  validityMonths: 12,
+  validityWeeks: 52,
   areaCategoryId: AREA,
   lines: [{ serviceId: LIMPIEZA, sessionsIncluded: 8 }],
 };
@@ -20,7 +21,7 @@ const packValido = {
   name: "Facial × 4",
   priceType: "percentage" as const,
   discountPercentage: 0,
-  validityMonths: 12,
+  validityWeeks: 52,
   areaCategoryId: AREA,
   kind: "pack" as const,
   packOfComboId: COMBO,
@@ -124,17 +125,68 @@ describe("comboBody", () => {
     if (!r.success) expect(r.error.issues[0]?.message).toMatch(/no puede ser negativo/i);
   });
 
-  it("rechaza validityMonths en 0", () => {
-    expect(comboBody.safeParse({ ...valido, validityMonths: 0 }).success).toBe(false);
+  it("acepta validityWeeks", () => {
+    const r = comboBody.safeParse({ ...valido, validityWeeks: 8, fixedPriceCash: 100000 });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.validityWeeks).toBe(8);
+      expect(r.data.fixedPriceCash).toBe(100000);
+    }
   });
 
-  it("rechaza validityMonths no entero, con mensaje en castellano", () => {
-    const r = comboBody.safeParse({ ...valido, validityMonths: 3.5 });
+  it("rechaza validityWeeks en 0 o no entero, con mensaje en castellano", () => {
+    expect(comboBody.safeParse({ ...valido, validityWeeks: 0 }).success).toBe(false);
+    const r = comboBody.safeParse({ ...valido, validityWeeks: 3.5 });
     expect(r.success).toBe(false);
     if (!r.success) {
       expect(r.error.issues[0]?.message).toMatch(/entero/i);
       expect(r.error.issues[0]?.message).not.toMatch(/expected|received|float/i);
     }
+  });
+
+  it("ya no acepta validityMonths: se descarta y no llega al header", () => {
+    const r = comboBody.safeParse({ ...valido, validityMonths: 12 });
+    expect(r.success).toBe(true);
+    if (r.success) expect("validityMonths" in r.data).toBe(false);
+  });
+
+  it("rechaza un precio en efectivo negativo", () => {
+    expect(comboBody.safeParse({ ...valido, fixedPriceCash: -1 }).success).toBe(false);
+  });
+
+  it("pack a mano rechaza descuento propio", () => {
+    const aMano = { ...packValido, priceType: "fixed" as const, fixedPrice: 30000, discountPercentage: undefined };
+    expect(comboBody.safeParse(aMano).success).toBe(true);
+    const r = comboBody.safeParse({ ...aMano, packDiscountPercentage: 5, packRoundingBase: 500 });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.message).toMatch(/a mano/i);
+  });
+
+  it("rechaza un combo a mano igual o más caro que la suma", () => {
+    const armado = assembleCombo(
+      { id: "c", priceType: "fixed", fixedPrice: "2000", fixedPriceCash: null },
+      [{ id: "l", serviceId: "s", serviceName: "A", serviceIsActive: true,
+         sessionsIncluded: 1, servicePrice: "2000", servicePriceCash: "1800" }],
+    );
+    expect(razonPrecioNoMenor(armado)).toBe(
+      "El precio final ($2.000) tiene que ser menor que la suma de lo que incluye ($2.000).",
+    );
+    expect(razonPrecioNoMenor(assembleCombo(
+      { id: "c", priceType: "fixed", fixedPrice: "1999" },
+      [{ id: "l", serviceId: "s", serviceName: "A", serviceIsActive: true,
+         sessionsIncluded: 1, servicePrice: "2000" }],
+    ))).toBeNull();
+  });
+
+  it("rechaza un pack con 0% que queda igual a la suma", () => {
+    // 4 × $1.000 sin rebaja = $4.000: no es una oferta.
+    const pack = {
+      kind: "pack", finalAmount: 4000, finalAmountCash: 4000, fixedPriceCash: null,
+      servicesSubtotal: 1000, servicesSubtotalCash: 1000,
+      packUnitAmount: 1000, packUnitAmountCash: 1000, packEffectiveSessions: 4,
+    };
+    expect(razonPrecioNoMenor(pack)).toMatch(/\$4\.000.*\$4\.000/);
+    expect(razonPrecioNoMenor({ ...pack, finalAmount: 3500 })).toBeNull();
   });
 
   it("rechaza un nombre de más de 200 caracteres, con mensaje en castellano", () => {

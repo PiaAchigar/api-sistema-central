@@ -56,3 +56,40 @@ export function precioDeServicio(
   const n = Number(elegido);
   return Number.isFinite(n) ? n : 0;
 }
+
+/**
+ * Precio unitario en efectivo de un servicio dentro de un combo.
+ *
+ * Es el respaldo simétrico de `precioDeServicio`: se prefiere el efectivo, y si
+ * el servicio no lo tiene se usa el de lista. Así un servicio que sólo tiene
+ * uno de los dos precios aporta lo mismo a las dos columnas, y nunca un 0 que
+ * abarate el combo en efectivo sin que nadie lo haya decidido.
+ */
+export function precioDeServicioEfectivo(
+  unitPriceList: number | string | null | undefined,
+  unitPriceCash: number | string | null | undefined,
+): number {
+  const elegido = unitPriceCash ?? unitPriceList;
+  if (elegido == null) return 0;
+  const n = Number(elegido);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** $88.000 — miles con punto, sin decimales (es-AR). */
+function pesos(n: number): string {
+  return `$${Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")}`;
+}
+
+/**
+ * La regla "siempre menor": un combo o pack tiene que costar MENOS que la suma
+ * de lo que incluye, o no es una oferta. Devuelve el motivo del rechazo, o null.
+ *
+ * ⚠️ Se espeja en `front-dashboard/src/lib/combo-pricing.ts` (Task 6): el mismo
+ * texto y el mismo test.
+ */
+export function razonSiNoEsMenor(final: number, sumaDeLasPartes: number): string | null {
+  if (final >= sumaDeLasPartes) {
+    return `El precio final (${pesos(final)}) tiene que ser menor que la suma de lo que incluye (${pesos(sumaDeLasPartes)}).`;
+  }
+  return null;
+}

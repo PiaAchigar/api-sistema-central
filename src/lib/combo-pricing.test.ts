@@ -78,3 +78,13 @@ describe("precioDeServicio", () => {
     expect(precioDeServicio("no es un precio", null)).toBe(0);
   });
 });
+
+describe("razonSiNoEsMenor", () => {
+  it("razonSiNoEsMenor: 88000 vs 88000 da el mensaje; 79000 vs 88000 da null", async () => {
+    const { razonSiNoEsMenor } = await import("./combo-pricing");
+    expect(razonSiNoEsMenor(88000, 88000)).toBe(
+      "El precio final ($88.000) tiene que ser menor que la suma de lo que incluye ($88.000).",
+    );
+    expect(razonSiNoEsMenor(79000, 88000)).toBeNull();
+  });
+});
