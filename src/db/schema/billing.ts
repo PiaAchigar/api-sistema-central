@@ -236,6 +236,25 @@ export const customerPurchase = pgTable("customer_purchase", {
    * CHECK no puede hacer.
    */
   esPaqueteDePromo: boolean("es_paquete_de_promo").notNull().default(false),
+  /** 1.66.0 — Con qué precio se vendió: 'lista' | 'efectivo'. NULL = venta anterior a 1.66.0. */
+  priceMode: varchar("price_mode", { length: 10 }),
+});
+
+/**
+ * Aplazos del vencimiento de una compra (1.66.0): una fila por cada vez que se
+ * corrió `expires_at`, con el antes, el después, el motivo y quién.
+ */
+export const purchaseExpiryPostponements = pgTable("purchase_expiry_postponements", {
+  id: id(),
+  purchaseId: uuid("purchase_id")
+    .notNull()
+    .references(() => customerPurchase.id, { onDelete: "cascade" }),
+  previousExpiresAt: timestamp("previous_expires_at").notNull(),
+  newExpiresAt: timestamp("new_expires_at").notNull(),
+  reason: text("reason"),
+  userId: uuid("user_id"),
+  userEmail: varchar("user_email", { length: 255 }),
+  createdAt: createdAt(),
 });
 
 /**

@@ -537,7 +537,12 @@ export const combos = pgTable("combos", {
   priceType: varchar("price_type", { length: 20 }), // 'fixed' | 'percentage'
   fixedPrice: decimal("fixed_price", { precision: 10, scale: 2 }),
   discountPercentage: decimal("discount_percentage", { precision: 5, scale: 2 }),
+  /** Sin uso desde 1.66.0 (la vigencia es en semanas). Se borra en una migración posterior. */
   validityMonths: integer("validity_months"),
+  /** 1.66.0 — Vigencia en semanas. CHECK > 0. */
+  validityWeeks: integer("validity_weeks"),
+  /** 1.66.0 — Precio fijo en efectivo. NULL = no cargado. */
+  fixedPriceCash: decimal("fixed_price_cash", { precision: 10, scale: 2 }),
   /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL = no cargado. */
   sessionIntervalDays: integer("session_interval_days"),
   isActive: boolean("is_active"),
@@ -596,6 +601,8 @@ export const comboService = pgTable("combo_service", {
   // vivo, subirle el precio a un servicio cambiaría retroactivamente lo que
   // muestran todos los combos que lo incluyen.
   servicePrice: decimal("service_price", { precision: 10, scale: 2 }),
+  /** 1.66.0 — Efectivo del renglón, congelado igual que `servicePrice`. */
+  servicePriceCash: decimal("service_price_cash", { precision: 10, scale: 2 }),
   createdAt: createdAt(),
 });
 

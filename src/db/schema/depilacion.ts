@@ -138,8 +138,10 @@ export const depilationCombo = pgTable("depilation_combo", {
   packSessions: integer("pack_sessions"),
   packDiscountPercentage: integer("pack_discount_percentage"),
   packRoundingBase: integer("pack_rounding_base"),
-  /** 1.56.0 — Meses de vigencia del pack. NULL = no vence. */
+  /** 1.56.0 — Meses de vigencia. Sin uso desde 1.66.0: se borra en una migración posterior. */
   validityMonths: integer("validity_months"),
+  /** 1.66.0 — Semanas de vigencia del pack. NULL = no vence. CHECK > 0. */
+  validityWeeks: integer("validity_weeks"),
   /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL = no cargado. */
   sessionIntervalDays: integer("session_interval_days"),
   isPublishedWeb: boolean("is_published_web").notNull(),
