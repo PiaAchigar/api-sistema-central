@@ -255,4 +255,16 @@ describe("validarPrecioMenor", () => {
     expect(await validarPrecioMenor(db, { name: "x", priceType: "fixed", fixedPrice: 1499 } as never, [], c!.id))
       .toBeNull();
   });
+
+  it("suma de las partes 0: no hay con qué comparar, la edición pasa", async () => {
+    const c = await createCombo(
+      db,
+      header({ name: `${QA}_COMBO_VACIO`, priceType: "fixed", fixedPrice: 0, kind: "combo" }),
+      [],
+    );
+    expect(await validarPrecioMenor(db, { name: "x", priceType: "fixed", fixedPrice: 500, displayOrder: 3 } as never, [], c!.id))
+      .toBeNull();
+    expect(await validarPrecioMenor(db, header({ name: "x", priceType: "fixed", fixedPrice: 500, fixedPriceCash: 400 }), []))
+      .toBeNull();
+  });
 });

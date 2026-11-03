@@ -959,9 +959,13 @@ export function razonPrecioNoMenor(armado: {
     suma = (armado.packUnitAmount ?? 0) * armado.packEffectiveSessions;
     sumaCash = (armado.packUnitAmountCash ?? 0) * armado.packEffectiveSessions;
   }
-  const deLista = razonSiNoEsMenor(armado.finalAmount, suma);
+  // Con suma 0 (sin renglones, o renglones sin precio) no hay contra qué
+  // comparar: rechazar acá impediría editar hasta el orden de un combo así.
+  const deLista = suma > 0 ? razonSiNoEsMenor(armado.finalAmount, suma) : null;
   if (deLista) return deLista;
-  if (armado.fixedPriceCash != null) return razonSiNoEsMenor(armado.finalAmountCash, sumaCash);
+  if (armado.fixedPriceCash != null && sumaCash > 0) {
+    return razonSiNoEsMenor(armado.finalAmountCash, sumaCash);
+  }
   return null;
 }
 

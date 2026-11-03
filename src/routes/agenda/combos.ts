@@ -364,14 +364,14 @@ combosRouter.post(
     const malDelPack = await validarPack(db, header, lines);
     if (malDelPack) return c.json({ error: malDelPack }, 400);
 
-    // El aviso viaja con la respuesta además de estar en su propio endpoint:
-    // así, si alguien crea sin pasar por la pantalla, el duplicado igual queda
-    // registrado en la respuesta en vez de pasar en silencio.
     // "Siempre menor": se arma el precio como quedaría y se chequea ANTES de
     // escribir, para no tener que deshacer nada.
     const noEsMenor = await validarPrecioMenor(db, header, lines);
     if (noEsMenor) return c.json({ error: noEsMenor }, 400);
 
+    // El aviso viaja con la respuesta además de estar en su propio endpoint:
+    // así, si alguien crea sin pasar por la pantalla, el duplicado igual queda
+    // registrado en la respuesta en vez de pasar en silencio.
     const duplicados = await duplicadosDe(db, header, lines);
     const created = await createCombo(db, header, lines);
     return c.json({ ...created!, duplicados }, 201);
