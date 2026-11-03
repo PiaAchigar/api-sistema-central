@@ -4,6 +4,7 @@ import {
   notasConAplazo,
   origenYAplazos,
   razonesParaNoAplazar,
+  razonesParaNoAplazarCompra,
 } from "./aplazo-de-vencimiento";
 
 const d = (iso: string) => new Date(iso);
@@ -108,5 +109,40 @@ describe("origenYAplazos", () => {
 
   it("sin notas no rompe", () => {
     expect(origenYAplazos(null)).toEqual({ origen: null, aplazos: [] });
+  });
+});
+
+describe("razonesParaNoAplazarCompra", () => {
+  const compra = (vence: string | null, cancelada = false) => ({
+    venceEl: vence ? d(vence) : null,
+    cancelada,
+  });
+
+  it("una compra cancelada no se aplaza", () => {
+    expect(
+      razonesParaNoAplazarCompra(compra("2026-10-01T10:00:00Z", true), d("2026-12-12T10:00:00Z"), HOY),
+    ).toEqual(["Esta compra está cancelada."]);
+  });
+
+  it("sin fecha de vencimiento no hay nada que aplazar", () => {
+    expect(razonesParaNoAplazarCompra(compra(null), d("2026-12-12T10:00:00Z"), HOY)).toEqual([
+      "Esta compra no tiene fecha de vencimiento, así que no hay nada que aplazar.",
+    ]);
+  });
+
+  it("la fecha nueva tiene que ser posterior a hoy", () => {
+    expect(razonesParaNoAplazarCompra(compra("2026-10-01T10:00:00Z"), d("2026-09-01T10:00:00Z"), HOY)).toEqual([
+      "La fecha nueva tiene que ser posterior a hoy.",
+    ]);
+  });
+
+  it("aplazar es para adelante: no alcanza con ser posterior a hoy", () => {
+    expect(razonesParaNoAplazarCompra(compra("2026-12-12T10:00:00Z"), d("2026-10-01T10:00:00Z"), HOY)).toEqual([
+      "Aplazar es correr la fecha para adelante. Esta compra ya vence el 12/12/2026.",
+    ]);
+  });
+
+  it("vencida pero no cancelada se puede aplazar", () => {
+    expect(razonesParaNoAplazarCompra(compra("2026-08-01T10:00:00Z"), d("2026-12-12T10:00:00Z"), HOY)).toEqual([]);
   });
 });

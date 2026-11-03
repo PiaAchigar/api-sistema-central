@@ -5,6 +5,7 @@ import { createDb } from "../../db/client";
 import { badRequest, notFound } from "../../lib/errors";
 import { auth, requireAdmin, requireAuth, requirePermission } from "../../middleware/auth";
 import {
+  aplazarCompra,
   cancelCompra,
   createCompra,
   deleteCompraPermanently,
@@ -343,6 +344,43 @@ comprasRouter.post(
     // cancelar acá"; distinguirlas no le cambia nada a quien lo pide.
     if (!cancelada) throw notFound("Compra");
     return c.json(cancelada);
+  },
+);
+
+/**
+ * Corre para adelante el vencimiento de una compra.
+ *
+ * Pide `crm:manage`, el mismo que aplazar saldos (decisión de Pia,
+ * 2026-09-10): aplazar no saca plata de la caja y quien está en el mostrador
+ * tiene que poder resolverlo.
+ */
+comprasRouter.post(
+  "/purchases/:id/postpone",
+  auth,
+  requireAuth,
+  requirePermission("crm", "manage"),
+  zValidator(
+    "json",
+    z.object({
+      nuevaFecha: z.string().min(1, "Falta la fecha nueva."),
+      motivo: z.string().max(500).optional(),
+    }),
+  ),
+  async (c) => {
+    const db = createDb(c.env);
+    const b = c.req.valid("json");
+    const nuevaFecha = new Date(b.nuevaFecha);
+    if (Number.isNaN(nuevaFecha.getTime())) throw badRequest("La fecha nueva no es válida.");
+
+    // `user_id` es uuid: la API key estática pone "api-key" y eso no es una
+    // persona. Sin uuid válido queda en null y el rastro igual sale por mail.
+    const userId = c.get("userId");
+    const r = await aplazarCompra(db, c.req.param("id"), nuevaFecha, b.motivo ?? null, {
+      userId: userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId) ? userId : null,
+      email: c.get("userEmail"),
+    });
+    if ("error" in r) throw badRequest(r.error);
+    return c.json({ expiresAt: r.expiresAt.toISOString() });
   },
 );
 

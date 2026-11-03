@@ -65,6 +65,41 @@ export function razonesParaNoAplazar(
   return razones;
 }
 
+export type CompraAplazable = {
+  /** NULL = no vence. No hay nada que aplazar. */
+  venceEl: Date | null;
+  cancelada: boolean;
+};
+
+/**
+ * Por qué NO se puede aplazar esta compra a esta fecha. Vacío = se puede.
+ *
+ * Una compra vencida pero no cancelada SÍ se aplaza: es justo el caso de la
+ * clienta que se pasó de fecha y Laura le da una prórroga.
+ */
+export function razonesParaNoAplazarCompra(
+  compra: CompraAplazable,
+  nuevaFecha: Date,
+  hoy: Date,
+): string[] {
+  const razones: string[] = [];
+
+  if (compra.cancelada) razones.push("Esta compra está cancelada.");
+  if (compra.venceEl == null) {
+    razones.push("Esta compra no tiene fecha de vencimiento, así que no hay nada que aplazar.");
+  }
+  if (nuevaFecha <= hoy) razones.push("La fecha nueva tiene que ser posterior a hoy.");
+  // Sólo si no salió ninguna de las anteriores: con `venceEl` en null esta
+  // comparación no significa nada y sumaría un segundo mensaje que confunde.
+  if (razones.length === 0 && compra.venceEl != null && nuevaFecha <= compra.venceEl) {
+    razones.push(
+      `Aplazar es correr la fecha para adelante. Esta compra ya vence el ${fechaCorta(compra.venceEl)}.`,
+    );
+  }
+
+  return razones;
+}
+
 /**
  * El texto del movimiento después de aplazarlo.
  *

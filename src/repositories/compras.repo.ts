@@ -17,6 +17,7 @@ import {
   training,
   promotionTarget,
   promotions,
+  purchaseExpiryPostponements,
 } from "../db/schema";
 import {
   estadoDeSesion,
@@ -29,6 +30,7 @@ import {
 import { razonesParaNoBorrarCompra, type ImpactoDeBorrado } from "../lib/compra-borrado";
 import { saldoAAcreditar, type ServicioParaSaldo } from "../lib/saldo-de-cancelacion";
 import { planDePagoConSaldo } from "../lib/pago-con-saldo";
+import { razonesParaNoAplazarCompra } from "../lib/aplazo-de-vencimiento";
 import { vencimientoPara } from "../lib/vencimiento-de-saldo";
 import { mensajePromoAgotada, promoAgotada } from "../lib/promo-vigente";
 import { comprobantesDeDevolucion, repartirDevolucion } from "../lib/devolucion-declarada";
@@ -571,7 +573,7 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
   if (compras.length === 0) return [];
   const ids = compras.map((c) => c.id);
 
-  const [sesiones, pagos, devoluciones] = await Promise.all([
+  const [sesiones, pagos, devoluciones, aplazosDb] = await Promise.all([
     db
       .select({
         id: customerPurchaseService.id,
@@ -619,6 +621,12 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
           eq(customerCreditMovements.reason, "refunded"),
         ),
       ),
+    // Los aplazos de vencimiento, del más viejo al más nuevo (1.66.0).
+    db
+      .select()
+      .from(purchaseExpiryPostponements)
+      .where(inArray(purchaseExpiryPostponements.purchaseId, ids))
+      .orderBy(purchaseExpiryPostponements.createdAt),
   ]);
 
   // Cómo se llama una línea que NO es un servicio.
@@ -761,6 +769,16 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
       devuelta: misDevoluciones.length > 0,
       devuelto,
       ...resumen,
+      /** Cada vez que se corrió el vencimiento: del más viejo al más nuevo. */
+      aplazos: aplazosDb
+        .filter((a) => a.purchaseId === c.id)
+        .map((a) => ({
+          desde: a.previousExpiresAt.toISOString(),
+          hasta: a.newExpiresAt.toISOString(),
+          motivo: a.reason,
+          quien: a.userEmail,
+          cuando: (a.createdAt ?? new Date()).toISOString(),
+        })),
       /** Qué zonas trae el pack de depilación; null si la compra no es de depilación. */
       zonasDelPack: c.depilationComboId ? (desglosePorPack.get(c.depilationComboId) ?? []) : null,
       servicios: mias
@@ -1290,4 +1308,57 @@ export async function getDeudasDeCompras(db: Db, compraIds: string[]): Promise<M
 
   for (const f of filas) mapa.set(f.id, Number(f.deuda));
   return mapa;
+}
+
+/**
+ * Corre para adelante el vencimiento de una compra (pack o combo comprado).
+ *
+ * Mismo criterio que los saldos (`aplazarVencimientos`): aplazar es mover
+ * `expires_at`, no hay estado "perdonado". A diferencia de los saldos, acá sí
+ * hay una tabla de rastro (`purchase_expiry_postponements`), con el antes, el
+ * después, el motivo y quién. Las dos escrituras van en una transacción: un
+ * aplazo sin rastro, o un rastro sin aplazo, no puede quedar.
+ *
+ * Como `expires_at` es lo que mira `consumo.repo`, una compra vencida que se
+ * aplaza vuelve a ser consumible sin tocar nada más.
+ */
+export async function aplazarCompra(
+  db: Db,
+  purchaseId: string,
+  nuevaFecha: Date,
+  motivo: string | null,
+  quien: { userId: string | null; email: string | null },
+  ahora = new Date(),
+): Promise<{ ok: true; expiresAt: Date } | { error: string }> {
+  const [compra] = await db
+    .select({ expiresAt: customerPurchase.expiresAt, cancelledAt: customerPurchase.cancelledAt })
+    .from(customerPurchase)
+    .where(eq(customerPurchase.id, purchaseId))
+    .limit(1);
+  if (!compra) return { error: "La compra no existe." };
+
+  const razones = razonesParaNoAplazarCompra(
+    { venceEl: compra.expiresAt, cancelada: compra.cancelledAt != null },
+    nuevaFecha,
+    ahora,
+  );
+  if (razones.length > 0) return { error: razones[0]! };
+
+  const limpio = motivo?.trim() || null;
+  await db.transaction(async (tx) => {
+    await tx.insert(purchaseExpiryPostponements).values({
+      purchaseId,
+      previousExpiresAt: compra.expiresAt!,
+      newExpiresAt: nuevaFecha,
+      reason: limpio,
+      userId: quien.userId,
+      userEmail: quien.email,
+    });
+    await tx
+      .update(customerPurchase)
+      .set({ expiresAt: nuevaFecha })
+      .where(eq(customerPurchase.id, purchaseId));
+  });
+
+  return { ok: true, expiresAt: nuevaFecha };
 }

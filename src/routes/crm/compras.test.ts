@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -8,7 +8,27 @@ import { contacts, customers, depilationCombo } from "../../db/schema";
 import type { Db } from "../../db/client";
 import type { AppBindings, Variables } from "../../env";
 import { compraBody, comprasRouter } from "./compras";
+import { listComprasDeCliente } from "../../repositories/compras.repo";
+import { serviciosDisponiblesPara } from "../../repositories/consumo.repo";
 import { usarConfigDeDepilacionDeTest } from "../../test-support/depilation-config";
+
+// El router corre `auth` por ruta, que pisa cualquier usuario puesto antes: para
+// probar con un usuario real (uuid, mail, rol) los tests mandan x-test-* y este
+// doble los toma. Sin esos headers pasa la `auth` verdadera (API key, admin).
+vi.mock("../../middleware/auth", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../middleware/auth")>();
+  return {
+    ...real,
+    auth: async (c: any, next: any) => {
+      const rol = c.req.header("x-test-rol");
+      if (!rol) return real.auth(c, next);
+      c.set("userId", c.req.header("x-test-uid") ?? null);
+      c.set("userRole", rol);
+      c.set("userEmail", c.req.header("x-test-email") ?? null);
+      return next();
+    },
+  };
+});
 
 // La config de depilación la edita Laura: el archivo arma la suya (ver test-support).
 usarConfigDeDepilacionDeTest();
@@ -202,6 +222,103 @@ describe("POST /purchases/quote (integración real)", () => {
       expect(fila?.priceMode).toBe("efectivo");
       // Se borra la compra de prueba (la clienta se limpia en afterAll).
       await testDb.delete(schema.customerPurchase).where(eq(schema.customerPurchase.id, id));
+    });
+  });
+
+  describe("POST /purchases/:id/postpone (1.66.0)", () => {
+    const UID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const VENCE = new Date("2099-01-10T12:00:00Z");
+    const PASADA = new Date("2020-01-10T12:00:00Z");
+
+    const compras: string[] = [];
+    afterAll(async () => {
+      for (const id of compras) {
+        await testDb.delete(schema.customerPurchaseService).where(eq(schema.customerPurchaseService.customerPurchaseId, id));
+        await testDb.delete(schema.customerPurchase).where(eq(schema.customerPurchase.id, id));
+      }
+    });
+
+    async function nuevaCompra(customerId: string, expiresAt: Date | null) {
+      const [f] = await testDb
+        .insert(schema.customerPurchase)
+        .values({
+          customerId, depilationComboId: packId, description: "QA aplazo", sessionsTotal: 1,
+          baseAmount: "1000", discountedAmount: "1000", finalAmount: "1000",
+          purchasedAt: new Date(), expiresAt,
+        })
+        .returning({ id: schema.customerPurchase.id });
+      compras.push(f!.id);
+      return f!.id;
+    }
+
+    const comoSales = { "x-test-rol": "sales", "x-test-uid": UID, "x-test-email": "laura@piubella.test" };
+    // `accountant` no tiene crm.manage: el requirePermission es el real.
+    const comoContadora = { "x-test-rol": "accountant", "x-test-uid": UID };
+    const postergar = (quien: Record<string, string>, id: string, body: unknown) =>
+      app.request(
+        `/purchases/${id}/postpone`,
+        { method: "POST", headers: { "Content-Type": "application/json", ...quien }, body: JSON.stringify(body) },
+        ENV,
+      );
+
+    it("postpone mueve expires_at y registra el aplazo con quién", async () => {
+      const id = await nuevaCompra(idClientaMujer, VENCE);
+      const res = await postergar(comoSales, id, { nuevaFecha: "2099-03-01T12:00:00Z", motivo: "estuvo internada" });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { expiresAt: string }).expiresAt).toBe("2099-03-01T12:00:00.000Z");
+
+      const [c] = await testDb.select({ e: schema.customerPurchase.expiresAt }).from(schema.customerPurchase).where(eq(schema.customerPurchase.id, id));
+      expect(c!.e!.toISOString()).toBe("2099-03-01T12:00:00.000Z");
+
+      const filas = await testDb.select().from(schema.purchaseExpiryPostponements).where(eq(schema.purchaseExpiryPostponements.purchaseId, id));
+      expect(filas).toHaveLength(1);
+      expect(filas[0]!.previousExpiresAt.toISOString()).toBe(VENCE.toISOString());
+      expect(filas[0]!.reason).toBe("estuvo internada");
+      expect(filas[0]!.userId).toBe(UID);
+      expect(filas[0]!.userEmail).toBe("laura@piubella.test");
+    });
+
+    it("dos aplazos quedan los dos en aplazos[]", async () => {
+      const id = await nuevaCompra(idClientaMujer, VENCE);
+      expect((await postergar(comoSales, id, { nuevaFecha: "2099-03-01T12:00:00Z" })).status).toBe(200);
+      expect((await postergar(comoSales, id, { nuevaFecha: "2099-06-01T12:00:00Z", motivo: "otra vez" })).status).toBe(200);
+
+      const lista = await listComprasDeCliente(testDb, idClientaMujer);
+      const mia = lista.find((x) => x.id === id)!;
+      expect(mia.aplazos).toHaveLength(2);
+      expect(mia.aplazos[0]!.hasta).toBe("2099-03-01T12:00:00.000Z");
+      expect(mia.aplazos[1]!.desde).toBe("2099-03-01T12:00:00.000Z");
+      expect(mia.aplazos[1]!.hasta).toBe("2099-06-01T12:00:00.000Z");
+      expect(mia.aplazos[1]!.motivo).toBe("otra vez");
+      expect(mia.aplazos[1]!.quien).toBe("laura@piubella.test");
+    });
+
+    it("postpone sin permiso manage → 403", async () => {
+      const id = await nuevaCompra(idClientaMujer, VENCE);
+      const res = await postergar(comoContadora, id, { nuevaFecha: "2099-03-01T12:00:00Z" });
+      expect(res.status).toBe(403);
+    });
+
+    it("una fecha que no corre para adelante → 400 con el motivo", async () => {
+      const id = await nuevaCompra(idClientaMujer, VENCE);
+      const res = await postergar(comoSales, id, { nuevaFecha: "2098-01-01T12:00:00Z" });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe(
+        "Aplazar es correr la fecha para adelante. Esta compra ya vence el 10/01/2099.",
+      );
+    });
+
+    it("la compra aplazada vuelve a ser consumible", async () => {
+      const [svc] = await testDb.select({ id: schema.service.id }).from(schema.service).limit(1);
+      const id = await nuevaCompra(idClientaMujer, PASADA);
+      await testDb.insert(schema.customerPurchaseService).values({ customerPurchaseId: id, serviceId: svc!.id, repeticion: 1, orden: 1 });
+
+      const ahora = new Date();
+      expect((await serviciosDisponiblesPara(testDb, idClientaMujer, svc!.id, ahora)).some((x) => x.purchaseId === id)).toBe(false);
+
+      const res = await postergar(comoSales, id, { nuevaFecha: "2099-03-01T12:00:00Z" });
+      expect(res.status).toBe(200);
+      expect((await serviciosDisponiblesPara(testDb, idClientaMujer, svc!.id, ahora)).some((x) => x.purchaseId === id)).toBe(true);
     });
   });
 });
