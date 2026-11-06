@@ -179,6 +179,7 @@ const zona = (name: string, category: "grande" | "mediana" | "chica") => ({
   category,
   displayOrder: 0,
   isActive: true,
+  isVisibleWeb: true,
 });
 
 const ZONAS_GRANDES = [

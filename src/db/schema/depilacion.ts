@@ -33,6 +33,8 @@ export const bodyZone = pgTable("body_zone", {
   category: varchar("category", { length: 10 }).notNull(), // grande | mediana | chica
   displayOrder: integer("display_order").notNull(),
   isActive: boolean("is_active").notNull(),
+  /** Si se publica en la web (1.68.0). Ocultarla no la saca del CRM: se sigue vendiendo. */
+  isVisibleWeb: boolean("is_visible_web").notNull().default(true),
   createdAt: createdAt().notNull(),
   updatedAt: updatedAt().notNull(),
 });

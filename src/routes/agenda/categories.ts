@@ -10,6 +10,7 @@ import {
   hardDeleteCategory,
   listCategories,
   setCategoryActive,
+  setCategoryWebDescription,
   updateCategory,
 } from "../../repositories/categories.repo";
 import { auth, requireAdmin, requireAuth, requirePermission } from "../../middleware/auth";
@@ -20,6 +21,7 @@ type CategoryNode = {
   id: string;
   name: string | null;
   description: string | null;
+  webDescription: string | null;
   displayOrder: number | null;
   isActive: boolean | null;
   kind: string;
@@ -61,6 +63,7 @@ categoriesRouter.get(
           id: r.id,
           name: r.name,
           description: r.description,
+          webDescription: r.webDescription,
           displayOrder: r.displayOrder,
           isActive: r.isActive,
           kind: r.kind,
@@ -103,6 +106,23 @@ categoriesRouter.patch(
   async (c) => {
     const db = createDb(c.env);
     const updated = await updateCategory(db, c.req.param("id"), c.req.valid("json"));
+    if (!updated) throw notFound("Category");
+    return c.json(updated);
+  },
+);
+
+// La descripción que se ve en la web. Aparte del PATCH de arriba porque se edita
+// desde Sitio Web, con el permiso de esa sección. Vacía se guarda como NULL.
+categoriesRouter.patch(
+  "/:id/descripcion-web",
+  auth,
+  requireAuth,
+  requirePermission("sitio-web", "edit"),
+  zValidator("json", z.object({ webDescription: z.string().max(2000).nullable() })),
+  async (c) => {
+    const db = createDb(c.env);
+    const texto = c.req.valid("json").webDescription?.trim() || null;
+    const updated = await setCategoryWebDescription(db, c.req.param("id"), texto);
     if (!updated) throw notFound("Category");
     return c.json(updated);
   },

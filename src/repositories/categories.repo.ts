@@ -8,6 +8,7 @@ const categoryFields = {
   parentCategoryId: categories.parentCategoryId,
   name: categories.name,
   description: categories.description,
+  webDescription: categories.webDescription,
   displayOrder: categories.displayOrder,
   isActive: categories.isActive,
   kind: categories.kind,
@@ -64,6 +65,16 @@ export async function createCategory(
     })
     .returning(categoryFields);
   return rows[0]!;
+}
+
+/** El texto de la web, aparte de `updateCategory`: lo edita Sitio Web, no Catálogo. */
+export async function setCategoryWebDescription(db: Db, id: string, webDescription: string | null) {
+  const rows = await db
+    .update(categories)
+    .set({ webDescription })
+    .where(eq(categories.id, id))
+    .returning(categoryFields);
+  return rows[0] ?? null;
 }
 
 export async function updateCategory(

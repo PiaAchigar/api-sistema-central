@@ -276,11 +276,12 @@ describe("POST /purchases con zonas", () => {
 });
 
 describe("las zonas en la web pública", () => {
-  it("salen las activas con el precio de mujer", async () => {
+  it("salen las activas con los precios de mujer y de hombre", async () => {
     const config = await leerConfig(db);
     const publicas = await listarZonasPublicas(db);
     const a = publicas.find((z) => z.id === zonaA.id)!;
     expect(a.nombre).toBe(zonaA.name);
-    expect(a.precio).toBe(config.precioLista.mujer[zonaA.category as Categoria]);
+    expect(a.precioMujer).toBe(config.precioLista.mujer[zonaA.category as Categoria]);
+    expect(a.precioHombre).toBe(config.precioLista.hombre[zonaA.category as Categoria]);
   });
 });

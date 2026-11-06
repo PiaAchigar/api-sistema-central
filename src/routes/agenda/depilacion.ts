@@ -39,6 +39,7 @@ import {
   obtenerZonasActivasPorId,
   setEstadoCombo,
   setEstadoZona,
+  setZonaVisibleEnWeb,
   type ZonaRow,
 } from "../../repositories/depilacion.repo";
 import {
@@ -77,6 +78,7 @@ export const zonaBody = z.object({
     .int("El orden tiene que ser un número entero")
     .nonnegative("El orden no puede ser negativo")
     .nullish(),
+  isVisibleWeb: z.boolean().optional(),
 });
 
 export const estadoBody = z.object({
@@ -514,6 +516,21 @@ depilacionRouter.patch(
       throw conflict(`Ya existe una zona activa llamada "${body.name}"`);
     }
     const updated = await actualizarZona(db, id, body);
+    if (!updated) throw notFound("Zona");
+    return c.json(updated);
+  },
+);
+
+// Con el permiso de Sitio Web y no el de Catálogo: se usa desde esa solapa.
+depilacionRouter.patch(
+  "/zonas/:id/visible-web",
+  auth,
+  requireAuth,
+  requirePermission("sitio-web", "edit"),
+  zValidator("json", z.object({ isVisibleWeb: z.boolean() })),
+  async (c) => {
+    const db = createDb(c.env);
+    const updated = await setZonaVisibleEnWeb(db, c.req.param("id"), c.req.valid("json").isVisibleWeb);
     if (!updated) throw notFound("Zona");
     return c.json(updated);
   },

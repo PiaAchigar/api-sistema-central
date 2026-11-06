@@ -37,6 +37,8 @@ export const categories = pgTable("categories", {
   parentCategoryId: uuid("parent_category_id"),
   name: varchar("name", { length: 255 }),
   description: text("description"),
+  /** El texto debajo del título en la web (1.68.0). `description` es una nota interna. */
+  webDescription: text("web_description"),
   displayOrder: integer("display_order"),
   isActive: boolean("is_active"),
   kind: varchar("kind", { length: 12 }).notNull().default("tecnica"),

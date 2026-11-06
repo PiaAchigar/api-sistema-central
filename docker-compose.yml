@@ -155,6 +155,7 @@ services:
       - ./src/db/migrations/1.65.0/01-historial-de-ajustes-de-precios.sql:/docker-entrypoint-initdb.d/51-historial-de-ajustes-de-precios.sql:ro
       - ./src/db/migrations/1.66.0/01-efectivo-y-plazo.sql:/docker-entrypoint-initdb.d/52-efectivo-y-plazo.sql:ro
       - ./src/db/migrations/1.67.0/01-zonas-sueltas.sql:/docker-entrypoint-initdb.d/53-zonas-sueltas.sql:ro
+      - ./src/db/migrations/1.68.0/01-visibilidad-de-zonas-y-descripcion-de-categorias.sql:/docker-entrypoint-initdb.d/54-visibilidad-de-zonas-y-descripcion-de-categorias.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]

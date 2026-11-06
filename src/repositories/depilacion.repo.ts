@@ -32,6 +32,7 @@ export type ZonaRow = {
   category: string;
   displayOrder: number;
   isActive: boolean;
+  isVisibleWeb: boolean;
 };
 
 export type ExclusionRow = { zoneId: string; excludesZoneId: string };
@@ -46,6 +47,7 @@ const zonaFields = {
   category: bodyZone.category,
   displayOrder: bodyZone.displayOrder,
   isActive: bodyZone.isActive,
+  isVisibleWeb: bodyZone.isVisibleWeb,
 };
 
 /**
@@ -182,6 +184,7 @@ export type ZonaInput = {
   name: string;
   category: Categoria;
   displayOrder?: number | null;
+  isVisibleWeb?: boolean;
 };
 
 export async function crearZona(db: Db, input: ZonaInput) {
@@ -192,6 +195,7 @@ export async function crearZona(db: Db, input: ZonaInput) {
       category: input.category,
       displayOrder: input.displayOrder ?? 0,
       isActive: true,
+      isVisibleWeb: input.isVisibleWeb ?? true,
     })
     .returning();
   return created;
@@ -204,7 +208,19 @@ export async function actualizarZona(db: Db, id: string, input: ZonaInput) {
       name: input.name,
       category: input.category,
       displayOrder: input.displayOrder ?? 0,
+      // Sin el dato no se toca: si no, editar el nombre volvería a publicarla.
+      ...(input.isVisibleWeb !== undefined && { isVisibleWeb: input.isVisibleWeb }),
     })
+    .where(eq(bodyZone.id, id))
+    .returning();
+  return updated ?? null;
+}
+
+/** Publicar u ocultar en la web, desde Sitio Web → Visibles. */
+export async function setZonaVisibleEnWeb(db: Db, id: string, isVisibleWeb: boolean) {
+  const [updated] = await db
+    .update(bodyZone)
+    .set({ isVisibleWeb })
     .where(eq(bodyZone.id, id))
     .returning();
   return updated ?? null;
@@ -865,15 +881,23 @@ export async function listarZonasVendibles(db: Db): Promise<ZonaVendible[]> {
   }));
 }
 
-export type ZonaPublica = { id: string; nombre: string; precio: number };
+export type ZonaPublica = { id: string; nombre: string; precioMujer: number; precioHombre: number };
 
-/** Las zonas para la web. Precio de mujer, igual que los packs publicados. */
+/** Las zonas para la web: las activas que Laura no ocultó, con las dos tarifas. */
 export async function listarZonasPublicas(db: Db): Promise<ZonaPublica[]> {
-  const [zonas, config] = await Promise.all([zonasActivasEnOrden(db), leerConfig(db)]);
+  const [zonas, config] = await Promise.all([
+    db
+      .select({ id: bodyZone.id, nombre: bodyZone.name, categoria: bodyZone.category })
+      .from(bodyZone)
+      .where(and(eq(bodyZone.isActive, true), eq(bodyZone.isVisibleWeb, true)))
+      .orderBy(asc(bodyZone.displayOrder), asc(bodyZone.name)),
+    leerConfig(db),
+  ]);
   return zonas.map((z) => ({
     id: z.id,
     nombre: z.nombre,
-    precio: config.precioLista.mujer[z.categoria as Categoria],
+    precioMujer: config.precioLista.mujer[z.categoria as Categoria],
+    precioHombre: config.precioLista.hombre[z.categoria as Categoria],
   }));
 }
 
