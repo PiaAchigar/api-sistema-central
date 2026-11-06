@@ -76,7 +76,7 @@ crons = ["* * * * *", "0 * * * *"]
 #   wrangler secret put AFIP_KEY              ← clave privada .key (pegar PEM o base64)
 # Para dev local, crear .dev.vars (no commitear) con:
 #   SUPABASE_URL=https://pfemndbftxhlcvyhpbfg.supabase.co
-#   API_KEY=fcac8522-f474-4d29-bd4f-92913a816541
+#   API_KEY=<valor propio para dev, distinto del de producción>
 #   AFIP_CERT y AFIP_KEY en .dev.vars: usar base64 en una sola línea
 #   (el PEM multilínea no entra en .dev.vars; ver ARCA_SETUP.md).
 # Nota: SUPABASE_JWT_SECRET quedó obsoleto (los tokens son ES256, no HMAC).
