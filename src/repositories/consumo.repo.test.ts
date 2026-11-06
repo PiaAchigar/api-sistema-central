@@ -71,9 +71,7 @@ describe("ningún parámetro sale como Date", () => {
  * Task 10: `lineasDeDepilacionLibres` contra la base local de verdad.
  *
  * Cuatro compras de depilación para la misma clienta real (la primera de
- * `customers`, siguiendo el mismo criterio que `compras-ficha.repo.test.ts`:
- * ningún archivo de la suite crea clientes, así que no hay fixture QA ajeno
- * que un `limit 1` pueda agarrar acá):
+ * `customers` que no sea de prueba, igual que `compras-ficha.repo.test.ts`):
  *
  *   - `compraDe3Id`   — 3 sesiones sueltas, ninguna agendada. El caso base.
  *   - `compraVencidaId` — 1 sesión, pero la compra ya venció.
@@ -144,10 +142,8 @@ async function limpiar() {
 beforeAll(async () => {
   await limpiar();
 
-  // Sin filtro ZZ_QA a propósito, igual que compras-ficha.repo.test.ts:
-  // ningún archivo de la suite crea clientes, así que no hay fixture QA de
-  // otra suite que un `limit 1` sin ORDER BY pueda agarrar acá.
-  const [cli] = await dbReal.execute<{ id: string }>("select id from customers limit 1" as never);
+  // Sin las clientas ZZ_QA, igual que compras-ficha.repo.test.ts.
+  const [cli] = await dbReal.execute<{ id: string }>("select c.id from customers c left join contacts k on k.id = c.contact_id where coalesce(k.name, '') not like 'ZZ_QA%' limit 1" as never);
   idClienta = cli!.id;
 
   const pack = await crearCombo(dbReal, {
@@ -346,7 +342,7 @@ describe("hermanosDelCombo — V3c, los combos que se hacen juntos", () => {
     await limpiarCombo();
 
     const [cli] = await dbReal.execute<{ id: string }>(
-      "select id from customers limit 1" as never,
+      "select c.id from customers c left join contacts k on k.id = c.contact_id where coalesce(k.name, '') not like 'ZZ_QA%' limit 1" as never,
     );
     idClienta = cli!.id;
     const [area] = await dbReal.execute<{ id: string }>(

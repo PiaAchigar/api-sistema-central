@@ -184,7 +184,7 @@ async function createPromotion(
 
 beforeAll(async () => {
   await limpiar();
-  const [cli] = await db.execute<{ id: string }>("select id from customers limit 1" as never);
+  const [cli] = await db.execute<{ id: string }>("select c.id from customers c left join contacts k on k.id = c.contact_id where coalesce(k.name, '') not like 'ZZ_QA%' limit 1" as never);
   const [srv] = await db.execute<{ id: string }>(
     "select id from service where is_active = true and unit_price_list > 0 and name not like 'ZZ_QA%' order by id limit 1" as never,
   );

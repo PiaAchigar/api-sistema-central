@@ -64,7 +64,7 @@ beforeAll(async () => {
     .values({ name: `${QA}_SERVICIO`, isActive: true, unitPriceList: "10000" })
     .returning({ id: service.id });
   servicioId = srv!.id;
-  const [cli] = await db.execute<{ id: string }>("select id from customers limit 1" as never);
+  const [cli] = await db.execute<{ id: string }>("select c.id from customers c left join contacts k on k.id = c.contact_id where coalesce(k.name, '') not like 'ZZ_QA%' limit 1" as never);
   clienteId = cli!.id;
 });
 

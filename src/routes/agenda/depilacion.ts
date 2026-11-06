@@ -31,6 +31,7 @@ import {
   listarExclusiones,
   listarPacksFijos,
   listarPacksPublicos,
+  listarZonasPublicas,
   listarZonas,
   obtenerCombo,
   obtenerKindYPrecioDeCombo,
@@ -363,6 +364,11 @@ export const comboDepilacionBody = z
 depilacionRouter.get("/packs-publicos", async (c) => {
   const db = createDb(c.env);
   return c.json(await listarPacksPublicos(db));
+});
+
+depilacionRouter.get("/zonas-publicas", async (c) => {
+  const db = createDb(c.env);
+  return c.json(await listarZonasPublicas(db));
 });
 
 // ── Turnos sin cerrar por proveedora y equipos de depilación ───────────────

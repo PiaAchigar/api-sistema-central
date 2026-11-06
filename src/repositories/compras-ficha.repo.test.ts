@@ -72,13 +72,11 @@ async function limpiar() {
 beforeAll(async () => {
   await limpiar();
 
-  // Sin filtro ZZ_QA a propósito: ningún archivo de la suite crea clientes
-  // de prueba (`grep -rl "insert(customers)"` sólo devuelve
-  // `customers.repo.ts`), así que no hay fixture QA de otra suite que un
-  // `limit 1` sin ORDER BY pueda agarrar acá. El resto de los `select`
+  // Sin las clientas ZZ_QA: otros archivos de la suite crean las suyas y un
+  // `limit 1` sin ORDER BY podría agarrarlas. El resto de los `select`
   // nuevos de este archivo no lee catálogo compartido: el servicio y el
   // pack se CREAN acá mismo, con nombre QA propio.
-  const [cli] = await db.execute<{ id: string }>("select id from customers limit 1" as never);
+  const [cli] = await db.execute<{ id: string }>("select c.id from customers c left join contacts k on k.id = c.contact_id where coalesce(k.name, '') not like 'ZZ_QA%' limit 1" as never);
   clienteId = cli!.id;
 
   const [srv] = await db

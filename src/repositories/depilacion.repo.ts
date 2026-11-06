@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, or } from "drizzle-orm";
+import { and, asc, eq, inArray, ne, or } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   bodyZone,
@@ -21,6 +21,7 @@ import {
   type ZonaParaCotizar,
 } from "../lib/depilation-pricing";
 import { razonSiNoEsMenor } from "../lib/combo-pricing";
+import { nombreDeZonasSueltas } from "../lib/zonas-sueltas";
 import { precioDePackFijo } from "../lib/precio-de-pack-fijo";
 
 // ── Zonas ────────────────────────────────────────────────────────────────
@@ -805,6 +806,8 @@ export async function listarCombos(
     db
       .select(comboFields)
       .from(depilationCombo)
+      // Un `a_medida` es una venta de zonas sueltas, no algo del catálogo.
+      .where(ne(depilationCombo.kind, "a_medida"))
       .orderBy(asc(depilationCombo.displayOrder), asc(depilationCombo.name)),
     leerConfig(db),
   ]);
@@ -824,6 +827,118 @@ export async function obtenerCombo(
   if (!c) return null;
   const config = await leerConfig(db);
   return assembleDepilationCombo(c, await zonasDelCombo(db, id), config, sexo);
+}
+
+// ── Zonas sueltas ───────────────────────────────────────────────────────
+
+/** Una zona para elegirla al vender. El precio es el de una zona sola: el
+ *  total de varias lo da la cotización, que abarata la 2ª y la 3ª. */
+export type ZonaVendible = {
+  id: string;
+  nombre: string;
+  precioMujer: number;
+  precioHombre: number;
+  /** Zonas que no se pueden vender junto con esta. */
+  excluye: string[];
+};
+
+async function zonasActivasEnOrden(db: Db) {
+  return db
+    .select({ id: bodyZone.id, nombre: bodyZone.name, categoria: bodyZone.category })
+    .from(bodyZone)
+    .where(eq(bodyZone.isActive, true))
+    .orderBy(asc(bodyZone.displayOrder), asc(bodyZone.name));
+}
+
+export async function listarZonasVendibles(db: Db): Promise<ZonaVendible[]> {
+  const [zonas, exclusiones, config] = await Promise.all([
+    zonasActivasEnOrden(db),
+    listarExclusiones(db),
+    leerConfig(db),
+  ]);
+  return zonas.map((z) => ({
+    id: z.id,
+    nombre: z.nombre,
+    precioMujer: config.precioLista.mujer[z.categoria as Categoria],
+    precioHombre: config.precioLista.hombre[z.categoria as Categoria],
+    excluye: exclusiones.filter((e) => e.zoneId === z.id).map((e) => e.excludesZoneId),
+  }));
+}
+
+export type ZonaPublica = { id: string; nombre: string; precio: number };
+
+/** Las zonas para la web. Precio de mujer, igual que los packs publicados. */
+export async function listarZonasPublicas(db: Db): Promise<ZonaPublica[]> {
+  const [zonas, config] = await Promise.all([zonasActivasEnOrden(db), leerConfig(db)]);
+  return zonas.map((z) => ({
+    id: z.id,
+    nombre: z.nombre,
+    precio: config.precioLista.mujer[z.categoria as Categoria],
+  }));
+}
+
+/**
+ * Valida las zonas elegidas para vender y las deja listas para cotizar. El
+ * backend revalida aunque la pantalla ya apague las que chocan.
+ */
+export async function zonasParaVender(db: Db, zonaIds: string[]): Promise<ZonaParaCotizar[]> {
+  const ids = [...new Set(zonaIds)];
+  const activas = await obtenerZonasActivasPorId(db, ids);
+  if (ids.some((id) => !activas.has(id))) {
+    throw new Error("Una de las zonas elegidas ya no está disponible");
+  }
+  const conflicto = conflictoEnSeleccion(ids, exclusionesParaMotor(await listarExclusiones(db)));
+  if (conflicto) {
+    throw new Error(
+      `"${activas.get(conflicto.zonaId)?.name}" y "${activas.get(conflicto.excluyeA)?.name}" no se pueden combinar`,
+    );
+  }
+  return ids.map((id) => {
+    const z = activas.get(id)!;
+    return { id: z.id, nombre: z.name, categoria: z.category as Categoria };
+  });
+}
+
+/**
+ * El combo oculto (`a_medida`) de estas zonas: lo busca o lo crea.
+ *
+ * De esta fila cuelgan la agenda, la ficha y el consumo, igual que de un pack.
+ * Se reusa para las mismas zonas, así no se acumula una fila por venta.
+ */
+export async function comboDeZonasSueltas(db: Db, zonas: ZonaParaCotizar[]): Promise<string> {
+  const buscadas = new Set(zonas.map((z) => z.id));
+  const filas = await db
+    .select({ comboId: depilationComboZone.comboId, zoneId: depilationComboZone.zoneId })
+    .from(depilationComboZone)
+    .innerJoin(depilationCombo, eq(depilationCombo.id, depilationComboZone.comboId))
+    .where(eq(depilationCombo.kind, "a_medida"));
+  const porCombo = new Map<string, string[]>();
+  for (const f of filas) porCombo.set(f.comboId, [...(porCombo.get(f.comboId) ?? []), f.zoneId]);
+  for (const [comboId, ids] of porCombo) {
+    if (ids.length === buscadas.size && ids.every((id) => buscadas.has(id))) return comboId;
+  }
+
+  // `name` es único: dos selecciones largas pueden recortarse al mismo nombre,
+  // o una zona renombrada puede repetir uno viejo.
+  const nombre = nombreDeZonasSueltas(zonas.map((z) => z.nombre));
+  const name = (await existeComboConNombre(db, nombre))
+    ? `${nombre} · ${crypto.randomUUID().slice(0, 6)}`
+    : nombre;
+  return db.transaction(async (tx) => {
+    const [creado] = await tx
+      .insert(depilationCombo)
+      .values({
+        name,
+        kind: "a_medida",
+        choiceZoneCount: 0,
+        isPublishedWeb: false,
+        displayOrder: 0,
+        isActive: true,
+      })
+      .returning({ id: depilationCombo.id });
+    await writeComboZonas(tx, creado!.id, zonas.map((z) => z.id));
+    return creado!.id;
+  });
 }
 
 export type DepilationComboInput = {

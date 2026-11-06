@@ -37,7 +37,7 @@ async function limpiar() {
 
 beforeAll(async () => {
   await limpiar();
-  const [cli] = await db.execute<{ id: string }>("select id from customers limit 1" as never);
+  const [cli] = await db.execute<{ id: string }>("select c.id from customers c left join contacts k on k.id = c.contact_id where coalesce(k.name, '') not like 'ZZ_QA%' limit 1" as never);
   const [pack] = await db.execute<{ id: string }>(
     "select id from depilation_combo where is_active = true and name not like 'ZZ_QA%' order by id limit 1" as never,
   );

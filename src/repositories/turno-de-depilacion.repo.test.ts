@@ -60,10 +60,9 @@ async function lineasDe(purchaseId: string): Promise<number> {
 beforeAll(async () => {
   await limpiar();
 
-  // Sin filtro ZZ_QA a propósito: ningún archivo de la suite crea clientes,
-  // así que no hay fixture QA ajeno que un `limit 1` sin ORDER BY pueda
-  // agarrar (mismo criterio que consumo.repo.test.ts).
-  const [cli] = await db.execute<{ id: string }>("select id from customers limit 1" as never);
+  // Sin las clientas ZZ_QA: otros archivos de la suite crean las suyas y les
+  // venden en paralelo, y este archivo cuenta las compras de la clienta elegida.
+  const [cli] = await db.execute<{ id: string }>("select c.id from customers c left join contacts k on k.id = c.contact_id where coalesce(k.name, '') not like 'ZZ_QA%' limit 1" as never);
   if (!cli) throw new Error("no hay clientes en la base local (¿corriste npm run db:up?)");
   clienteId = cli.id;
 

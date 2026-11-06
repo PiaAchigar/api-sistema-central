@@ -126,7 +126,7 @@ export const depilationCombo = pgTable("depilation_combo", {
   id: id(),
   name: varchar("name", { length: 200 }).notNull().unique("ux_depilation_combo_name"),
   description: text("description"),
-  kind: varchar("kind", { length: 20 }).notNull(), // pack_fijo | guardado
+  kind: varchar("kind", { length: 20 }).notNull(), // pack_fijo | guardado | a_medida (1.67.0: oculto, zonas vendidas sueltas)
   fixedPrice: numeric("fixed_price", { precision: 10, scale: 2 }),
   fixedDurationMinutes: integer("fixed_duration_minutes"),
   choiceZoneCount: integer("choice_zone_count").notNull(),

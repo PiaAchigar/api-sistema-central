@@ -22,6 +22,7 @@ import { resolveArcaConfig } from "../../arca/factory";
 import { getPagadoDeCompra } from "../../repositories/compras.repo";
 import { razonesParaNoBorrarCompra } from "../../lib/compra-borrado";
 import {
+  itemDeZonasSueltas,
   listCatalogoVendible,
   listPromosVendibles,
   motivoPromoNoVendible,
@@ -29,6 +30,7 @@ import {
   obtenerPromoVendible,
   preciosDeListaDe,
 } from "../../repositories/catalogo-venta.repo";
+import { comboDeZonasSueltas, zonasParaVender } from "../../repositories/depilacion.repo";
 import { sexoDeLaClienta } from "../../repositories/clientes-sexo.repo";
 import { cotizar, type ModoDePrecio } from "../../lib/cotizacion";
 import { cotizarPaquete, razonParaNoVenderElPaquete } from "../../lib/cotizacion-de-paquete";
@@ -86,6 +88,9 @@ comprasRouter.get(
 /** Con qué precio se cobra: lista o efectivo. Opcional (ver `modoDePrecio`). */
 const precioBody = z.enum(["lista", "efectivo"]).optional();
 
+/** Las zonas de una venta suelta. Se revalidan contra la base en `zonasParaVender`. */
+const zonaIdsBody = z.array(z.string().uuid()).min(1, "Elegí al menos una zona.").max(100);
+
 /**
  * Las promos se cobran sólo en efectivo: pedir una promo con precio de lista
  * explícito es un error. Sin `precio`, la promo implica efectivo y lo demás,
@@ -112,6 +117,13 @@ comprasRouter.post(
         customerId: z.string().uuid(),
         precio: precioBody,
       }),
+      // Zonas sueltas: no hay un item del catálogo, lo que se vende son estas zonas.
+      z.object({
+        origen: z.literal("zonas"),
+        zonaIds: zonaIdsBody,
+        sessions: z.number().int().positive(),
+        customerId: z.string().uuid(),
+      }),
       // Un paquete no tiene "origen": lo que lleva sale de la promo.
       z.object({
         origen: z.literal("paquete"),
@@ -124,6 +136,27 @@ comprasRouter.post(
   async (c) => {
     const db = createDb(c.env);
     const body = c.req.valid("json");
+
+    if (body.origen === "zonas") {
+      try {
+        const sexo = await sexoDeLaClienta(db, body.customerId);
+        const item = await itemDeZonasSueltas(db, await zonasParaVender(db, body.zonaIds), sexo);
+        const q = cotizar(item, body.sessions, null, new Date());
+        return c.json({
+          ...q,
+          expiresAt: null,
+          // Listo para mandarlo a POST /purchases sin rearmarlo.
+          zonaIds: body.zonaIds,
+          comboId: null,
+          depilationComboId: null,
+          serviceId: null,
+          trainingId: null,
+        });
+      } catch (e) {
+        throw badRequest((e as Error).message);
+      }
+    }
+
     const modo = modoDePrecio(body.precio, body.promotionId);
 
     if (body.origen === "paquete") {
@@ -212,6 +245,8 @@ export const compraBody = z
     serviceId: z.string().uuid().nullish(),
     depilationComboId: z.string().uuid().nullish(),
     trainingId: z.string().uuid().nullish(),
+    /** Zonas sueltas: la API resuelve el combo oculto del que cuelga la compra. */
+    zonaIds: zonaIdsBody.nullish(),
     esPaquete: z.boolean().optional(),
     description: z.string().min(1).max(200),
     sessionsTotal: z.number().int().positive(),
@@ -228,7 +263,7 @@ export const compraBody = z
   })
   .refine(
     (v) => {
-      const sueltos = [v.comboId, v.serviceId, v.depilationComboId, v.trainingId].filter(Boolean);
+      const sueltos = [v.comboId, v.serviceId, v.depilationComboId, v.trainingId, v.zonaIds].filter(Boolean);
       // Un paquete no tiene origen suelto: lo que lleva sale de la promo.
       if (v.esPaquete) return sueltos.length === 0 && !!v.promotionId;
       return sueltos.length === 1;
@@ -239,6 +274,9 @@ export const compraBody = z
         "Un paquete de promo no lleva ninguno, pero sí la promo.",
     },
   )
+  .refine((v) => !v.zonaIds || !v.promotionId, {
+    message: "Las zonas sueltas se venden sin promo.",
+  })
   .refine((v) => v.finalAmount <= v.discountedAmount && v.discountedAmount <= v.baseAmount, {
     // Los tres montos son las tres capas en orden. Si vinieran desordenados,
     // la card mostraría un "descuento" que en realidad es un recargo.
@@ -253,7 +291,8 @@ comprasRouter.post(
   zValidator("json", compraBody),
   async (c) => {
     const db = createDb(c.env);
-    const b = c.req.valid("json");
+    const { zonaIds, ...pedido } = c.req.valid("json");
+    const b = { ...pedido };
     // Con promo y 'lista' explícito, 400 antes de tocar nada.
     const modoPedido = modoDePrecio(b.precio, b.promotionId);
 
@@ -262,6 +301,21 @@ comprasRouter.post(
     // suelto o adentro de un paquete, la venta tiene que pesarlo igual que lo
     // vio Laura al cotizar.
     const sexo = await sexoDeLaClienta(db, b.customerId);
+
+    if (zonaIds) {
+      try {
+        const zonas = await zonasParaVender(db, zonaIds);
+        const q = cotizar(await itemDeZonasSueltas(db, zonas, sexo), b.sessionsTotal, null, new Date());
+        // Acá no hay un item del catálogo que respalde el precio, así que se
+        // compara: si la tarifa cambió con la pantalla abierta, se vuelve a cotizar.
+        if (q.finalAmount !== b.finalAmount) {
+          throw new Error("El precio de las zonas cambió. Volvé a elegirlas para ver el nuevo.");
+        }
+        b.depilationComboId = await comboDeZonasSueltas(db, zonas);
+      } catch (e) {
+        throw badRequest((e as Error).message);
+      }
+    }
 
     if (b.esPaquete) {
       const promo = await obtenerPromoVendible(db, b.promotionId!);

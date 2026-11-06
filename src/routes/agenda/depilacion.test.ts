@@ -2319,10 +2319,8 @@ describe("GET /para-agendar/:purchaseServiceId (integración real)", () => {
   beforeAll(async () => {
     await limpiar();
 
-    // Sin filtro ZZ_QA a propósito: ningún archivo de la suite crea
-    // clientes, así que no hay fixture QA ajeno que un `limit 1` sin ORDER
-    // BY pueda agarrar acá (mismo criterio que consumo.repo.test.ts).
-    const [cli] = await testDb.execute<{ id: string }>("select id from customers limit 1" as never);
+    // Sin las clientas ZZ_QA (mismo criterio que consumo.repo.test.ts).
+    const [cli] = await testDb.execute<{ id: string }>("select c.id from customers c left join contacts k on k.id = c.contact_id where coalesce(k.name, '') not like 'ZZ_QA%' limit 1" as never);
     clienteId = cli!.id;
 
     const espaldaId = await idDeZonaReal("Espalda");

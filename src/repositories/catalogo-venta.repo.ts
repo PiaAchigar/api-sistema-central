@@ -24,7 +24,9 @@ import type { CatalogoDelPaquete } from "../lib/cotizacion-de-paquete";
 import type { DestinoDePromo } from "../lib/promo-aplica";
 import { promoAgotada, promoEstaVigente, mensajePromoAgotada } from "../lib/promo-vigente";
 import { getComboById, listCombos } from "./combos.repo";
-import { leerConfig, listarCombos, obtenerCombo } from "./depilacion.repo";
+import { calcularPrecioCombo, type ZonaParaCotizar } from "../lib/depilation-pricing";
+import { nombreDeZonasSueltas } from "../lib/zonas-sueltas";
+import { leerConfig, listarCombos, listarZonasVendibles, obtenerCombo } from "./depilacion.repo";
 
 /**
  * El catálogo de lo que se puede vender, en una sola forma.
@@ -213,8 +215,34 @@ function aItemDeCatalogo(item: ItemVendible, mostrar: ParaMostrar = {}): ItemDeC
       };
 }
 
+/**
+ * Zonas sueltas como item vendible: el mismo camino que un pack de depilación,
+ * con el precio de la fórmula de zonas y la política global de pack. No vence.
+ */
+export async function itemDeZonasSueltas(
+  db: Db,
+  zonas: ZonaParaCotizar[],
+  sexo: Sexo,
+): Promise<ItemVendible> {
+  const config = await leerConfig(db);
+  const unitario = calcularPrecioCombo(zonas, sexo, config).total;
+  return {
+    origen: "depilacion",
+    id: "",
+    nombre: nombreDeZonasSueltas(zonas.map((z) => z.nombre)),
+    unitario,
+    unitarioEfectivo: unitario,
+    politica: {
+      sesiones: config.packSesiones,
+      descuentoPct: config.packDescuentoPct,
+      redondeo: config.packRedondeo,
+    },
+    validityWeeks: null,
+  };
+}
+
 export async function listCatalogoVendible(db: Db) {
-  const [genericos, depilacion, servicios, capacitaciones, config, areas] = await Promise.all([
+  const [genericos, depilacion, servicios, capacitaciones, config, areas, zonas] = await Promise.all([
     // `includeInactive` para poder RESOLVER, no para mostrar: un pack que
     // repite un combo no tiene renglones propios, y si ese combo está
     // archivado no estaría en la lista y el pack se mostraría sin desglose.
@@ -250,6 +278,7 @@ export async function listCatalogoVendible(db: Db) {
       .orderBy(asc(training.name)),
     leerConfig(db),
     leerAreas(db),
+    listarZonasVendibles(db),
   ]);
 
   const global = {
@@ -267,6 +296,8 @@ export async function listCatalogoVendible(db: Db) {
   }
 
   return {
+    zonas,
+    packDeZonas: { sesiones: config.packSesiones, descuentoPct: config.packDescuentoPct },
     combos: genericos
       .filter((c) => (c as ComboArmado).isActive !== false)
       .map((c) => {

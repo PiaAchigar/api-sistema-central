@@ -67,7 +67,7 @@ async function limpiar() {
 beforeAll(async () => {
   await limpiar();
 
-  const [cli] = await db.execute<{ id: string }>("select id from customers limit 1" as never);
+  const [cli] = await db.execute<{ id: string }>("select c.id from customers c left join contacts k on k.id = c.contact_id where coalesce(k.name, '') not like 'ZZ_QA%' limit 1" as never);
   clienteId = cli!.id;
 
   // Cuatro zonas reales del catálogo, ordenadas por nombre: las dos primeras
