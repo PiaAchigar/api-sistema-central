@@ -187,7 +187,7 @@ function canonica(c: Celda | undefined): string | number | null {
   return t;
 }
 
-export function celdasIguales(a: Celda, b: Celda): boolean {
+export function celdasIguales(a: Celda | undefined, b: Celda | undefined): boolean {
   return canonica(a) === canonica(b);
 }
 
@@ -223,7 +223,7 @@ const TIPOS: Record<keyof ServicioNormalizado, Tipo> = {
   specialAttentionNotes: { tipo: "texto", max: 2000 },
 };
 
-function aNumero(c: Celda): number {
+function aNumero(c: Celda | undefined): number {
   if (typeof c === "number") return c;
   const t = (c ?? "").trim();
   return REGEX_NUMERO.test(t) ? Number(t.replace(",", ".")) : Number.NaN;
@@ -278,3 +278,414 @@ export function normalizarServicio(f: FilaServicioPlanilla): { valor: ServicioNo
   return { valor: valor as unknown as ServicioNormalizado, errores };
 }
 
+// ───────────────────────── Planificar ─────────────────────────
+
+export type Catalogo = {
+  maquinas: Map<string, string | null>;
+  proveedoras: Map<string, string | null>;
+  insumos: Map<string, string | null>;
+  categorias: Map<string, string | null>;
+  idsDelArea: Set<string>;
+};
+
+type Ref = { id: string } | { nuevaFila: number };
+
+export type PlanDePlanilla = {
+  crear: { fila: number; datos: ServicioNormalizado }[];
+  actualizar: {
+    id: string;
+    fila: number;
+    patch: Partial<ServicioNormalizado>;
+    precioAntes: { lista: number | null; efectivo: number | null } | null;
+  }[];
+  acuerdos: { servicio: Ref; proveedoraId: string; paymentType: string; rate: number; cerrarVigente: boolean }[];
+  insumos: { servicio: Ref; productId: string; quantity: number }[];
+  categorias: { servicio: Ref; categoryId: string }[];
+};
+
+type Vista = Omit<Previsualizacion, "combosAfectados">;
+
+const clave = (c: Celda | undefined): string => String(canonica(c) ?? "").toLowerCase();
+
+/** Busca un nombre en el catálogo: exacto, y si no, sin mayúsculas. `undefined` = no existe, `null` = ambiguo. */
+function buscar(mapa: Map<string, string | null>, nombre: Celda): string | null | undefined {
+  const n = String(nombre ?? "").trim();
+  if (mapa.has(n)) return mapa.get(n) as string | null;
+  const bajo = n.toLowerCase();
+  const ids = new Set<string | null>();
+  for (const [k, v] of mapa) if (k.trim().toLowerCase() === bajo) ids.add(v);
+  if (ids.size === 0) return undefined;
+  return ids.size === 1 ? [...ids][0] : null;
+}
+
+type FilaRel = { fila: number; servicio: Celda; rel: Celda; celdas: Celda[] };
+
+type ResultadoRel<V> = {
+  tipo: "alta" | "cambio";
+  ref: Ref;
+  fila: number;
+  servicio: string;
+  rel: string;
+  valor: V;
+  antes: Celda[] | null;
+};
+
+type ConfigRel<V> = {
+  pestana: Pestana;
+  /** Nombre de la cosa para los mensajes de conflicto ("La tarifa", "La cantidad"). */
+  etiqueta: string;
+  filas: (c: ContenidoPlanilla) => FilaRel[];
+  /** Valida y resuelve la fila (catálogo incluido). Sólo se llama si la fila va a escribir algo. */
+  validar: (f: FilaRel) => { valor?: V; error?: string };
+  describir: (celdas: Celda[]) => string;
+};
+
+function planificarRelacion<V>(
+  cfg: ConfigRel<V>,
+  p: { original: ContenidoPlanilla; editada: ContenidoPlanilla; actual: ContenidoPlanilla },
+  serviciosEditados: Map<string, { fila: number; id: string | null; nombre: string }>,
+  errores: ErrorDePlanilla[],
+): ResultadoRel<V>[] {
+  const err = (fila: number | null, mensaje: string) => errores.push({ pestana: cfg.pestana, fila, mensaje });
+
+  // Pares (id del servicio, relación) de lo bajado y de lo de hoy.
+  const indexar = (c: ContenidoPlanilla) => {
+    const idPorNombre = new Map<string, string>();
+    for (const s of c.servicios) if (s.id && !vacia(s.nombre)) idPorNombre.set(clave(s.nombre), s.id);
+    const m = new Map<string, FilaRel>();
+    for (const f of cfg.filas(c)) {
+      const id = idPorNombre.get(clave(f.servicio));
+      if (id) m.set(`${id}|${clave(f.rel)}`, f);
+    }
+    return m;
+  };
+  const enOriginal = indexar(p.original);
+  const enActual = indexar(p.actual);
+
+  const salida: ResultadoRel<V>[] = [];
+  const vistos = new Set<string>();
+
+  for (const f of cfg.filas(p.editada)) {
+    if (vacia(f.servicio) && vacia(f.rel) && f.celdas.every(vacia)) continue; // fila en blanco
+    if (vacia(f.servicio)) {
+      err(f.fila, "Falta el servicio: elegilo de la lista.");
+      continue;
+    }
+    const srv = serviciosEditados.get(clave(f.servicio));
+    if (!srv) {
+      err(f.fila, `No existe el servicio «${String(f.servicio).trim()}» en la pestaña Servicios. Si le cambiaste el nombre, usá el nombre nuevo.`);
+      continue;
+    }
+    if (vacia(f.rel)) {
+      err(f.fila, `Falta completar la columna ${cfg.pestana === "Proveedoras" ? "Proveedora" : cfg.pestana === "Insumos" ? "Insumo" : "Categoría web"}.`);
+      continue;
+    }
+    const ref: Ref = srv.id ? { id: srv.id } : { nuevaFila: srv.fila };
+    const kPar = `${srv.id ?? `nueva:${srv.fila}`}|${clave(f.rel)}`;
+    if (vistos.has(kPar)) {
+      err(f.fila, `«${String(f.rel).trim()}» está repetido para el servicio «${srv.nombre}»: cada uno va una sola vez.`);
+      continue;
+    }
+    vistos.add(kPar);
+
+    const o = srv.id ? enOriginal.get(kPar) : undefined;
+    const a = srv.id ? enActual.get(kPar) : undefined;
+    const iguales = (x: FilaRel, y: FilaRel) => x.celdas.every((c, i) => celdasIguales(c, y.celdas[i]));
+
+    let tipo: "alta" | "cambio";
+    if (!o) {
+      if (a) {
+        if (iguales(f, a)) continue; // ya estaba en el sistema igual
+        err(
+          f.fila,
+          `${cfg.etiqueta} de «${String(f.rel).trim()}» en «${srv.nombre}» se cargó en el sistema después de que bajaste la planilla: ahora es ${cfg.describir(a.celdas)}, en la planilla pusiste ${cfg.describir(f.celdas)}. Bajá una planilla nueva.`,
+        );
+        continue;
+      }
+      tipo = "alta";
+    } else {
+      if (iguales(f, o)) continue; // no la tocó
+      if (!a || !iguales(a, o)) {
+        err(
+          f.fila,
+          `${cfg.etiqueta} de «${String(f.rel).trim()}» en «${srv.nombre}» cambió en el sistema después de que bajaste la planilla: ahora es ${a ? cfg.describir(a.celdas) : "(sin cargar)"}, en la planilla pusiste ${cfg.describir(f.celdas)}. Bajá una planilla nueva.`,
+        );
+        continue;
+      }
+      tipo = "cambio";
+    }
+
+    const v = cfg.validar(f);
+    if (v.error || v.valor === undefined) {
+      err(f.fila, v.error ?? "Fila inválida.");
+      continue;
+    }
+    salida.push({
+      tipo,
+      ref,
+      fila: f.fila,
+      servicio: srv.nombre,
+      rel: String(f.rel).trim(),
+      valor: v.valor,
+      antes: o ? o.celdas : null,
+    });
+  }
+  return salida;
+}
+
+export function planificarPlanilla(p: {
+  original: ContenidoPlanilla;
+  editada: ContenidoPlanilla;
+  actual: ContenidoPlanilla;
+  catalogo: Catalogo;
+}): { plan: PlanDePlanilla; vista: Vista } {
+  const { original, editada, actual, catalogo } = p;
+  const errores: ErrorDePlanilla[] = [];
+  const plan: PlanDePlanilla = { crear: [], actualizar: [], acuerdos: [], insumos: [], categorias: [] };
+  const vista: Vista = {
+    errores,
+    servicios: [],
+    acuerdos: [],
+    insumos: [],
+    categorias: [],
+    resumen: { serviciosNuevos: 0, serviciosModificados: 0, acuerdos: 0, insumos: 0, categorias: 0 },
+  };
+  const errS = (fila: number | null, mensaje: string) => errores.push({ pestana: "Servicios", fila, mensaje });
+
+  const originalPorId = new Map(original.servicios.filter((s) => s.id).map((s) => [s.id as string, s]));
+  const actualPorId = new Map(actual.servicios.filter((s) => s.id).map((s) => [s.id as string, s]));
+  const serviciosEditados = new Map<string, { fila: number; id: string | null; nombre: string }>();
+  const idsVistos = new Set<string>();
+
+  // ── Servicios ──
+  for (const f of editada.servicios) {
+    const sinId = f.id === null || f.id.trim() === "";
+    const hayNombre = !vacia(f.nombre);
+    if (sinId && CLAVES.every((k) => vacia(f[CAMPO_DE_FILA[k]] as Celda))) continue; // fila en blanco
+
+    // Nombre repetido (cuenta para el mapa de relaciones también).
+    if (hayNombre) {
+      const k = clave(f.nombre);
+      if (serviciosEditados.has(k)) {
+        errS(f.fila, `El nombre «${String(f.nombre).trim()}» está repetido en la pestaña Servicios (también en la fila ${serviciosEditados.get(k)!.fila}). Cada servicio tiene que tener un nombre distinto.`);
+      } else {
+        serviciosEditados.set(k, { fila: f.fila, id: sinId ? null : (f.id as string), nombre: String(f.nombre).trim() });
+      }
+    }
+
+    if (sinId) {
+      planificarNuevo(f);
+    } else {
+      const id = f.id as string;
+      if (idsVistos.has(id)) {
+        errS(f.fila, "Esta fila repite el id de otra fila. No toques la columna id.");
+        continue;
+      }
+      idsVistos.add(id);
+      planificarExistente(f, id);
+    }
+  }
+
+  function validarMaquina(f: FilaServicioPlanilla, valor: ServicioNormalizado) {
+    if (valor.maquina === null) return;
+    const id = buscar(catalogo.maquinas, valor.maquina);
+    if (id === undefined) errS(f.fila, `La máquina «${valor.maquina}» no existe. Elegila de la lista.`);
+    else if (id === null) errS(f.fila, `Hay más de una máquina llamada «${valor.maquina}»: no se sabe cuál es.`);
+  }
+
+  function planificarNuevo(f: FilaServicioPlanilla) {
+    const { valor, errores: es } = normalizarServicio(f);
+    errores.push(...es);
+    for (const k of OBLIGATORIOS_EN_NUEVO) {
+      if (valor[k] === null && !es.some((e) => e.mensaje.startsWith(ENCABEZADOS_SERVICIOS[k]))) {
+        errS(f.fila, `${ENCABEZADOS_SERVICIOS[k]} es obligatorio en un servicio nuevo.`);
+      }
+    }
+    // Los Sí/No vacíos toman el default del modal.
+    valor.requiresOperator ??= false;
+    valor.requiresMachine ??= false;
+    valor.isVisible ??= true;
+    valor.isFeatured ??= false;
+    validarMaquina(f, valor);
+    const tieneCategoria = editada.categorias.some((c) => !vacia(c.servicio) && !vacia(f.nombre) && clave(c.servicio) === clave(f.nombre) && !vacia(c.categoria));
+    if (!tieneCategoria) {
+      errS(f.fila, "Un servicio nuevo necesita al menos una categoría web: cargala en la pestaña Categorías web.");
+    }
+    plan.crear.push({ fila: f.fila, datos: valor });
+    vista.servicios.push({ fila: f.fila, id: null, nombre: valor.name ?? "", tipo: "nuevo", cambios: [] });
+    vista.resumen.serviciosNuevos++;
+  }
+
+  function planificarExistente(f: FilaServicioPlanilla, id: string) {
+    const o = originalPorId.get(id);
+    if (!o || !catalogo.idsDelArea.has(id)) {
+      errS(f.fila, "Esta fila tiene un id que no es de esta área. No toques la columna id.");
+      return;
+    }
+    const a = actualPorId.get(id);
+    const nombreRef = mostrar(o.nombre);
+    const patch: Record<string, string | number | boolean | null> = {};
+    const cambios: Cambio[] = [];
+    let hayError = false;
+
+    for (const k of CLAVES) {
+      const campoFila = CAMPO_DE_FILA[k];
+      const cEd = f[campoFila] as Celda;
+      const cOr = o[campoFila] as Celda;
+      if (celdasIguales(cOr, cEd)) continue; // no la tocó
+      const enc = ENCABEZADOS_SERVICIOS[k];
+
+      if (a && !celdasIguales(cOr, a[campoFila] as Celda)) {
+        errS(
+          f.fila,
+          `${enc} de «${nombreRef}» cambió en el sistema después de que bajaste la planilla: ahora es ${mostrar(a[campoFila] as Celda)}, en la planilla pusiste ${mostrar(cEd)}. Bajá una planilla nueva.`,
+        );
+        hayError = true;
+        continue;
+      }
+      const r = normalizarCampo(k, cEd);
+      if (r.error) {
+        errS(f.fila, r.error);
+        hayError = true;
+        continue;
+      }
+      if (r.valor === null && (k === "name" || CAMPOS_OBLIGATORIOS_AL_VACIAR.includes(k))) {
+        errS(f.fila, `${enc} de «${nombreRef}» no se puede dejar vacío.`);
+        hayError = true;
+        continue;
+      }
+      patch[k] = r.valor;
+      cambios.push({ campo: enc, antes: mostrar(cOr), despues: mostrar(cEd) });
+    }
+
+    if (patch.maquina != null) {
+      validarMaquina(f, { maquina: patch.maquina as string } as ServicioNormalizado);
+    }
+    if (hayError || cambios.length === 0) return;
+
+    let precioAntes: { lista: number | null; efectivo: number | null } | null = null;
+    if ("unitPriceList" in patch || "unitPriceCash" in patch) {
+      const fuente = a ?? o;
+      const n = (c: Celda) => {
+        const x = canonica(c);
+        return typeof x === "number" ? x : null;
+      };
+      precioAntes = { lista: n(fuente.precioLista), efectivo: n(fuente.precioEfectivo) };
+    }
+    plan.actualizar.push({ id, fila: f.fila, patch: patch as Partial<ServicioNormalizado>, precioAntes });
+    vista.servicios.push({ fila: f.fila, id, nombre: mostrar(f.nombre), tipo: "modificado", cambios });
+    vista.resumen.serviciosModificados++;
+  }
+
+  const ctx = { original, editada, actual };
+
+  // ── Acuerdos ──
+  const acuerdos = planificarRelacion(
+    {
+      pestana: "Proveedoras",
+      etiqueta: "El acuerdo",
+      filas: (c) => c.acuerdos.map((r) => ({ fila: r.fila, servicio: r.servicio, rel: r.proveedora, celdas: [r.tipoDePago, r.tarifa] })),
+      describir: ([tipo, tarifa]) => `${mostrar(tipo)}, ${mostrar(tarifa)}`,
+      validar: (f) => {
+        const prov = buscar(catalogo.proveedoras, f.rel);
+        if (prov === undefined) return { error: `La proveedora «${String(f.rel).trim()}» no existe. Elegila de la lista.` };
+        if (prov === null) return { error: `Hay más de una proveedora llamada «${String(f.rel).trim()}»: no se sabe cuál es.` };
+        const [tipo, tarifa] = f.celdas;
+        const codigo = vacia(tipo)
+          ? undefined
+          : Object.entries(TIPO_DE_PAGO_A_CODIGO).find(([l]) => clave(l) === clave(tipo))?.[1];
+        if (vacia(tipo) || vacia(tarifa)) {
+          return {
+            error:
+              "Cada proveedora necesita cómo cobra y cuánto cobra: un acuerdo sin forma de cobrar no se puede guardar. Si todavía no lo acordaron, sacala de la lista y agregala cuando lo tengan.",
+          };
+        }
+        if (!codigo) return { error: `El tipo de pago «${String(tipo).trim()}» no es válido. Elegí uno de la lista: ${TIPOS_DE_PAGO.join(", ")}.` };
+        const rate = aNumero(tarifa);
+        if (!Number.isFinite(rate)) return { error: "La tarifa tiene que ser un número." };
+        if (rate === 0) {
+          return { error: "La tarifa no puede ser 0: una proveedora habilitada con tarifa en cero cobra $0 por cada turno. Poné cuánto cobra de verdad." };
+        }
+        if (rate < 0) return { error: "La tarifa no puede ser negativa." };
+        return { valor: { proveedoraId: prov, paymentType: codigo, rate } };
+      },
+    },
+    ctx,
+    serviciosEditados,
+    errores,
+  );
+  for (const r of acuerdos) {
+    plan.acuerdos.push({ servicio: r.ref, ...r.valor, cerrarVigente: r.tipo === "cambio" });
+    const etiqueta = CODIGO_A_TIPO_DE_PAGO[r.valor.paymentType];
+    vista.acuerdos.push({
+      fila: r.fila,
+      servicio: r.servicio,
+      proveedora: r.rel,
+      tipo: r.tipo === "alta" ? "nuevo" : "cambia",
+      antes: r.antes ? `${mostrar(r.antes[0])}, ${mostrar(r.antes[1])}` : null,
+      despues: `${etiqueta}, ${r.valor.rate}`,
+    });
+    vista.resumen.acuerdos++;
+  }
+
+  // ── Insumos ──
+  const insumos = planificarRelacion(
+    {
+      pestana: "Insumos",
+      etiqueta: "La cantidad",
+      filas: (c) => c.insumos.map((r) => ({ fila: r.fila, servicio: r.servicio, rel: r.insumo, celdas: [r.cantidad] })),
+      describir: ([cant]) => mostrar(cant),
+      validar: (f) => {
+        const id = buscar(catalogo.insumos, f.rel);
+        if (id === undefined) return { error: `El insumo «${String(f.rel).trim()}» no existe. Elegilo de la lista.` };
+        if (id === null) return { error: `Hay más de un insumo llamado «${String(f.rel).trim()}»: no se sabe cuál es.` };
+        const q = aNumero(f.celdas[0]);
+        if (!Number.isFinite(q)) return { error: "La cantidad tiene que ser un número." };
+        if (q <= 0) return { error: "La cantidad tiene que ser mayor que 0." };
+        return { valor: { productId: id, quantity: q } };
+      },
+    },
+    ctx,
+    serviciosEditados,
+    errores,
+  );
+  for (const r of insumos) {
+    plan.insumos.push({ servicio: r.ref, ...r.valor });
+    const antes = r.antes ? canonica(r.antes[0]) : null;
+    vista.insumos.push({
+      fila: r.fila,
+      servicio: r.servicio,
+      insumo: r.rel,
+      tipo: r.tipo === "alta" ? "nuevo" : "cambia",
+      antes: typeof antes === "number" ? antes : null,
+      despues: r.valor.quantity,
+    });
+    vista.resumen.insumos++;
+  }
+
+  // ── Categorías web (sólo altas) ──
+  const categorias = planificarRelacion(
+    {
+      pestana: "Categorías web",
+      etiqueta: "La categoría",
+      filas: (c) => c.categorias.map((r) => ({ fila: r.fila, servicio: r.servicio, rel: r.categoria, celdas: [] })),
+      describir: () => "",
+      validar: (f) => {
+        const id = buscar(catalogo.categorias, f.rel);
+        if (id === undefined) return { error: `La categoría «${String(f.rel).trim()}» no existe. Elegila de la lista.` };
+        if (id === null) return { error: `Hay más de una categoría con la ruta «${String(f.rel).trim()}»: no se sabe cuál es.` };
+        return { valor: { categoryId: id } };
+      },
+    },
+    ctx,
+    serviciosEditados,
+    errores,
+  );
+  for (const r of categorias) {
+    plan.categorias.push({ servicio: r.ref, ...r.valor });
+    vista.categorias.push({ fila: r.fila, servicio: r.servicio, categoria: r.rel });
+    vista.resumen.categorias++;
+  }
+
+  return { plan, vista };
+}
