@@ -89,6 +89,12 @@ describe("normalizarServicio", () => {
     expect(r.valor.webSortOrder).toBe(2000);
   });
 
+  it("'0.250' en texto es cero coma veinticinco, no doscientos cincuenta", () => {
+    expect(celdasIguales("0.250", 0.25)).toBe(true);
+    expect(celdasIguales("0,250", 0.25)).toBe(true);
+    expect(celdasIguales("-0.500", -0.5)).toBe(true);
+  });
+
   it("'1.500,50' es mil quinientos con cincuenta y '1,5' es uno y medio", () => {
     const r = normalizarServicio(filaServicio({ precioLista: "1.500,50", precioEfectivo: "1,5" }));
     expect(r.errores).toEqual([]);
@@ -137,6 +143,7 @@ function catalogo(o: Partial<Catalogo> = {}): Catalogo {
     insumos: new Map([["Gel", "i-gel"]]),
     categorias: new Map([["Madre › Hija", "c1"]]),
     idsDelArea: new Set([ID_A, ID_B]),
+    serviciosDelSistema: [],
     ...o,
   };
 }
@@ -298,6 +305,57 @@ describe("planificarPlanilla — servicios nuevos", () => {
       actual: contenido(),
     });
     expect(r.vista.errores.some((e) => e.mensaje.includes("máquina"))).toBe(true);
+  });
+});
+
+describe("planificarPlanilla — aviso de nombre que ya existe", () => {
+  const cat = { fila: 2, servicio: "ZZ_QA_PLANILLA_Nuevo", categoria: "Madre › Hija" };
+  const otro = (o: Partial<Catalogo["serviciosDelSistema"][number]> = {}) => ({
+    id: "id-otro", nombre: "ZZ_QA_PLANILLA_Nuevo", areas: ["Medicina y Dermatología"], activo: true, ...o,
+  });
+  const conNuevo = (nombre: string) => ({
+    original: contenido(),
+    editada: contenido({ servicios: [filaServicio({ fila: 5, nombre })], categorias: [{ ...cat, servicio: nombre }] }),
+    actual: contenido(),
+  });
+
+  it("servicio nuevo con el nombre de otro del sistema: avisa, pero deja guardar", () => {
+    const r = plan(conNuevo("zz_qa_planilla_nuevo "), catalogo({ serviciosDelSistema: [otro()] }));
+    expect(r.vista.errores).toEqual([]);
+    expect(r.plan.crear).toHaveLength(1);
+    expect(r.vista.avisos).toHaveLength(1);
+    expect(r.vista.avisos[0]).toMatchObject({ pestana: "Servicios", fila: 5 });
+    expect(r.vista.avisos[0]?.mensaje).toContain("Ya existe un servicio llamado «ZZ_QA_PLANILLA_Nuevo»");
+    expect(r.vista.avisos[0]?.mensaje).toContain("Medicina y Dermatología");
+  });
+
+  it("también contra uno desactivado, y sin importar los tildes", () => {
+    const r = plan(conNuevo("ZZ_QA_PLANILLA_Nuévo"), catalogo({ serviciosDelSistema: [otro({ activo: false, areas: [] })] }));
+    expect(r.vista.avisos[0]?.mensaje).toContain("desactivado");
+  });
+
+  it("renombrar un existente al nombre de otro avisa", () => {
+    const t = trio();
+    t.editada.servicios[0] = A({ nombre: "ZZ_QA_PLANILLA_Nuevo" });
+    const r = plan(t, catalogo({ serviciosDelSistema: [otro()] }));
+    expect(r.vista.avisos).toHaveLength(1);
+  });
+
+  it("no avisa por el mismo servicio ni por uno que en la planilla cambia de nombre", () => {
+    // A conserva su nombre: no se compara consigo mismo.
+    expect(plan(trio(), catalogo({ serviciosDelSistema: [otro({ id: ID_A, nombre: "ZZ_QA_PLANILLA_A" })] })).vista.avisos).toEqual([]);
+    // B se llamaba "ZZ_QA_PLANILLA_Nuevo" y en la planilla pasa a llamarse distinto: el nombre queda libre.
+    const B = filaServicio({ fila: 3, id: ID_B, nombre: "ZZ_QA_PLANILLA_B" });
+    const t = {
+      original: contenido({ servicios: [filaServicio({ fila: 3, id: ID_B, nombre: "ZZ_QA_PLANILLA_Nuevo" })] }),
+      editada: contenido({ servicios: [B, filaServicio({ fila: 5, nombre: "ZZ_QA_PLANILLA_Nuevo" })], categorias: [cat] }),
+      actual: contenido({ servicios: [filaServicio({ fila: 3, id: ID_B, nombre: "ZZ_QA_PLANILLA_Nuevo" })] }),
+    };
+    expect(plan(t, catalogo({ serviciosDelSistema: [otro({ id: ID_B })] })).vista.avisos).toEqual([]);
+  });
+
+  it("sin coincidencias no hay avisos", () => {
+    expect(plan(conNuevo("ZZ_QA_PLANILLA_Nuevo"), catalogo({ serviciosDelSistema: [otro({ nombre: "Otra cosa" })] })).vista.avisos).toEqual([]);
   });
 });
 

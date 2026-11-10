@@ -188,6 +188,12 @@ describe("cargarCatalogo", () => {
     expect(c.idsDelArea.has(sActivo)).toBe(true);
     expect(c.idsDelArea.has(sArchivado)).toBe(false);
   });
+
+  it("trae todos los servicios del sistema con su área, para avisar nombres repetidos", async () => {
+    const c = await cargarCatalogo(db, areaId);
+    expect(c.serviciosDelSistema.find((s) => s.id === sActivo)).toEqual({ id: sActivo, nombre: P + "Activo", areas: [AREA], activo: true });
+    expect(c.serviciosDelSistema.find((s) => s.id === sArchivado)).toMatchObject({ activo: false });
+  });
 });
 
 describe("previsualizarPlanilla", () => {

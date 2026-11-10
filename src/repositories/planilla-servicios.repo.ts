@@ -105,7 +105,7 @@ function estaExcluida(c: CategoriaFila, porId: Map<string, CategoriaFila>): bool
 }
 
 async function leerCatalogo(db: Db, areaId: string): Promise<{ catalogo: Catalogo; listas: ListasPlanilla }> {
-  const [maqs, provs, prods, cats, delArea] = await Promise.all([
+  const [maqs, provs, prods, cats, delArea, todos] = await Promise.all([
     db.select({ id: machines.id, name: machines.name }).from(machines).where(eq(machines.status, "active")),
     db.select({ id: serviceProviders.id, name: serviceProviders.fullName }).from(serviceProviders).where(eq(serviceProviders.status, "active")),
     db
@@ -126,7 +126,19 @@ async function leerCatalogo(db: Db, areaId: string): Promise<{ catalogo: Catalog
       .from(service)
       .innerJoin(serviceCategory, eq(serviceCategory.serviceId, service.id))
       .where(and(eq(serviceCategory.categoryId, areaId), eq(service.isActive, true), sql`COALESCE(${service.noVendible}, false) = false`)),
+    db
+      .select({ id: service.id, name: service.name, activo: service.isActive, area: categories.name })
+      .from(service)
+      .leftJoin(serviceCategory, eq(serviceCategory.serviceId, service.id))
+      .leftJoin(categories, and(eq(categories.id, serviceCategory.categoryId), eq(categories.kind, "area"))),
   ]);
+
+  const serviciosDelSistema = new Map<string, Catalogo["serviciosDelSistema"][number]>();
+  for (const t of todos) {
+    let s = serviciosDelSistema.get(t.id);
+    if (!s) serviciosDelSistema.set(t.id, (s = { id: t.id, nombre: t.name ?? "", areas: [], activo: t.activo === true }));
+    if (t.area && !s.areas.includes(t.area)) s.areas.push(t.area);
+  }
 
   const todas: CategoriaFila[] = cats.map((c) => ({ ...c, activa: c.activa === true }));
   const porId = new Map(todas.map((c) => [c.id, c]));
@@ -140,6 +152,7 @@ async function leerCatalogo(db: Db, areaId: string): Promise<{ catalogo: Catalog
     insumos: mapaDeNombres(prods),
     categorias: catMapa,
     idsDelArea: new Set(delArea.map((s) => s.id)),
+    serviciosDelSistema: [...serviciosDelSistema.values()],
   };
   const ordenadas = (m: Map<string, string | null>) => [...m.keys()].sort((a, b) => a.localeCompare(b, "es"));
   const listas: ListasPlanilla = {

@@ -58,10 +58,13 @@ export type EntradaPlanilla = { area: string; original: ContenidoPlanilla; edita
 
 export type Pestana = "Servicios" | "Proveedoras" | "Insumos" | "Categorías web" | "Archivo";
 export type ErrorDePlanilla = { pestana: Pestana; fila: number | null; mensaje: string };
+/** Igual que un error pero no frena el guardado: sólo avisa. */
+export type AvisoDePlanilla = ErrorDePlanilla;
 export type Cambio = { campo: string; antes: string; despues: string }; // `campo` = encabezado de la columna
 
 export type Previsualizacion = {
   errores: ErrorDePlanilla[];
+  avisos: AvisoDePlanilla[];
   servicios: { fila: number; id: string | null; nombre: string; tipo: "nuevo" | "modificado"; cambios: Cambio[] }[];
   acuerdos: { fila: number; servicio: string; proveedora: string; tipo: "nuevo" | "cambia"; antes: string | null; despues: string }[];
   insumos: { fila: number; servicio: string; insumo: string; tipo: "nuevo" | "cambia"; antes: number | null; despues: number }[];
@@ -171,7 +174,8 @@ const CLAVES = Object.keys(ENCABEZADOS_SERVICIOS) as (keyof ServicioNormalizado)
 const REGEX_NUMERO = /^-?\d+(?:[.,]\d+)?$/;
 // Miles argentinos: "1.500", "45.000", "1.500,50". Un texto así se lee SIEMPRE como miles
 // (nunca como 1,5), porque en esta planilla el punto no se usa de decimal con 3 dígitos.
-const REGEX_MILES = /^-?\d{1,3}(?:\.\d{3})+(?:,\d+)?$/;
+// Salvo que empiece con 0: "0.250" es 0,25 (una cantidad de insumo), no 250.
+const REGEX_MILES = /^-?[1-9]\d{0,2}(?:\.\d{3})+(?:,\d+)?$/;
 
 /** Número de un texto (o NaN). Las celdas de tipo número no pasan por acá. */
 function textoANumero(t: string): number {
@@ -312,6 +316,8 @@ export type Catalogo = {
   insumos: Map<string, string | null>;
   categorias: Map<string, string | null>;
   idsDelArea: Set<string>;
+  /** Todos los servicios de la base (de cualquier área, activos o no), para avisar nombres repetidos. */
+  serviciosDelSistema: { id: string; nombre: string; areas: string[]; activo: boolean }[];
 };
 
 type Ref = { id: string } | { nuevaFila: number };
@@ -487,8 +493,10 @@ export function planificarPlanilla(p: {
   const { original, editada, actual, catalogo } = p;
   const errores: ErrorDePlanilla[] = [];
   const plan: PlanDePlanilla = { crear: [], actualizar: [], acuerdos: [], insumos: [], categorias: [] };
+  const avisos: AvisoDePlanilla[] = [];
   const vista: Vista = {
     errores,
+    avisos,
     servicios: [],
     acuerdos: [],
     insumos: [],
@@ -621,6 +629,31 @@ export function planificarPlanilla(p: {
     vista.servicios.push({ fila: f.fila, id, nombre: mostrar(f.nombre), tipo: "modificado", cambios });
     vista.resumen.serviciosModificados++;
   }
+
+  // ── Nombres que ya usa otro servicio del sistema (aviso, no error) ──
+  // Los servicios que están en la planilla se comparan con su nombre de la planilla (ya se
+  // validó arriba que no se repitan), así que acá sólo cuentan los que NO están en ella.
+  const nombreClave = (n: string) => sinTildes(n.trim()).toLowerCase();
+  const otros = new Map<string, Catalogo["serviciosDelSistema"][number]>();
+  for (const s of catalogo.serviciosDelSistema) {
+    if (!idsVistos.has(s.id) && s.nombre.trim() !== "") otros.set(nombreClave(s.nombre), s);
+  }
+  const avisarSiExiste = (fila: number, nombre: string | null | undefined) => {
+    const otro = nombre ? otros.get(nombreClave(nombre)) : undefined;
+    if (!otro) return;
+    const donde = !otro.activo
+      ? "está desactivado"
+      : otro.areas.length > 0
+        ? `está en ${otro.areas.join(", ")}`
+        : "no tiene área";
+    avisos.push({
+      pestana: "Servicios",
+      fila,
+      mensaje: `Ya existe un servicio llamado «${otro.nombre.trim()}» (${donde}). Si es el mismo, no lo cargues de nuevo: editalo desde ahí. Si es otro, conviene ponerle un nombre que los diferencie. Igual se puede guardar.`,
+    });
+  };
+  for (const c of plan.crear) avisarSiExiste(c.fila, c.datos.name);
+  for (const a of plan.actualizar) if ("name" in a.patch) avisarSiExiste(a.fila, a.patch.name);
 
   const ctx = { original, editada, actual };
 
