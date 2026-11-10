@@ -78,7 +78,11 @@ beforeEach(async () => {
     { id: madre, name: P + "madre", kind: "tecnica", isActive: true },
     { id: hija, name: P + "hija", kind: "tecnica", isActive: true, parentCategoryId: madre },
   ]);
-  [ana, bea, maq, gel, crema] = [1, 2, 3, 4, 5].map(() => crypto.randomUUID());
+  ana = crypto.randomUUID();
+  bea = crypto.randomUUID();
+  maq = crypto.randomUUID();
+  gel = crypto.randomUUID();
+  crema = crypto.randomUUID();
   await db.insert(serviceProviders).values([
     { id: ana, fullName: P + "Ana", status: "active" },
     { id: bea, fullName: P + "Bea", status: "active" },
