@@ -308,7 +308,7 @@ type Vista = Omit<Previsualizacion, "combosAfectados">;
 const clave = (c: Celda | undefined): string => String(canonica(c) ?? "").toLowerCase();
 
 /** Busca un nombre en el catálogo: exacto, y si no, sin mayúsculas. `undefined` = no existe, `null` = ambiguo. */
-function buscar(mapa: Map<string, string | null>, nombre: Celda): string | null | undefined {
+export function buscar(mapa: Map<string, string | null>, nombre: Celda): string | null | undefined {
   const n = String(nombre ?? "").trim();
   if (mapa.has(n)) return mapa.get(n) as string | null;
   const bajo = n.toLowerCase();
@@ -390,7 +390,7 @@ function planificarRelacion<V>(
 
     const o = srv.id ? enOriginal.get(kPar) : undefined;
     const a = srv.id ? enActual.get(kPar) : undefined;
-    const iguales = (x: FilaRel, y: FilaRel) => x.celdas.every((c, i) => celdasIguales(c, y.celdas[i]));
+    const iguales = (x: FilaRel, y: FilaRel) => x.celdas.every((c, i) => clave(c) === clave(y.celdas[i]));
 
     let tipo: "alta" | "cambio";
     if (!o) {

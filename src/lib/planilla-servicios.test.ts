@@ -290,6 +290,14 @@ describe("planificarPlanilla — relaciones", () => {
     expect(r.plan.insumos).toEqual([{ servicio: { id: ID_A }, productId: "i-gel", quantity: 1 }]);
   });
 
+  it("tipo de pago con otras mayúsculas no es cambio", () => {
+    const t = base();
+    t.editada.acuerdos = [acu(2, "ZZ_QA_PLANILLA_A", "Ana", "por hora", 100)];
+    const r = plan(t);
+    expect(r.vista.errores).toEqual([]);
+    expect(r.plan.acuerdos).toEqual([]);
+  });
+
   it("relación con el nombre viejo da error", () => {
     const t = base();
     t.editada.servicios[0] = A({ nombre: "ZZ_QA_PLANILLA_Renombrado" });
