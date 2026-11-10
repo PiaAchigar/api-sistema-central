@@ -41,6 +41,11 @@ describe("celdasIguales", () => {
     expect(celdasIguales(" x ", "x")).toBe(true);
     expect(celdasIguales("", null)).toBe(true);
   });
+  it("'45.000' (miles con punto) es 45000", () => {
+    expect(celdasIguales(45000, "45.000")).toBe(true);
+    expect(celdasIguales(1500.5, "1.500,50")).toBe(true);
+    expect(celdasIguales(1.5, "1,5")).toBe(true);
+  });
   it("detecta diferencias reales", () => {
     expect(celdasIguales(45000, 45001)).toBe(false);
     expect(celdasIguales("Sí", "No")).toBe(false);
@@ -73,6 +78,22 @@ describe("normalizarServicio", () => {
     expect(r.errores).toHaveLength(1);
     expect(r.errores[0]).toMatchObject({ pestana: "Servicios", fila: 7 });
     expect(r.errores[0]?.mensaje).toContain("Precio lista");
+  });
+
+  it("'1.500' en precio es mil quinientos", () => {
+    const r = normalizarServicio(filaServicio({ precioLista: "1.500", precioEfectivo: "45.000", duracion: "1.000", ordenWeb: "2.000" }));
+    expect(r.errores).toEqual([]);
+    expect(r.valor.unitPriceList).toBe(1500);
+    expect(r.valor.unitPriceCash).toBe(45000);
+    expect(r.valor.estimatedDurationMinutes).toBe(1000);
+    expect(r.valor.webSortOrder).toBe(2000);
+  });
+
+  it("'1.500,50' es mil quinientos con cincuenta y '1,5' es uno y medio", () => {
+    const r = normalizarServicio(filaServicio({ precioLista: "1.500,50", precioEfectivo: "1,5" }));
+    expect(r.errores).toEqual([]);
+    expect(r.valor.unitPriceList).toBe(1500.5);
+    expect(r.valor.unitPriceCash).toBe(1.5);
   });
 
   it("precio negativo → error", () => {
@@ -171,6 +192,15 @@ describe("planificarPlanilla — servicios existentes", () => {
     const r = plan({ original, editada: contenido(), actual: original });
     expect(r.vista.errores).toEqual([]);
     expect(r.plan).toEqual({ crear: [], actualizar: [], acuerdos: [], insumos: [], categorias: [] });
+  });
+
+  it("la vista previa muestra el número que se va a guardar", () => {
+    const t = trio();
+    t.editada.servicios[0] = A({ precioLista: "1.500" });
+    const r = plan(t);
+    expect(r.vista.errores).toEqual([]);
+    expect(r.plan.actualizar[0]?.patch).toEqual({ unitPriceList: 1500 });
+    expect(r.vista.servicios[0]?.cambios).toEqual([{ campo: "Precio lista", antes: "45000", despues: "1500" }]);
   });
 
   it("vaciar precio efectivo de un existente es error", () => {
@@ -305,6 +335,26 @@ describe("planificarPlanilla — relaciones", () => {
     expect(r.vista.errores).toHaveLength(1);
     expect(r.vista.errores[0]).toMatchObject({ pestana: "Proveedoras", fila: 2 });
     expect(r.vista.errores[0]?.mensaje).toContain("pestaña Servicios");
+  });
+
+  it("sacar un servicio de la planilla y dejar sus relaciones no da error", () => {
+    const acuerdos = [
+      acu(2, "ZZ_QA_PLANILLA_A", "Ana", "Por hora", 100),
+      acu(3, "ZZ_QA_PLANILLA_A", "Dup", "Por hora", 90),
+    ];
+    const insumos = [{ fila: 2, servicio: "ZZ_QA_PLANILLA_A", insumo: "Gel", cantidad: 2 }];
+    const categorias = [{ fila: 2, servicio: "ZZ_QA_PLANILLA_A", categoria: "Madre › Hija" }];
+    const original = contenido({ servicios: [A()], acuerdos, insumos, categorias });
+    const editada = contenido({ servicios: [], acuerdos, insumos, categorias });
+    const r = plan({ original, editada, actual: original });
+    expect(r.vista.errores).toEqual([]);
+    expect(r.plan).toEqual({ crear: [], actualizar: [], acuerdos: [], insumos: [], categorias: [] });
+  });
+
+  it("relación de un servicio sacado pero con celdas tocadas sigue dando error", () => {
+    const original = contenido({ servicios: [A()], acuerdos: [acu(2, "ZZ_QA_PLANILLA_A", "Ana", "Por hora", 100)] });
+    const editada = contenido({ servicios: [], acuerdos: [acu(2, "ZZ_QA_PLANILLA_A", "Ana", "Por hora", 120)] });
+    expect(plan({ original, editada, actual: original }).vista.errores).toHaveLength(1);
   });
 
   it("cambio de tarifa cierra y crea", () => {

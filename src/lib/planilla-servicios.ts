@@ -169,6 +169,16 @@ const CLAVES = Object.keys(ENCABEZADOS_SERVICIOS) as (keyof ServicioNormalizado)
 // ───────────────────────── Celdas ─────────────────────────
 
 const REGEX_NUMERO = /^-?\d+(?:[.,]\d+)?$/;
+// Miles argentinos: "1.500", "45.000", "1.500,50". Un texto así se lee SIEMPRE como miles
+// (nunca como 1,5), porque en esta planilla el punto no se usa de decimal con 3 dígitos.
+const REGEX_MILES = /^-?\d{1,3}(?:\.\d{3})+(?:,\d+)?$/;
+
+/** Número de un texto (o NaN). Las celdas de tipo número no pasan por acá. */
+function textoANumero(t: string): number {
+  if (REGEX_MILES.test(t)) return Number(t.replace(/\./g, "").replace(",", "."));
+  if (REGEX_NUMERO.test(t)) return Number(t.replace(",", "."));
+  return Number.NaN;
+}
 
 function sinTildes(s: string): string {
   return s.normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -180,7 +190,8 @@ function canonica(c: Celda | undefined): string | number | null {
   if (typeof c === "number") return Number.isFinite(c) ? c : null;
   const t = c.trim();
   if (t === "") return null;
-  if (REGEX_NUMERO.test(t)) return Number(t.replace(",", "."));
+  const n = textoANumero(t);
+  if (Number.isFinite(n)) return n;
   const sb = sinTildes(t).toLowerCase();
   if (sb === "si") return "sí";
   if (sb === "no") return "no";
@@ -226,7 +237,22 @@ const TIPOS: Record<keyof ServicioNormalizado, Tipo> = {
 function aNumero(c: Celda | undefined): number {
   if (typeof c === "number") return c;
   const t = (c ?? "").trim();
-  return REGEX_NUMERO.test(t) ? Number(t.replace(",", ".")) : Number.NaN;
+  return textoANumero(t);
+}
+
+function mostrarNumero(c: Celda | undefined): string {
+  const x = canonica(c);
+  return typeof x === "number" ? String(x) : mostrar(c);
+}
+
+/** Cómo se muestra una celda de un campo: los numéricos, como el número que se va a guardar. */
+function mostrarCampo(k: keyof ServicioNormalizado, c: Celda | undefined): string {
+  const tipo = TIPOS[k].tipo;
+  if (tipo === "plata" || tipo === "entero") {
+    const x = canonica(c);
+    if (typeof x === "number") return String(x);
+  }
+  return mostrar(c);
 }
 
 /** Valida y tipa UNA celda. Celda vacía → `null` sin error (la obligatoriedad se decide afuera). */
@@ -362,6 +388,24 @@ function planificarRelacion<V>(
   const enOriginal = indexar(p.original);
   const enActual = indexar(p.actual);
 
+  // Servicios que Laura sacó de la pestaña Servicios (por id): borrar una fila no borra nada.
+  const idsEditados = new Set(p.editada.servicios.map((s) => s.id).filter((i): i is string => !!i && i.trim() !== ""));
+  const idPorNombreOriginal = new Map<string, string>();
+  for (const s of p.original.servicios) if (s.id && !vacia(s.nombre)) idPorNombreOriginal.set(clave(s.nombre), s.id);
+  const filasOriginal = cfg.filas(p.original);
+  /** La fila es idéntica a una de `original` y su servicio ya no está en la planilla editada. */
+  const sacadaConElServicio = (f: FilaRel): boolean => {
+    const id = idPorNombreOriginal.get(clave(f.servicio));
+    if (!id || idsEditados.has(id)) return false; // si el id sigue, fue un renombre: error
+    return filasOriginal.some(
+      (o) =>
+        clave(o.servicio) === clave(f.servicio) &&
+        clave(o.rel) === clave(f.rel) &&
+        o.celdas.length === f.celdas.length &&
+        o.celdas.every((c, i) => celdasIguales(c, f.celdas[i])),
+    );
+  };
+
   const salida: ResultadoRel<V>[] = [];
   const vistos = new Set<string>();
 
@@ -372,6 +416,7 @@ function planificarRelacion<V>(
       continue;
     }
     const srv = serviciosEditados.get(clave(f.servicio));
+    if (!srv && sacadaConElServicio(f)) continue; // sacó el servicio de la planilla: sus relaciones quedan como están
     if (!srv) {
       err(f.fila, `No existe el servicio «${String(f.servicio).trim()}» en la pestaña Servicios. Si le cambiaste el nombre, usá el nombre nuevo.`);
       continue;
@@ -538,7 +583,7 @@ export function planificarPlanilla(p: {
       if (a && !celdasIguales(cOr, a[campoFila] as Celda)) {
         errS(
           f.fila,
-          `${enc} de «${nombreRef}» cambió en el sistema después de que bajaste la planilla: ahora es ${mostrar(a[campoFila] as Celda)}, en la planilla pusiste ${mostrar(cEd)}. Bajá una planilla nueva.`,
+          `${enc} de «${nombreRef}» cambió en el sistema después de que bajaste la planilla: ahora es ${mostrarCampo(k, a[campoFila] as Celda)}, en la planilla pusiste ${mostrarCampo(k, cEd)}. Bajá una planilla nueva.`,
         );
         hayError = true;
         continue;
@@ -555,7 +600,7 @@ export function planificarPlanilla(p: {
         continue;
       }
       patch[k] = r.valor;
-      cambios.push({ campo: enc, antes: mostrar(cOr), despues: mostrar(cEd) });
+      cambios.push({ campo: enc, antes: mostrarCampo(k, cOr), despues: mostrarCampo(k, cEd) });
     }
 
     if (patch.maquina != null) {
@@ -585,7 +630,7 @@ export function planificarPlanilla(p: {
       pestana: "Proveedoras",
       etiqueta: "El acuerdo",
       filas: (c) => c.acuerdos.map((r) => ({ fila: r.fila, servicio: r.servicio, rel: r.proveedora, celdas: [r.tipoDePago, r.tarifa] })),
-      describir: ([tipo, tarifa]) => `${mostrar(tipo)}, ${mostrar(tarifa)}`,
+      describir: ([tipo, tarifa]) => `${mostrar(tipo)}, ${mostrarNumero(tarifa)}`,
       validar: (f) => {
         const prov = buscar(catalogo.proveedoras, f.rel);
         if (prov === undefined) return { error: `La proveedora «${String(f.rel).trim()}» no existe. Elegila de la lista.` };
@@ -622,7 +667,7 @@ export function planificarPlanilla(p: {
       servicio: r.servicio,
       proveedora: r.rel,
       tipo: r.tipo === "alta" ? "nuevo" : "cambia",
-      antes: r.antes ? `${mostrar(r.antes[0])}, ${mostrar(r.antes[1])}` : null,
+      antes: r.antes ? `${mostrar(r.antes[0])}, ${mostrarNumero(r.antes[1])}` : null,
       despues: `${etiqueta}, ${r.valor.rate}`,
     });
     vista.resumen.acuerdos++;
@@ -634,7 +679,7 @@ export function planificarPlanilla(p: {
       pestana: "Insumos",
       etiqueta: "La cantidad",
       filas: (c) => c.insumos.map((r) => ({ fila: r.fila, servicio: r.servicio, rel: r.insumo, celdas: [r.cantidad] })),
-      describir: ([cant]) => mostrar(cant),
+      describir: ([cant]) => mostrarNumero(cant),
       validar: (f) => {
         const id = buscar(catalogo.insumos, f.rel);
         if (id === undefined) return { error: `El insumo «${String(f.rel).trim()}» no existe. Elegilo de la lista.` };
