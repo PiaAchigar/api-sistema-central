@@ -55,7 +55,7 @@ export const serviceCategory = pgTable("service_category", {
 export const service = pgTable("service", {
   id: id(),
   name: varchar("name", { length: 255 }),
-  description: varchar("description", { length: 255 }),
+  description: text("description"),
   code: varchar("code", { length: 50 }),
   unitPriceList: decimal("unit_price_list", { precision: 10, scale: 2 }),
   unitPriceCash: decimal("unit_price_cash", { precision: 10, scale: 2 }),
@@ -617,10 +617,10 @@ export const priceAdjustments = pgTable("price_adjustments", {
   userId: text("user_id"),
   userEmail: text("user_email"),
   categoryId: uuid("category_id"),
-  direction: varchar("direction", { length: 10 }).notNull(),
+  direction: varchar("direction", { length: 10 }),
   mode: varchar("mode", { length: 12 }).notNull(),
-  value: numeric("value", { precision: 12, scale: 2 }).notNull(),
-  rounding: integer("rounding").notNull(),
+  value: numeric("value", { precision: 12, scale: 2 }),
+  rounding: integer("rounding"),
   servicesCount: integer("services_count").notNull(),
 });
 
