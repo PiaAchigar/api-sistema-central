@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RELATIONSHIPS } from "../../repositories/contact-links.repo";
 
 export const CHANNELS = ["whatsapp", "instagram", "facebook", "email"] as const;
 export const STATUSES = ["open", "closed"] as const;
@@ -37,3 +38,17 @@ export const listMessagesQuery = z
   .refine((d) => (d.before !== undefined) !== (d.after !== undefined), {
     message: "Debe venir exactamente uno de 'before' o 'after'",
   });
+
+/** POST /conversations/:id/resolver-contacto */
+export const resolverContactoBody = z.object({
+  titularId: z.string().uuid(),
+  otros: z
+    .array(
+      z.object({
+        contactId: z.string().uuid(),
+        relationship: z.enum(RELATIONSHIPS),
+        relationshipOther: z.string().max(60).optional(),
+      }),
+    )
+    .max(20),
+});

@@ -16,6 +16,7 @@ import {
   updateConversation,
   upsertConversation,
 } from "../../repositories/conversations.repo";
+import { resolverConversacion } from "../../repositories/contact-links.repo";
 import { decodeMessageCursor } from "../../lib/message-cursor";
 import { checkRateLimit } from "../../services/rate-limiter.service";
 import { runAutomations } from "../../services/automation.service";
@@ -25,6 +26,7 @@ import {
   listConversationsQuery,
   listMessagesQuery,
   patchConversationBody,
+  resolverContactoBody,
   sendMessageBody,
 } from "./conversations.schema";
 import type { AppBindings, Variables } from "../../env";
@@ -140,6 +142,16 @@ conversationsRouter.patch(
     const updated = await updateConversation(db, c.req.param("id"), c.req.valid("json"));
     if (!updated) throw notFound("Conversation");
     return c.json(updated);
+  },
+);
+
+conversationsRouter.post(
+  "/:id/resolver-contacto",
+  requireAuth,
+  requirePermission("crm", "edit"),
+  zValidator("json", resolverContactoBody),
+  async (c) => {
+    return c.json(await resolverConversacion(createDb(c.env), c.req.param("id"), c.req.valid("json")));
   },
 );
 

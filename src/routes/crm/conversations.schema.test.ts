@@ -85,3 +85,15 @@ describe("listMessagesQuery", () => {
     expect(listMessagesQuery.safeParse({ after: "", limit: 101 }).success).toBe(false);
   });
 });
+
+describe("resolverContactoBody", () => {
+  const u = "6f1c2b7e-1d2a-4c3b-8a9d-0e1f2a3b4c5d";
+  it("acepta titular y otros con parentesco válido", async () => {
+    const { resolverContactoBody } = await import("./conversations.schema");
+    expect(resolverContactoBody.safeParse({ titularId: u, otros: [{ contactId: u, relationship: "hija" }] }).success).toBe(true);
+  });
+  it("rechaza parentesco inválido", async () => {
+    const { resolverContactoBody } = await import("./conversations.schema");
+    expect(resolverContactoBody.safeParse({ titularId: u, otros: [{ contactId: u, relationship: "tia" }] }).success).toBe(false);
+  });
+});

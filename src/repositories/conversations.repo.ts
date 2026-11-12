@@ -46,6 +46,7 @@ const listItemColumns = {
   messageCount: conversations.messageCount,
   lastMessageAt: conversations.lastMessageAt,
   createdAt: conversations.createdAt,
+  needsContactReview: conversations.needsContactReview,
 };
 
 async function selectListItemById(db: Db, id: string) {

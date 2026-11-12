@@ -1,8 +1,9 @@
 import { and, asc, eq, ne, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { contacts } from "../db/schema";
+import { contacts, conversations } from "../db/schema";
 import { badRequest, notFound } from "../lib/errors";
 import { clave } from "../lib/telefono";
+import { fusionarConversacion } from "./contact-merge.repo";
 
 export const RELATIONSHIPS = ["pareja", "hijo", "hija", "nieto", "nieta", "otro"] as const;
 export type Relationship = (typeof RELATIONSHIPS)[number];
@@ -122,4 +123,82 @@ export async function setTitular(
       relationshipOther: relationship === "otro" ? otro! : null,
     })
     .where(eq(contacts.id, contactId));
+}
+
+/**
+ * Resuelve una conversación "por revisar": la mueve a la titular elegida, le guarda el
+ * whatsapp_id si no tenía, vincula a los otros como a cargo y apaga la marca. Una transacción.
+ * Si la titular ya tenía conversación del mismo canal, se fusionan en la de ella (índice único
+ * contact_id + channel) y se devuelve ese id.
+ */
+export async function resolverConversacion(
+  db: Db,
+  conversationId: string,
+  input: {
+    titularId: string;
+    otros: { contactId: string; relationship: Relationship; relationshipOther?: string }[];
+  },
+): Promise<{ conversationId: string }> {
+  return db.transaction(async (tx0) => {
+    const tx = tx0 as unknown as Db;
+    const [conv] = await tx
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .for("update")
+      .limit(1);
+    if (!conv) throw notFound("Conversation");
+    if (!conv.contactId) throw badRequest("La conversación no tiene contacto");
+
+    const [actual] = await tx.select().from(contacts).where(eq(contacts.id, conv.contactId)).limit(1);
+    if (!actual) throw notFound("Contact");
+    const [titular] = await tx.select().from(contacts).where(eq(contacts.id, input.titularId)).limit(1);
+    if (!titular) throw notFound("Contact (titular)");
+
+    const claves = new Set([clave(actual.whatsappId), clave(actual.phone)].filter((k): k is string => !!k));
+    const comparte =
+      titular.id === actual.id ||
+      [clave(titular.phone), clave(titular.whatsappId)].some((k) => k !== null && claves.has(k));
+    if (!comparte) throw badRequest("La titular no comparte el número de la conversación");
+    if (titular.holderContactId) throw badRequest("Esa persona está a cargo de otra: no puede ser titular");
+
+    const vistos = new Set<string>();
+    for (const o of input.otros) {
+      if (o.contactId === titular.id) throw badRequest("La titular no puede quedar a cargo de sí misma");
+      if (vistos.has(o.contactId)) throw badRequest("Persona repetida en la lista");
+      vistos.add(o.contactId);
+    }
+    for (const o of input.otros) {
+      await setTitular(tx, o.contactId, {
+        holderContactId: titular.id,
+        relationship: o.relationship,
+        relationshipOther: o.relationshipOther,
+      });
+    }
+
+    let finalId = conversationId;
+    if (actual.id !== titular.id) {
+      const [existente] = conv.channel
+        ? await tx
+            .select({ id: conversations.id })
+            .from(conversations)
+            .where(and(eq(conversations.contactId, titular.id), eq(conversations.channel, conv.channel)))
+            .for("update")
+            .limit(1)
+        : [];
+      if (existente) {
+        await fusionarConversacion(tx, conversationId, existente.id);
+        finalId = existente.id;
+      } else {
+        await tx.update(conversations).set({ contactId: titular.id }).where(eq(conversations.id, conversationId));
+      }
+    }
+    await tx.update(conversations).set({ needsContactReview: false }).where(eq(conversations.id, finalId));
+
+    if (!titular.whatsappId) {
+      const k = [...claves][0] ?? clave(titular.phone);
+      if (k) await tx.update(contacts).set({ whatsappId: `549${k}` }).where(eq(contacts.id, titular.id));
+    }
+    return { conversationId: finalId };
+  });
 }
