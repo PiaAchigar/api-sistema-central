@@ -163,6 +163,12 @@ describe("1.71.0/03 — limpieza de contactos sin teléfono", () => {
     const aCargo = await contacto("aCargo", "1177770001");
     await sql`UPDATE contacts SET holder_contact_id = ${t.contacto} WHERE id = ${aCargo}`;
     await caso("saldo", null, true, 500);
+    for (const canal of ["whatsapp_id", "instagram_id", "facebook_id", "telegram_id"]) {
+      const k = await caso(`canal_${canal}`, null);
+      await sql`UPDATE contacts SET ${sql(canal)} = 'canal-de-prueba' WHERE id = ${k.contacto}`;
+    }
+    const mail = await caso("soloMail", null);
+    await sql`UPDATE contacts SET email = 'a@b.c', notes = 'algo', instagram_id = '', whatsapp_id = '' WHERE id = ${mail.contacto}`;
     const conTag = await caso("yaEtiquetado", null, false);
     await sql`UPDATE contacts SET tags = ARRAY['vip'] WHERE id = ${conTag.contacto}`;
     await sql`INSERT INTO contact_notes (contact_id, body) VALUES (${conTag.contacto}, 'x')`;
@@ -186,6 +192,21 @@ describe("1.71.0/03 — limpieza de contactos sin teléfono", () => {
       expect((await fila(c[k]!.contacto)).tags).toContain("sin-telefono");
     },
   );
+
+  it.each(["whatsapp_id", "instagram_id", "facebook_id", "telegram_id"])(
+    "con %s (canal de contacto): no se borra y queda con sin-telefono",
+    async (canal) => {
+      const k = c[`canal_${canal}`]!;
+      expect(await existeContacto(k.contacto)).toBe(true);
+      if (k.cliente) expect(await existeCliente(k.cliente)).toBe(true);
+      expect((await fila(k.contacto)).tags).toEqual(["sin-telefono"]);
+    },
+  );
+
+  it("sólo con email y notas (canales vacíos): se borra", async () => {
+    expect(await existeContacto(c.soloMail!.contacto)).toBe(false);
+    expect(await existeCliente(c.soloMail!.cliente!)).toBe(false);
+  });
 
   it("conserva las etiquetas que ya tenía y agrega sin-telefono una sola vez", async () => {
     expect((await fila(c.yaEtiquetado!.contacto)).tags).toEqual(["vip", "sin-telefono"]);

@@ -7,7 +7,7 @@
 --   · Si NADA los referencia (ni a ellos ni a su fila de customers): se borra el
 --     customer y después el contacto.
 --   · Si algo los referencia (factura, turno, pago, nota, deal, conversación,
---     a cargo de otra persona, saldo a favor, etc.): se conservan y se les agrega
+--     a cargo de otra persona, saldo a favor, canal de contacto, etc.): se conservan y se les agrega
 --     el tag 'sin-telefono' (si no lo tenían).
 --
 -- "Referenciar" se arma EN EL MOMENTO DE CORRER, desde el catálogo:
@@ -16,7 +16,10 @@
 --      contacto);
 --   2. toda columna contact_id / customer_id de cualquier tabla que NO tenga FK
 --      (hoy: automation_runs.contact_id), por information_schema.columns;
---   3. customers.credit_balance <> 0.
+--   3. customers.credit_balance <> 0;
+--   4. canal de contacto propio: whatsapp_id, instagram_id, facebook_id o
+--      telegram_id no vacíos (quien tiene cómo ser contactado por un canal no se
+--      borra). Email y notas NO protegen.
 -- Una FK compuesta hacia contacts/customers frena la migración (no se sabe
 -- comprobarla): mejor no borrar nada que borrar mal.
 -- Un único bloque DO: corre entero o no corre. Idempotente.
@@ -89,7 +92,9 @@ BEGIN
 
   -- Recorrido de candidatos
   FOR v_cand IN
-    SELECT c.id, COALESCE(c.tags, '{}'::text[]) AS tags
+    SELECT c.id, COALESCE(c.tags, '{}'::text[]) AS tags,
+           (COALESCE(btrim(c.whatsapp_id), '') <> '' OR COALESCE(btrim(c.instagram_id), '') <> ''
+            OR COALESCE(btrim(c.facebook_id), '') <> '' OR COALESCE(btrim(c.telegram_id), '') <> '') AS tiene_canal
     FROM public.contacts c
     WHERE c.phone IS NULL OR length(regexp_replace(c.phone, '\D', '', 'g')) < 10
   LOOP
@@ -98,7 +103,7 @@ BEGIN
 
     EXECUTE v_sql INTO v_referenciado USING v_cand.id, v_clientes;
 
-    IF NOT v_referenciado THEN
+    IF NOT v_referenciado AND NOT v_cand.tiene_canal THEN
       DELETE FROM public.customers WHERE id = ANY(v_clientes);  -- primero el customer
       DELETE FROM public.contacts WHERE id = v_cand.id;
       v_borrados := v_borrados + 1;
