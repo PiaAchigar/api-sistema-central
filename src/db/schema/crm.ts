@@ -43,6 +43,11 @@ export const contacts = pgTable("contacts", {
   notes: text("notes"),
   /** 1.56.0 — El tramo de tarifa y tiempo de depilación. NULL = mujer. */
   sexo: varchar("sexo", { length: 10 }),
+  /** 1.71.0 — La titular del WhatsApp que usa esta persona. NULL = titular o independiente. */
+  holderContactId: uuid("holder_contact_id"),
+  /** 1.71.0 — pareja | hijo | hija | nieto | nieta | otro (sólo con holderContactId). */
+  relationship: varchar("relationship", { length: 20 }),
+  relationshipOther: varchar("relationship_other", { length: 60 }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -190,6 +195,8 @@ export const conversations = pgTable("conversations", {
   assignedAgentId: uuid("assigned_agent_id"),
   messageCount: integer("message_count"),
   lastMessageAt: timestamp("last_message_at"),
+  /** 1.71.0 — Entró por un número compartido sin titular: Laura elige la ficha. */
+  needsContactReview: boolean("needs_contact_review").notNull().default(false),
   createdAt: createdAt(),
 });
 
