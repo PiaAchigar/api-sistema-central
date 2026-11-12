@@ -294,7 +294,7 @@ export async function getConversationCore(db: Db, id: string) {
 export async function updateConversation(
   db: Db,
   id: string,
-  data: { status?: string; assignedAgentId?: string | null },
+  data: { status?: string; assignedAgentId?: string | null; needsContactReview?: boolean },
 ) {
   const existing = await getConversationById(db, id);
   if (!existing) return null;
@@ -304,6 +304,9 @@ export async function updateConversation(
       ...(data.status !== undefined ? { status: data.status } : {}),
       ...(data.assignedAgentId !== undefined
         ? { assignedAgentId: data.assignedAgentId }
+        : {}),
+      ...(data.needsContactReview !== undefined
+        ? { needsContactReview: data.needsContactReview }
         : {}),
     })
     .where(eq(conversations.id, id));

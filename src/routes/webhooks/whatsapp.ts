@@ -1,8 +1,8 @@
 import { Hono, type ExecutionContext } from "hono";
 import { createDb, type Db } from "../../db/client";
 import { getChannelByType } from "../../repositories/channels.repo";
-import { createContact, getContactByWhatsappId } from "../../repositories/contacts.repo";
-import { addContactMessage, upsertConversation } from "../../repositories/conversations.repo";
+import { resolverContactoWhatsApp } from "../../repositories/contact-resolver.repo";
+import { addContactMessage, updateConversation, upsertConversation } from "../../repositories/conversations.repo";
 import { decrypt } from "../../services/crypto.service";
 import { runAutomations } from "../../services/automation.service";
 import type { AppBindings } from "../../env";
@@ -51,16 +51,9 @@ async function processIncomingMessage(
   executionCtx: ExecutionContext,
   incoming: { from: string; waId: string; text: string },
 ) {
-  let contact = await getContactByWhatsappId(db, incoming.from);
-  if (!contact) {
-    contact = await createContact(db, {
-      name: incoming.from,
-      phone: incoming.from,
-      whatsappId: incoming.from,
-      status: "prospect",
-    });
-  }
+  const { contact, needsReview } = await resolverContactoWhatsApp(db, incoming.from);
   const conversation = await upsertConversation(db, { contactId: contact.id, channel: "whatsapp" });
+  if (needsReview) await updateConversation(db, conversation.id, { needsContactReview: true });
   const msg = await addContactMessage(db, conversation.id, incoming.text, incoming.waId);
   if (msg) {
     executionCtx.waitUntil(
