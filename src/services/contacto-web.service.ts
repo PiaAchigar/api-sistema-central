@@ -12,6 +12,7 @@ import type { Db } from "../db/client";
 import { contacts, messages } from "../db/schema";
 import { createContact, updateContact } from "../repositories/contacts.repo";
 import { addContactMessage, upsertConversation } from "../repositories/conversations.repo";
+import { clave } from "../lib/telefono";
 
 export const CANAL_WEB = "web";
 
@@ -22,16 +23,10 @@ export type ConsultaWeb = {
   mensaje: string;
 };
 
-/** Los últimos 10 dígitos: "+54 9 11 5555-0001", "5491155550001" y
- *  "1155550001" son el mismo teléfono para Laura. */
-function ultimosDiez(telefono: string): string {
-  return telefono.replace(/\D/g, "").slice(-10);
-}
-
 async function buscarContacto(db: Db, email: string, telefono: string) {
-  const diez = ultimosDiez(telefono);
+  const diez = clave(telefono);
   const porTelefono =
-    diez.length === 10
+    diez
       ? or(
           sql`right(regexp_replace(${contacts.phone}, '\\D', '', 'g'), 10) = ${diez}`,
           sql`right(regexp_replace(${contacts.whatsappId}, '\\D', '', 'g'), 10) = ${diez}`,
