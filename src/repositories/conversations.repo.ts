@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ilike, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, ilike, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { contacts, conversations, messages } from "../db/schema";
 import { decodeMessageCursor, encodeMessageCursor } from "../lib/message-cursor";
@@ -312,4 +312,32 @@ export async function updateConversation(
     })
     .where(eq(conversations.id, id));
   return selectListItemById(db, id);
+}
+
+export const AVISOS_LIMITE = 20;
+export const AVISOS_LARGO = 80;
+
+/** Mensajes de clientas posteriores a `desde`, del más viejo al más nuevo (para el toast del dashboard). */
+export async function listAvisosDesde(db: Db, desde: Date) {
+  const rows = await db
+    .select({
+      id: messages.id,
+      conversationId: messages.conversationId,
+      contactName: contacts.name,
+      content: messages.content,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+    .leftJoin(contacts, eq(contacts.id, conversations.contactId))
+    .where(and(eq(messages.senderType, "contact"), gt(messages.createdAt, desde)))
+    .orderBy(asc(messages.createdAt), asc(messages.id))
+    .limit(AVISOS_LIMITE);
+  return rows.map((r) => ({
+    id: r.id,
+    conversationId: r.conversationId!,
+    contactName: r.contactName ?? null,
+    content: (r.content ?? "").slice(0, AVISOS_LARGO),
+    createdAt: r.createdAt!.toISOString(),
+  }));
 }

@@ -10,6 +10,7 @@ import {
   getConversationById,
   getConversationCore,
   getConversationWithMessages,
+  listAvisosDesde,
   listConversations,
   listMessagesAfter,
   listMessagesBefore,
@@ -22,6 +23,7 @@ import { checkRateLimit } from "../../services/rate-limiter.service";
 import { runAutomations } from "../../services/automation.service";
 import { sendAgentReply } from "../../services/messaging.service";
 import {
+  avisosQuery,
   createConversationBody,
   listConversationsQuery,
   listMessagesQuery,
@@ -41,6 +43,22 @@ conversationsRouter.get(
   async (c) => {
     const db = createDb(c.env);
     return c.json(await listConversations(db, c.req.valid("query")));
+  },
+);
+
+// Va ANTES de "/:id": si no, "avisos" se leería como un id.
+conversationsRouter.get(
+  "/avisos",
+  requireAuth,
+  requirePermission("crm", "view"),
+  zValidator("query", avisosQuery),
+  async (c) => {
+    const { desde } = c.req.valid("query");
+    if (!desde) return c.json({ mensajes: [], hasta: new Date().toISOString() });
+    const db = createDb(c.env);
+    const mensajes = await listAvisosDesde(db, new Date(desde));
+    const hasta = mensajes.length ? mensajes[mensajes.length - 1]!.createdAt : desde;
+    return c.json({ mensajes, hasta });
   },
 );
 

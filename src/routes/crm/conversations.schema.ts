@@ -52,3 +52,8 @@ export const resolverContactoBody = z.object({
     )
     .max(20),
 });
+
+// `desde` es opcional: sin él es la primera consulta y sólo fija el punto de partida.
+export const avisosQuery = z.object({
+  desde: z.string().datetime().optional(),
+});
