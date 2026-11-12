@@ -49,8 +49,13 @@ describe("migración 1.71.0 — titular y revisión", () => {
     await expect(sql`UPDATE contacts SET holder_contact_id = ${id} WHERE id = ${id}`).rejects.toThrow();
   });
 
-  it("rechaza parentesco sin titular", async () => {
-    await expect(nuevoContacto({ rel: "hija" })).rejects.toThrow();
+  it("borrar la titular deja al a-cargo con holder_contact_id NULL, sin error", async () => {
+    const t = await nuevoContacto();
+    const h = await nuevoContacto({ holder: t, rel: "hija" });
+    await sql`DELETE FROM contacts WHERE id = ${t}`;
+    const [r] = await sql<{ holder_contact_id: string | null }[]>`
+      SELECT holder_contact_id FROM contacts WHERE id = ${h}`;
+    expect(r!.holder_contact_id).toBeNull();
   });
 
   it("relationship_other existe", async () => {

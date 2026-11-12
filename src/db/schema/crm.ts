@@ -45,7 +45,7 @@ export const contacts = pgTable("contacts", {
   sexo: varchar("sexo", { length: 10 }),
   /** 1.71.0 — La titular del WhatsApp que usa esta persona. NULL = titular o independiente. */
   holderContactId: uuid("holder_contact_id"),
-  /** 1.71.0 — pareja | hijo | hija | nieto | nieta | otro (sólo con holderContactId). */
+  /** 1.71.0 — pareja | hijo | hija | nieto | nieta | otro (normalmente con holderContactId). */
   relationship: varchar("relationship", { length: 20 }),
   relationshipOther: varchar("relationship_other", { length: 60 }),
   createdAt: createdAt(),

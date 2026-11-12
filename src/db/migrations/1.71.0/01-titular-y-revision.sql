@@ -32,10 +32,10 @@ BEGIN
       CHECK (holder_contact_id IS NULL OR holder_contact_id <> id);
   END IF;
 
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_contacts_relationship_needs_holder') THEN
-    ALTER TABLE public.contacts ADD CONSTRAINT ck_contacts_relationship_needs_holder
-      CHECK (relationship IS NULL OR holder_contact_id IS NOT NULL);
-  END IF;
+  -- No hay CHECK "relationship exige holder": choca con ON DELETE SET NULL (borrar
+  -- una titular dejaría a la persona a cargo con relationship y sin holder y
+  -- fallaría). Si una corrida anterior lo creó, se borra.
+  ALTER TABLE public.contacts DROP CONSTRAINT IF EXISTS ck_contacts_relationship_needs_holder;
 
   CREATE INDEX IF NOT EXISTS ix_contacts_holder
     ON public.contacts (holder_contact_id);
