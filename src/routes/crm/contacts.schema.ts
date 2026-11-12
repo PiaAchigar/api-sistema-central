@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { todayLocal } from "../../lib/time";
+import { RELATIONSHIPS } from "../../repositories/contact-links.repo";
 
 export const CONTACT_STATUS = ["prospect", "customer", "inactive"] as const;
 
@@ -51,4 +52,11 @@ export const listQuery = z.object({
   sort: z.enum(["recent", "nameAsc", "nameDesc"]).default("recent"),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
+});
+
+/** PUT /contacts/:id/titular. `holderContactId: null` desvincula. */
+export const titularInput = z.object({
+  holderContactId: z.string().uuid().nullable(),
+  relationship: z.enum(RELATIONSHIPS).optional(),
+  relationshipOther: z.string().max(60).optional(),
 });

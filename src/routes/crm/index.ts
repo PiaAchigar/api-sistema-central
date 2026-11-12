@@ -4,6 +4,7 @@ import { automationFaqsRouter } from "./automation-faqs";
 import { automationsRouter } from "./automations";
 import { channelsRouter } from "./channels";
 import { contactsRouter } from "./contacts";
+import { contactLinksRouter } from "./contact-links";
 import { conversationsRouter } from "./conversations";
 import { comprasRouter } from "./compras";
 import { saldosRouter } from "./saldos";
@@ -13,6 +14,7 @@ import type { AppBindings, Variables } from "../../env";
 const crm = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 
 crm.route("/contacts", contactsRouter);
+crm.route("/contacts", contactLinksRouter);
 crm.route("/deals", dealsRouter);
 // Compras: vender packs/combos/servicios que quedan pendientes (1.45.0).
 // Sus rutas ya traen el prefijo completo (/customers/:id/purchases, /purchases).

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { createDb } from "../../db/client";
 import { badRequest, notFound } from "../../lib/errors";
+import { diagnosticoTelefono } from "../../lib/telefono";
 import { isForeignKeyViolation } from "../../lib/db-errors";
 import { requireAdmin, requireAuth, requirePermission } from "../../middleware/auth";
 import {
@@ -58,7 +59,20 @@ contactsRouter.patch(
     const id = c.req.param("id");
     const existing = await getContactById(db, id);
     if (!existing) throw notFound("Contact");
-    return c.json(await updateContact(db, id, c.req.valid("json")));
+    const body = c.req.valid("json");
+    // El WhatsApp ID se guarda siempre como 549 + 10 dígitos. Vacío = borrarlo.
+    if (body.whatsappId !== undefined) {
+      if (body.whatsappId.trim() === "") {
+        (body as Record<string, unknown>).whatsappId = null;
+      } else {
+        const d = diagnosticoTelefono(body.whatsappId);
+        if (!d.ok) {
+          return c.json({ error: "WhatsApp ID inválido", motivo: d.motivo }, 400);
+        }
+        body.whatsappId = d.whatsappId;
+      }
+    }
+    return c.json(await updateContact(db, id, body));
   },
 );
 
