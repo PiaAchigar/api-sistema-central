@@ -168,6 +168,25 @@ export async function resolverConversacion(
       if (vistos.has(o.contactId)) throw badRequest("Persona repetida en la lista");
       vistos.add(o.contactId);
     }
+    // Todo contacto que comparta el número (y la ficha actual) tiene que ser la titular o quedar a
+    // cargo de ella; si no, el webhook vuelve a ver dos fichas sin vínculo y re-marca "por revisar".
+    const mismos = new Set<string>([actual.id]);
+    for (const k of claves) {
+      const rows = await tx
+        .select({ id: contacts.id, holderContactId: contacts.holderContactId })
+        .from(contacts)
+        .where(
+          and(
+            sql`${contacts.isArchived} IS NOT TRUE`,
+            sql`(right(regexp_replace(${contacts.phone}, '\\D', '', 'g'), 10) = ${k} OR right(regexp_replace(${contacts.whatsappId}, '\\D', '', 'g'), 10) = ${k})`,
+          ),
+        );
+      for (const r of rows) if (r.holderContactId !== titular.id) mismos.add(r.id);
+    }
+    mismos.delete(titular.id);
+    if ([...mismos].some((id) => !vistos.has(id))) {
+      throw badRequest("Todas las demás fichas que usan este número tienen que quedar a cargo de la titular");
+    }
     for (const o of input.otros) {
       await setTitular(tx, o.contactId, {
         holderContactId: titular.id,

@@ -16,6 +16,8 @@ const QA = "ZZ_QA_MERGE_";
 const LIKE = "ZZ\\_QA\\_MERGE\\_%";
 
 async function limpiar() {
+  await pg`DELETE FROM automation_runs WHERE detail = 'ZZ_QA_MERGE_'`;
+  await pg`DELETE FROM training_subscriptions WHERE customer_id IN (SELECT id FROM customers WHERE contact_id IN (SELECT id FROM contacts WHERE name LIKE ${LIKE}))`;
   await pg`DELETE FROM delivery_logs WHERE conversation_id IN (SELECT id FROM conversations WHERE contact_id IN (SELECT id FROM contacts WHERE name LIKE ${LIKE}))`;
   await pg`DELETE FROM message_queue WHERE conversation_id IN (SELECT id FROM conversations WHERE contact_id IN (SELECT id FROM contacts WHERE name LIKE ${LIKE}))`;
   await pg`DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE contact_id IN (SELECT id FROM contacts WHERE name LIKE ${LIKE}))`;
@@ -24,6 +26,7 @@ async function limpiar() {
   await pg`DELETE FROM appointments WHERE customer_id IN (SELECT id FROM customers WHERE contact_id IN (SELECT id FROM contacts WHERE name LIKE ${LIKE}))`;
   await pg`DELETE FROM payments WHERE customer_id IN (SELECT id FROM customers WHERE contact_id IN (SELECT id FROM contacts WHERE name LIKE ${LIKE}))`;
   await pg`DELETE FROM customers WHERE contact_id IN (SELECT id FROM contacts WHERE name LIKE ${LIKE})`;
+  await pg`DELETE FROM activities WHERE name LIKE ${LIKE}`;
   await pg`DELETE FROM deals WHERE contact_id IN (SELECT id FROM contacts WHERE name LIKE ${LIKE})`;
   await pg`DELETE FROM contact_notes WHERE contact_id IN (SELECT id FROM contacts WHERE name LIKE ${LIKE})`;
   await pg`UPDATE contacts SET holder_contact_id = NULL, relationship = NULL, relationship_other = NULL WHERE name LIKE ${LIKE}`;
@@ -203,7 +206,47 @@ describe("unir dos fichas", () => {
     await conversacion(b, "web", ["x"]);
     await pg`UPDATE contacts SET holder_contact_id = ${b}, relationship = 'hija' WHERE id = ${c}`;
     expect(await previewUnion(db, a, b)).toEqual({
-      conversaciones: 1, turnos: 0, pagos: 0, facturas: 0, compras: 0, aCargo: 1,
+      pierdeTitular: false, conversaciones: 1, turnos: 0, pagos: 0, facturas: 0, compras: 0, aCargo: 1,
     });
+  });
+
+  it("automation_runs (sin FK) se reapunta: contact_id y conversation_id de la conversación fusionada", async () => {
+    const a = await contacto("A");
+    const b = await contacto("B");
+    const ca = await conversacion(a, "whatsapp", ["a"]);
+    const cb = await conversacion(b, "whatsapp", ["b"]);
+    await pg`INSERT INTO automation_runs (contact_id, conversation_id, detail) VALUES (${b}, ${cb}, 'ZZ_QA_MERGE_')`;
+    await unirContactos(db, a, b);
+    const [r] = await pg`SELECT contact_id, conversation_id FROM automation_runs WHERE detail = 'ZZ_QA_MERGE_'`;
+    expect(r!.contact_id).toBe(a);
+    expect(r!.conversation_id).toBe(ca);
+  });
+
+  it("misma clase reservada en las dos fichas: 409 claro y nada cambia", async () => {
+    const a = await contacto("A");
+    const b = await contacto("B");
+    const ca = await customer(a);
+    const cb = await customer(b);
+    const [actRow] = await pg<{ id: string }[]>`
+      INSERT INTO activities (id, name, activity_type, monthly_base_price)
+      VALUES (gen_random_uuid(), ${QA + "ACT"}, 'training', 0) RETURNING id`;
+    const act = actRow!.id;
+    await pg`INSERT INTO appointments (id, customer_id, activity_id, appointment_start, status) VALUES (gen_random_uuid(), ${ca}, ${act}, '2030-01-01 10:00', 'scheduled')`;
+    await pg`INSERT INTO appointments (id, customer_id, activity_id, appointment_start, status) VALUES (gen_random_uuid(), ${cb}, ${act}, '2030-01-01 10:00', 'scheduled')`;
+    const e = (await status(unirContactos(db, a, b))) as { status?: number; message?: string } | null;
+    expect(e?.status).toBe(409);
+    expect(e?.message).toMatch(/Cancelá uno antes de unir/);
+    expect(await existe(b)).toBe(true);
+    expect((await pg`SELECT 1 FROM appointments WHERE customer_id = ${cb}`)).toHaveLength(1);
+  });
+
+  it("previewUnion avisa pierdeTitular cuando A está a cargo de otra y B tiene a cargo", async () => {
+    const h = await contacto("H");
+    const a = await contacto("A");
+    const b = await contacto("B");
+    const c = await contacto("C");
+    await pg`UPDATE contacts SET holder_contact_id = ${h}, relationship = 'pareja' WHERE id = ${a}`;
+    await pg`UPDATE contacts SET holder_contact_id = ${b}, relationship = 'hija' WHERE id = ${c}`;
+    expect((await previewUnion(db, a, b)).pierdeTitular).toBe(true);
   });
 });

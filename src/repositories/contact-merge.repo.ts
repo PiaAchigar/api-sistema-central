@@ -61,6 +61,8 @@ async function reapuntar(tx: Tx, fks: Fk[], de: string, a: string) {
 export async function fusionarConversacion(tx: Tx, origenId: string, destinoId: string) {
   const fks = await fksHacia(tx, "conversations");
   await reapuntar(tx, fks, origenId, destinoId);
+  // automation_runs no tiene FK: el barrido por pg_constraint no la ve.
+  await tx.execute(sql`UPDATE automation_runs SET conversation_id = ${destinoId} WHERE conversation_id = ${origenId}`);
   await tx.execute(sql`
     UPDATE conversations d SET
       message_count = (SELECT count(*) FROM messages WHERE conversation_id = d.id),
@@ -78,6 +80,7 @@ export async function fusionarConversacion(tx: Tx, origenId: string, destinoId: 
 }
 
 type Counts = {
+  pierdeTitular: boolean;
   conversaciones: number;
   turnos: number;
   pagos: number;
@@ -87,7 +90,7 @@ type Counts = {
 };
 
 export async function previewUnion(db: Db, keepId: string, dupId: string): Promise<Counts> {
-  await cargarPar(db, keepId, dupId);
+  const { a } = await cargarPar(db, keepId, dupId);
   const [r] = (await db.execute(sql`
     SELECT
       (SELECT count(*) FROM conversations WHERE contact_id = ${dupId})::int AS conversaciones,
@@ -96,8 +99,14 @@ export async function previewUnion(db: Db, keepId: string, dupId: string): Promi
       (SELECT count(*) FROM invoices WHERE customer_id IN (SELECT id FROM customers WHERE contact_id = ${dupId}))::int AS facturas,
       (SELECT count(*) FROM customer_purchase WHERE customer_id IN (SELECT id FROM customers WHERE contact_id = ${dupId}))::int AS compras,
       (SELECT count(*) FROM contacts WHERE holder_contact_id = ${dupId} AND id <> ${keepId})::int AS "aCargo"
-  `)) as unknown as Counts[];
-  return r!;
+  `)) as unknown as Omit<Counts, "pierdeTitular">[];
+  // A pierde su titular si estaba a cargo de otra (no de B) y va a quedar con personas a cargo.
+  const holderA = (a.holder_contact_id as string | null) ?? null;
+  const [propios] = (await db.execute(
+    sql`SELECT count(*)::int AS n FROM contacts WHERE holder_contact_id = ${keepId}`,
+  )) as unknown as { n: number }[];
+  const pierdeTitular = !!holderA && holderA !== dupId && (r!.aCargo > 0 || (propios?.n ?? 0) > 0);
+  return { ...r!, pierdeTitular };
 }
 
 type Fila = Record<string, unknown>;
@@ -119,6 +128,26 @@ async function cargarPar(tx: Tx, keepId: string, dupId: string, lock = false) {
 const cargado = (v: unknown) => v !== null && v !== undefined && String(v).trim() !== "";
 
 export async function unirContactos(db: Db, keepId: string, dupId: string): Promise<void> {
+  try {
+    await unirEnTransaccion(db, keepId, dupId);
+  } catch (e) {
+    const err = e as { code?: string; constraint_name?: string; cause?: { code?: string; constraint_name?: string } };
+    const code = err.code ?? err.cause?.code;
+    if (code === "23505") {
+      const c = err.constraint_name ?? err.cause?.constraint_name ?? "";
+      if (c.includes("appt") || c.includes("appointments")) {
+        throw conflict("No se pueden unir: las dos fichas tienen un turno en la misma clase o encuentro. Cancelá uno antes de unir.");
+      }
+      if (c.includes("training_subscriptions")) {
+        throw conflict("No se pueden unir: las dos fichas tienen una suscripción activa a la misma actividad. Cancelá una antes de unir.");
+      }
+      throw conflict("No se pueden unir: las dos fichas tienen datos que se pisan entre sí. Revisalas antes de unir.");
+    }
+    throw e;
+  }
+}
+
+async function unirEnTransaccion(db: Db, keepId: string, dupId: string): Promise<void> {
   await db.transaction(async (tx0) => {
     const tx = tx0 as unknown as Tx;
     const { a, b } = await cargarPar(tx, keepId, dupId, true);
@@ -217,6 +246,8 @@ export async function unirContactos(db: Db, keepId: string, dupId: string): Prom
       (f) => !(f.tabla === "contacts" && f.columna === "holder_contact_id"),
     );
     await reapuntar(tx, fksContact, dupId, keepId);
+    // Sin FK, no las ve el barrido: la spec las nombra.
+    await tx.execute(sql`UPDATE automation_runs SET contact_id = ${keepId} WHERE contact_id = ${dupId}`);
 
     // 5) Datos: se completan vacíos de A con B; nunca se pisa lo cargado.
     const campos = [

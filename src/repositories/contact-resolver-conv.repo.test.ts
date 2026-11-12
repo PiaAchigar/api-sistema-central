@@ -120,4 +120,23 @@ describe("resolver conversación por revisar", () => {
     expect(lista.find((i) => i.id === c)?.needsContactReview).toBe(true);
     expect((await getConversationWithMessages(db, c))?.conversation.needsContactReview).toBe(true);
   });
+
+  it("la ficha actual X fuera de otros: 400 y nada cambia (evita el bucle del webhook)", async () => {
+    const x = await contacto("X");
+    const y = await contacto("Y");
+    const c = await conv(x, ["hola"], true);
+    expect((await status(resolverConversacion(db, c, { titularId: y, otros: [] })))?.status).toBe(400);
+    expect((await pg`SELECT contact_id FROM conversations WHERE id = ${c}`)[0]!.contact_id).toBe(x);
+  });
+
+  it("un tercero que comparte el número y no está en otros: 400; si está, pasa", async () => {
+    const x = await contacto("X");
+    const y = await contacto("Y");
+    const z = await contacto("Z");
+    const c = await conv(x, ["hola"], true);
+    const o = (id: string) => ({ contactId: id, relationship: "hija" as const });
+    expect((await status(resolverConversacion(db, c, { titularId: y, otros: [o(x)] })))?.status).toBe(400);
+    await resolverConversacion(db, c, { titularId: y, otros: [o(x), o(z)] });
+    expect((await pg`SELECT holder_contact_id FROM contacts WHERE id = ${z}`)[0]!.holder_contact_id).toBe(y);
+  });
 });
