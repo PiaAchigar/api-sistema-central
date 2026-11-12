@@ -1,4 +1,4 @@
-import { and, asc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, eq, ne, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { contacts, conversations } from "../db/schema";
 import { badRequest, notFound } from "../lib/errors";
@@ -28,6 +28,28 @@ const columnasPersona = {
   relationshipOther: contacts.relationshipOther,
 };
 
+/**
+ * Fichas activas (sin la propia) que usan el mismo número: se arma la clave (últimos 10 dígitos)
+ * de teléfono Y whatsapp_id del contacto y se busca en AMBAS columnas. Única regla de "comparten
+ * número": la usan la lista de vínculos y el resolver, para que nunca discrepen.
+ */
+export async function fichasQueCompartenNumero(
+  db: Db,
+  contacto: { id: string; phone: string | null; whatsappId: string | null },
+): Promise<{ id: string; name: string | null; holderContactId: string | null }[]> {
+  const claves = [...new Set([clave(contacto.phone), clave(contacto.whatsappId)].filter((k): k is string => !!k))];
+  if (claves.length === 0) return [];
+  const coincide = claves.map(
+    (k) =>
+      sql`(right(regexp_replace(${contacts.phone}, '\\D', '', 'g'), 10) = ${k} OR right(regexp_replace(${contacts.whatsappId}, '\\D', '', 'g'), 10) = ${k})`,
+  );
+  return db
+    .select({ id: contacts.id, name: contacts.name, holderContactId: contacts.holderContactId })
+    .from(contacts)
+    .where(and(sql`${contacts.isArchived} IS NOT TRUE`, ne(contacts.id, contacto.id), or(...coincide)))
+    .orderBy(asc(contacts.createdAt), asc(contacts.id));
+}
+
 export async function getVinculos(db: Db, contactId: string): Promise<Vinculos> {
   const [yo] = await db.select().from(contacts).where(eq(contacts.id, contactId)).limit(1);
   if (!yo) throw notFound("Contact");
@@ -53,27 +75,13 @@ export async function getVinculos(db: Db, contactId: string): Promise<Vinculos> 
     .where(eq(contacts.holderContactId, contactId))
     .orderBy(asc(contacts.name), asc(contacts.id));
 
-  const k = clave(yo.phone);
-  let compartenNumero: { id: string; name: string | null }[] = [];
-  if (k) {
-    const vinculados = new Set<string>([
-      contactId,
-      ...(yo.holderContactId ? [yo.holderContactId] : []),
-      ...aCargo.map((p) => p.id),
-    ]);
-    const mismos = await db
-      .select({ id: contacts.id, name: contacts.name })
-      .from(contacts)
-      .where(
-        and(
-          sql`${contacts.isArchived} IS NOT TRUE`,
-          ne(contacts.id, contactId),
-          sql`right(regexp_replace(${contacts.phone}, '\\D', '', 'g'), 10) = ${k}`,
-        ),
-      )
-      .orderBy(asc(contacts.createdAt), asc(contacts.id));
-    compartenNumero = mismos.filter((m) => !vinculados.has(m.id));
-  }
+  const vinculados = new Set<string>([
+    ...(yo.holderContactId ? [yo.holderContactId] : []),
+    ...aCargo.map((p) => p.id),
+  ]);
+  const compartenNumero = (await fichasQueCompartenNumero(db, yo))
+    .filter((m) => !vinculados.has(m.id))
+    .map((m) => ({ id: m.id, name: m.name }));
 
   return { titular: titularConParentesco, aCargo, compartenNumero };
 }
@@ -171,17 +179,8 @@ export async function resolverConversacion(
     // Todo contacto que comparta el número (y la ficha actual) tiene que ser la titular o quedar a
     // cargo de ella; si no, el webhook vuelve a ver dos fichas sin vínculo y re-marca "por revisar".
     const mismos = new Set<string>([actual.id]);
-    for (const k of claves) {
-      const rows = await tx
-        .select({ id: contacts.id, holderContactId: contacts.holderContactId })
-        .from(contacts)
-        .where(
-          and(
-            sql`${contacts.isArchived} IS NOT TRUE`,
-            sql`(right(regexp_replace(${contacts.phone}, '\\D', '', 'g'), 10) = ${k} OR right(regexp_replace(${contacts.whatsappId}, '\\D', '', 'g'), 10) = ${k})`,
-          ),
-        );
-      for (const r of rows) if (r.holderContactId !== titular.id) mismos.add(r.id);
+    for (const r of await fichasQueCompartenNumero(tx, actual)) {
+      if (r.holderContactId !== titular.id) mismos.add(r.id);
     }
     mismos.delete(titular.id);
     if ([...mismos].some((id) => !vistos.has(id))) {

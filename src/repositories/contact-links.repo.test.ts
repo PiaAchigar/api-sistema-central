@@ -4,7 +4,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import * as schema from "../db/schema";
 import { contacts } from "../db/schema";
 import type { Db } from "../db/client";
-import { getVinculos, setTitular } from "./contact-links.repo";
+import { getVinculos, resolverConversacion, setTitular } from "./contact-links.repo";
 
 const pg = postgres("postgresql://piubella:piubella@localhost:5499/piubella", {
   max: 1,
@@ -16,6 +16,8 @@ const QA = "ZZ_QA_VINC_";
 const TEL = "1100088001";
 
 async function limpiar() {
+  await pg`DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE contact_id IN (SELECT id FROM contacts WHERE name LIKE ${QA + "%"}))`;
+  await pg`DELETE FROM conversations WHERE contact_id IN (SELECT id FROM contacts WHERE name LIKE ${QA + "%"})`;
   await pg`UPDATE contacts SET holder_contact_id = NULL, relationship = NULL, relationship_other = NULL WHERE name LIKE ${QA + "%"}`;
   await pg`DELETE FROM contacts WHERE name LIKE ${QA + "%"}`;
 }
@@ -103,5 +105,23 @@ describe("vínculos titular / a cargo", () => {
     const a = await crear("A", "111111");
     await crear("B", "111111");
     expect((await getVinculos(db, a)).compartenNumero).toEqual([]);
+  });
+
+  it("caso real: A con teléfono con 15 + whatsapp_id y B con el número limpio se ven entre sí, y el resolver los acepta", async () => {
+    const [ra] = await pg<{ id: string }[]>`
+      INSERT INTO contacts (id, name, phone, whatsapp_id, is_archived)
+      VALUES (gen_random_uuid(), ${QA + "RA"}, '1530317884', '5491130317884', false) RETURNING id`;
+    const a = ra!.id;
+    const b = await crear("RB", "91130317884");
+    expect((await getVinculos(db, a)).compartenNumero.map((p) => p.id)).toEqual([b]);
+    const [cv] = await pg<{ id: string }[]>`
+      INSERT INTO conversations (id, contact_id, channel, status, message_count, needs_contact_review)
+      VALUES (gen_random_uuid(), ${a}, 'whatsapp', 'open', 0, true) RETURNING id`;
+    await resolverConversacion(db, cv!.id, {
+      titularId: a,
+      otros: [{ contactId: b, relationship: "pareja" }],
+    });
+    const [rb] = await pg`SELECT holder_contact_id FROM contacts WHERE id = ${b}`;
+    expect(rb!.holder_contact_id).toBe(a);
   });
 });
