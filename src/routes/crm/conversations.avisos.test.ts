@@ -116,6 +116,7 @@ describe("GET /conversations/avisos", () => {
     await mensaje(conv, "contact", "x".repeat(200), "2020-03-01T10:00:00Z");
     const j = (await (await pedir("/conversations/avisos?desde=2020-03-01T09:00:00.000Z")).json()) as Resp;
     expect(j.mensajes[0]!.content).toHaveLength(80);
+    expect(j.mensajes[0]!.content).toBe("x".repeat(79) + "…");
   });
 
   it("desde inválido: 400", async () => {

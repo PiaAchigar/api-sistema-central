@@ -317,6 +317,11 @@ export async function updateConversation(
 export const AVISOS_LIMITE = 20;
 export const AVISOS_LARGO = 80;
 
+/** Hasta AVISOS_LARGO caracteres en total; si se corta, termina en "…". */
+function recortarAviso(texto: string): string {
+  return texto.length > AVISOS_LARGO ? texto.slice(0, AVISOS_LARGO - 1) + "…" : texto;
+}
+
 /** Mensajes de clientas posteriores a `desde`, del más viejo al más nuevo (para el toast del dashboard). */
 export async function listAvisosDesde(db: Db, desde: Date) {
   const rows = await db
@@ -337,7 +342,7 @@ export async function listAvisosDesde(db: Db, desde: Date) {
     id: r.id,
     conversationId: r.conversationId!,
     contactName: r.contactName ?? null,
-    content: (r.content ?? "").slice(0, AVISOS_LARGO),
+    content: recortarAviso(r.content ?? ""),
     createdAt: r.createdAt!.toISOString(),
   }));
 }
