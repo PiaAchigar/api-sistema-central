@@ -199,6 +199,33 @@ describe("unir dos fichas", () => {
     expect(r!.tags).toBe("{vip,x,nuevo}");
   });
 
+  it("teléfonos distintos: el de B queda en las notas de A; si A no tenía whatsapp_id, hereda el de B", async () => {
+    const a = await contacto("A", { phone: "1130317884" });
+    const b = await contacto("B", { phone: "1144445555" });
+    await pg`UPDATE contacts SET whatsapp_id = '5491144445555' WHERE id = ${b}`;
+    await unirContactos(db, a, b);
+    const [r] = await pg`SELECT phone, whatsapp_id, notes FROM contacts WHERE id = ${a}`;
+    expect(r!.phone).toBe("1130317884");
+    expect(r!.whatsapp_id).toBe("5491144445555");
+    expect(r!.notes).toBe(`Unido con ${QA}B: tel 1144445555`);
+  });
+
+  it("WhatsApp distinto en ambos: el de B queda en las notas; con la misma clave no anota nada", async () => {
+    const a = await contacto("A", { phone: "1130317884", notes: "hola" });
+    await pg`UPDATE contacts SET whatsapp_id = '5491130317884' WHERE id = ${a}`;
+    const b = await contacto("B", { phone: "011 3031-7884" });
+    await pg`UPDATE contacts SET whatsapp_id = '5491166667777' WHERE id = ${b}`;
+    await unirContactos(db, a, b);
+    const [r] = await pg`SELECT whatsapp_id, notes FROM contacts WHERE id = ${a}`;
+    expect(r!.whatsapp_id).toBe("5491130317884");
+    expect(r!.notes).toBe(`hola\n---\nUnido con ${QA}B: WhatsApp 5491166667777`);
+    const a2 = await contacto("A2", { phone: "1130317884" });
+    const b2 = await contacto("B2", { phone: "+54 9 11 3031 7884" });
+    await unirContactos(db, a2, b2);
+    const [r2] = await pg`SELECT notes FROM contacts WHERE id = ${a2}`;
+    expect(r2!.notes).toBeNull();
+  });
+
   it("previewUnion cuenta conversaciones y a cargo", async () => {
     const a = await contacto("A");
     const b = await contacto("B");

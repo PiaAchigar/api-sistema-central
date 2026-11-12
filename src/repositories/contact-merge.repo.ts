@@ -296,6 +296,31 @@ async function unirEnTransaccion(db: Db, keepId: string, dupId: string): Promise
       WHERE a.id = ${keepId} AND b.id = ${dupId}
     `);
 
+    // 5b) Si B traía un teléfono o WhatsApp con otra clave que los que quedaron en A, no se pierden:
+    // quedan anotados en las notas (A ya hereda phone/whatsapp_id de B cuando los tenía vacíos).
+    const k = (col: ReturnType<typeof sql.identifier>, t: "a" | "b") =>
+      sql`right(regexp_replace(COALESCE(${sql.raw(t)}.${col}, ''), '\\D', '', 'g'), 10)`;
+    const kPhone = sql.identifier("phone");
+    const kWa = sql.identifier("whatsapp_id");
+    await tx.execute(sql`
+      UPDATE contacts a SET notes = CASE
+          WHEN NULLIF(trim(COALESCE(a.notes, '')), '') IS NULL THEN x.linea
+          ELSE a.notes || E'\n---\n' || x.linea END
+      FROM (
+        SELECT b.id,
+          'Unido con ' || COALESCE(b.name, 'otra ficha') || ': ' || concat_ws(', ',
+            CASE WHEN ${k(kPhone, "b")} <> '' AND ${k(kPhone, "b")} <> ${k(kPhone, "a")}
+                 THEN 'tel ' || b.phone END,
+            CASE WHEN ${k(kWa, "b")} <> '' AND ${k(kWa, "b")} <> ${k(kWa, "a")}
+                 THEN 'WhatsApp ' || b.whatsapp_id END) AS linea,
+          (${k(kPhone, "b")} <> '' AND ${k(kPhone, "b")} <> ${k(kPhone, "a")})
+          OR (${k(kWa, "b")} <> '' AND ${k(kWa, "b")} <> ${k(kWa, "a")}) AS hay
+        FROM contacts a JOIN contacts b ON b.id = ${dupId}
+        WHERE a.id = ${keepId}
+      ) x
+      WHERE a.id = ${keepId} AND x.hay
+    `);
+
     // 6) Red de seguridad: si algo todavía apunta a B, abortar (rollback) en vez de arrastrarlo.
     for (const f of [...fksContact, { esquema: "public", tabla: "contacts", columna: "holder_contact_id" }]) {
       const [filaResto] = (await tx.execute(

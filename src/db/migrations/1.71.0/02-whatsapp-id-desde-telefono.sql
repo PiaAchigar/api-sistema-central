@@ -2,6 +2,8 @@
 -- 1.71.0 / 02 — WhatsApp ID desde el teléfono (migración de DATOS)
 -- ════════════════════════════════════════════════════════════════════════════
 -- Correr el backup de backup/ antes.
+-- NOTA: el SQL Editor de Supabase no muestra los RAISE NOTICE: 'Success. No rows returned' es lo
+-- esperado; los conteos se ven corriendo la verificación comentada al final.
 --
 -- A cada contacto sin whatsapp_id (NULL o vacío) cuyo teléfono es un número
 -- argentino válido se le carga whatsapp_id = '549' + últimos 10 dígitos, SIEMPRE

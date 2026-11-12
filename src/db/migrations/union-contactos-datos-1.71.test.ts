@@ -163,6 +163,14 @@ describe("1.71.0/03 — limpieza de contactos sin teléfono", () => {
     const aCargo = await contacto("aCargo", "1177770001");
     await sql`UPDATE contacts SET holder_contact_id = ${t.contacto} WHERE id = ${aCargo}`;
     await caso("saldo", null, true, 500);
+    // Persona a cargo SIN teléfono: se conserva aunque ninguna FK la proteja.
+    const tSin = await caso("tSinTel", "1177770002", false);
+    const cargoSin = await caso("aCargoSinTel", null, false);
+    await sql`UPDATE contacts SET holder_contact_id = ${tSin.contacto} WHERE id = ${cargoSin.contacto}`;
+    // Titular y a cargo, los dos sin teléfono: ninguno se borra, sin importar el orden.
+    const tAmbos = await caso("titularAmbosSin", null, false);
+    const cAmbos = await caso("aCargoAmbosSin", null, false);
+    await sql`UPDATE contacts SET holder_contact_id = ${tAmbos.contacto} WHERE id = ${cAmbos.contacto}`;
     for (const canal of ["whatsapp_id", "instagram_id", "facebook_id", "telegram_id"]) {
       const k = await caso(`canal_${canal}`, null);
       await sql`UPDATE contacts SET ${sql(canal)} = 'canal-de-prueba' WHERE id = ${k.contacto}`;
@@ -189,6 +197,14 @@ describe("1.71.0/03 — limpieza de contactos sin teléfono", () => {
     async (k) => {
       expect(await existeContacto(c[k]!.contacto)).toBe(true);
       if (c[k]!.cliente) expect(await existeCliente(c[k]!.cliente!)).toBe(true);
+      expect((await fila(c[k]!.contacto)).tags).toContain("sin-telefono");
+    },
+  );
+
+  it.each(["aCargoSinTel", "titularAmbosSin", "aCargoAmbosSin"])(
+    "vínculo titular/a cargo (%s): no se borra y queda con sin-telefono",
+    async (k) => {
+      expect(await existeContacto(c[k]!.contacto)).toBe(true);
       expect((await fila(c[k]!.contacto)).tags).toContain("sin-telefono");
     },
   );

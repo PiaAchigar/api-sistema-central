@@ -2,12 +2,14 @@
 -- 1.71.0 / 03 — Limpieza de contactos sin teléfono (migración de DATOS, BORRA)
 -- ════════════════════════════════════════════════════════════════════════════
 -- Correr el backup de backup/ antes.
+-- NOTA: el SQL Editor de Supabase no muestra los RAISE NOTICE: 'Success. No rows returned' es lo
+-- esperado; los conteos se ven corriendo la verificación comentada al final.
 --
 -- Candidatos: contactos con phone NULL o con menos de 10 dígitos.
 --   · Si NADA los referencia (ni a ellos ni a su fila de customers): se borra el
 --     customer y después el contacto.
 --   · Si algo los referencia (factura, turno, pago, nota, deal, conversación,
---     a cargo de otra persona, saldo a favor, canal de contacto, etc.): se conservan y se les agrega
+--     a cargo de otra persona o titular de alguien, saldo a favor, canal de contacto, etc.): se conservan y se les agrega
 --     el tag 'sin-telefono' (si no lo tenían).
 --
 -- "Referenciar" se arma EN EL MOMENTO DE CORRER, desde el catálogo:
@@ -94,7 +96,10 @@ BEGIN
   FOR v_cand IN
     SELECT c.id, COALESCE(c.tags, '{}'::text[]) AS tags,
            (COALESCE(btrim(c.whatsapp_id), '') <> '' OR COALESCE(btrim(c.instagram_id), '') <> ''
-            OR COALESCE(btrim(c.facebook_id), '') <> '' OR COALESCE(btrim(c.telegram_id), '') <> '') AS tiene_canal
+            OR COALESCE(btrim(c.facebook_id), '') <> '' OR COALESCE(btrim(c.telegram_id), '') <> '') AS tiene_canal,
+           -- a cargo de otra persona, o titular de alguien: el vínculo que cargó Laura no se borra
+           (c.holder_contact_id IS NOT NULL
+            OR EXISTS (SELECT 1 FROM public.contacts o WHERE o.holder_contact_id = c.id)) AS tiene_vinculo
     FROM public.contacts c
     WHERE c.phone IS NULL OR length(regexp_replace(c.phone, '\D', '', 'g')) < 10
   LOOP
@@ -103,7 +108,7 @@ BEGIN
 
     EXECUTE v_sql INTO v_referenciado USING v_cand.id, v_clientes;
 
-    IF NOT v_referenciado AND NOT v_cand.tiene_canal THEN
+    IF NOT v_referenciado AND NOT v_cand.tiene_canal AND NOT v_cand.tiene_vinculo THEN
       DELETE FROM public.customers WHERE id = ANY(v_clientes);  -- primero el customer
       DELETE FROM public.contacts WHERE id = v_cand.id;
       v_borrados := v_borrados + 1;

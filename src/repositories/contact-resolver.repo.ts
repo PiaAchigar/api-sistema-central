@@ -71,6 +71,9 @@ export async function resolverContactoWhatsApp(
   const titular = titularDe(candidatos);
   if (titular) return { contact: await guardarWhatsappId(db, titular, from), needsReview: false };
 
-  // Número compartido sin titular: la más antigua, y Laura elige la ficha.
-  return { contact: candidatos[0]!, needsReview: true };
+  // Número compartido sin titular: la más antigua que NO esté a cargo de otra (si todas lo están,
+  // la más antigua), y Laura elige la ficha. Así la conversación nunca cae en alguien a cargo
+  // cuando hay una opción libre.
+  const libre = candidatos.find((c) => !c.holderContactId);
+  return { contact: libre ?? candidatos[0]!, needsReview: true };
 }

@@ -75,6 +75,28 @@ describe("resolverContactoWhatsApp", () => {
     expect((await leer(nueva.id)).whatsappId).toBeNull();
   });
 
+  it("compartido sin titular única: va a la más antigua que no está a cargo de otra", async () => {
+    const x = await crear({ name: `${QA}x`, phone: FROM, createdAt: new Date("2021-01-01") });
+    const y = await crear({ name: `${QA}y`, phone: FROM, createdAt: new Date("2020-01-01") });
+    const z = await crear({ name: `${QA}z`, phone: FROM, createdAt: new Date("2022-01-01") });
+    await pg`UPDATE contacts SET holder_contact_id = ${x.id}, relationship = 'hijo' WHERE id = ${y.id}`;
+    const r = await resolverContactoWhatsApp(db, FROM);
+    expect(r.needsReview).toBe(true);
+    expect(r.contact.id).toBe(x.id);
+    expect(r.contact.id).not.toBe(y.id);
+    expect(z.id).not.toBe(r.contact.id);
+  });
+
+  it("si todas están a cargo de alguien, cae en la más antigua", async () => {
+    const x = await crear({ name: `${QA}x`, phone: "1122223333", createdAt: new Date("2019-01-01") });
+    const y = await crear({ name: `${QA}y`, phone: FROM, createdAt: new Date("2020-01-01") });
+    const z = await crear({ name: `${QA}z`, phone: FROM, createdAt: new Date("2022-01-01") });
+    await pg`UPDATE contacts SET holder_contact_id = ${x.id}, relationship = 'hijo' WHERE id IN (${y.id}, ${z.id})`;
+    const r = await resolverContactoWhatsApp(db, FROM);
+    expect(r.needsReview).toBe(true);
+    expect(r.contact.id).toBe(y.id);
+  });
+
   it("dos con titular: devuelve la titular, no marca revisión y le guarda whatsapp_id", async () => {
     const hija = await crear({ name: `${QA}hija`, phone: FROM, createdAt: new Date("2020-01-01") });
     const madre = await crear({ name: `${QA}madre`, phone: FROM });
