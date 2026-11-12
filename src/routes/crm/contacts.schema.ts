@@ -60,3 +60,9 @@ export const titularInput = z.object({
   relationship: z.enum(RELATIONSHIPS).optional(),
   relationshipOther: z.string().max(60).optional(),
 });
+
+/** POST /contacts/:id/unir — `:id` es la ficha que queda; `duplicadoId` la que desaparece. */
+export const unirInput = z.object({ duplicadoId: z.string().uuid() });
+
+/** GET /contacts/:id/unir/preview?duplicadoId= */
+export const unirPreviewQuery = z.object({ duplicadoId: z.string().uuid() });

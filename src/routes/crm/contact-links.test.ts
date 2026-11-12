@@ -15,7 +15,7 @@ const QA = "ZZ_QA_RUTALINK_";
 const app = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 app.onError((err, c) => {
   if ("status" in err && typeof err.status === "number") {
-    return c.json({ error: err.message }, err.status as 400 | 404);
+    return c.json({ error: err.message }, err.status as 400 | 404 | 409);
   }
   return c.json({ error: "Internal server error" }, 500);
 });
@@ -95,5 +95,31 @@ describe("PATCH /contacts/:id normaliza whatsappId", () => {
     const res = await pedir(`/contacts/${a}`, "PATCH", { whatsappId: "1530317884" });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { motivo: string }).motivo).toBe("con15");
+  });
+});
+
+describe("rutas de unión", () => {
+  it("POST unir une el duplicado en :id y preview cuenta", async () => {
+    const a = await crear("A");
+    const b = await crear("B");
+    await pg`INSERT INTO contact_notes (contact_id, body) VALUES (${b}, 'ZZ_QA_RUTALINK_ nota')`;
+    const pre = await pedir(`/contacts/${a}/unir/preview?duplicadoId=${b}`, "GET");
+    expect(pre.status).toBe(200);
+    expect(((await pre.json()) as { aCargo: number }).aCargo).toBe(0);
+    const res = await pedir(`/contacts/${a}/unir`, "POST", { duplicadoId: b });
+    expect(res.status).toBe(200);
+    expect((await pg`SELECT 1 FROM contacts WHERE id = ${b}`)).toHaveLength(0);
+    expect((await pg`SELECT 1 FROM contact_notes WHERE contact_id = ${a}`)).toHaveLength(1);
+    await pg`DELETE FROM contact_notes WHERE contact_id = ${a}`;
+  });
+
+  it("unir consigo misma: 400; DNI distintos: 409", async () => {
+    const a = await crear("A");
+    const b = await crear("B");
+    expect((await pedir(`/contacts/${a}/unir`, "POST", { duplicadoId: a })).status).toBe(400);
+    await pg`INSERT INTO customers (id, contact_id, dni) VALUES (gen_random_uuid(), ${a}, '1')`;
+    await pg`INSERT INTO customers (id, contact_id, dni) VALUES (gen_random_uuid(), ${b}, '2')`;
+    expect((await pedir(`/contacts/${a}/unir`, "POST", { duplicadoId: b })).status).toBe(409);
+    await pg`DELETE FROM customers WHERE contact_id IN (${a}, ${b})`;
   });
 });
