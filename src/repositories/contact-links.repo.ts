@@ -259,3 +259,53 @@ export async function resolverConversacion(
     return { conversationId: finalId };
   });
 }
+
+export type ConversacionDeContacto = {
+  id: string;
+  channel: string | null;
+  status: string | null;
+  ultimoMensaje: { content: string | null; createdAt: string; senderType: string } | null;
+  cantidadMensajes: number;
+  via: { titularId: string; titularName: string | null } | null;
+};
+
+/**
+ * Conversaciones de la ficha: las propias + (si es tutelado/a, sin WhatsApp propio) las de su
+ * titular, porque los mensajes de un tutelado entran por la conversación de la titular.
+ * Una sola consulta con LATERAL; orden por último mensaje desc, las sin mensajes al final.
+ */
+export async function getConversacionesDeContacto(db: Db, contactId: string): Promise<ConversacionDeContacto[]> {
+  const [yo] = await db.select({ holderContactId: contacts.holderContactId }).from(contacts).where(eq(contacts.id, contactId)).limit(1);
+  if (!yo) throw notFound("Contact");
+  const filas = (await db.execute(sql`
+    SELECT cv.id, cv.channel, cv.status, (cv.contact_id <> ${contactId}::uuid) AS es_titular,
+           t.id AS titular_id, t.name AS titular_name,
+           um.content AS um_content, um.sender_type AS um_sender,
+           to_char(um.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS um_fecha,
+           COALESCE(n.total, 0)::int AS cantidad
+    FROM conversations cv
+    LEFT JOIN contacts t ON t.id = cv.contact_id
+    LEFT JOIN LATERAL (
+      SELECT m.content, m.sender_type, m.created_at FROM messages m
+      WHERE m.conversation_id = cv.id ORDER BY m.created_at DESC, m.id DESC LIMIT 1
+    ) um ON true
+    LEFT JOIN LATERAL (SELECT count(*) AS total FROM messages m WHERE m.conversation_id = cv.id) n ON true
+    WHERE cv.contact_id = ${contactId}::uuid
+       OR (${yo.holderContactId}::uuid IS NOT NULL AND cv.contact_id = ${yo.holderContactId}::uuid)
+    ORDER BY um.created_at DESC NULLS LAST, cv.created_at DESC, cv.id
+  `)) as unknown as {
+    id: string; channel: string | null; status: string | null; es_titular: boolean;
+    titular_id: string; titular_name: string | null;
+    um_content: string | null; um_sender: string | null; um_fecha: string | null; cantidad: number;
+  }[];
+  return filas.map((f) => ({
+    id: f.id,
+    channel: f.channel,
+    status: f.status,
+    ultimoMensaje: f.um_fecha
+      ? { content: f.um_content, createdAt: f.um_fecha, senderType: f.um_sender ?? "" }
+      : null,
+    cantidadMensajes: f.cantidad,
+    via: f.es_titular ? { titularId: f.titular_id, titularName: f.titular_name } : null,
+  }));
+}

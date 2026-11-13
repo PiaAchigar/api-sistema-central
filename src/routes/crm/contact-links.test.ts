@@ -188,3 +188,57 @@ describe("desvincular con número propio", () => {
     expect(r.phone).toBe(NUM);
   });
 });
+
+describe("GET /contacts/:id/conversaciones", () => {
+  type Resp = { conversaciones: { id: string; channel: string; ultimoMensaje: { content: string | null; senderType: string } | null; cantidadMensajes: number; via: { titularId: string; titularName: string | null } | null }[] };
+  async function conv(contactId: string, channel: string, msgs: [string, string][]) {
+    const [cv] = await pg<{ id: string }[]>`
+      INSERT INTO conversations (id, contact_id, channel, status) VALUES (gen_random_uuid(), ${contactId}, ${channel}, 'open') RETURNING id`;
+    for (const [texto, fecha] of msgs) {
+      await pg`INSERT INTO messages (id, conversation_id, sender_type, content, created_at) VALUES (gen_random_uuid(), ${cv!.id}, 'contact', ${texto}, ${fecha})`;
+    }
+    return cv!.id;
+  }
+  const limpiarConv = async () => {
+    await pg`DELETE FROM messages WHERE conversation_id IN (SELECT cv.id FROM conversations cv JOIN contacts c ON c.id = cv.contact_id WHERE c.name LIKE ${QA + "%"})`;
+    await pg`DELETE FROM conversations WHERE contact_id IN (SELECT id FROM contacts WHERE name LIKE ${QA + "%"})`;
+  };
+  afterEach(limpiarConv);
+
+  it("devuelve las propias con último mensaje y cantidad, ordenadas por último mensaje", async () => {
+    const a = await crear("CV1");
+    const vieja = await conv(a, "web", [["hola vieja", "2020-01-01T10:00:00Z"]]);
+    const nueva = await conv(a, "whatsapp", [["uno", "2020-02-01T10:00:00Z"], ["dos", "2020-02-01T11:00:00Z"]]);
+    const vacia = await conv(a, "instagram", []);
+    const j = (await (await pedir(`/contacts/${a}/conversaciones`, "GET")).json()) as Resp;
+    expect(j.conversaciones.map((x) => x.id)).toEqual([nueva, vieja, vacia]);
+    expect(j.conversaciones[0]!.ultimoMensaje?.content).toBe("dos");
+    expect(j.conversaciones[0]!.cantidadMensajes).toBe(2);
+    expect(j.conversaciones[0]!.via).toBeNull();
+    expect(j.conversaciones[2]!.ultimoMensaje).toBeNull();
+    expect(j.conversaciones[2]!.cantidadMensajes).toBe(0);
+  });
+
+  it("un tutelado ve las de su titular con via", async () => {
+    const titular = await crear("CVT");
+    const hijo = await crear("CVH");
+    await pedir(`/contacts/${hijo}/titular`, "PUT", { holderContactId: titular, relationship: "hijo" });
+    const propia = await conv(hijo, "web", [["propia", "2020-03-01T10:00:00Z"]]);
+    const deTitular = await conv(titular, "whatsapp", [["de la titular", "2020-04-01T10:00:00Z"]]);
+    const j = (await (await pedir(`/contacts/${hijo}/conversaciones`, "GET")).json()) as Resp;
+    expect(j.conversaciones.map((x) => x.id)).toEqual([deTitular, propia]);
+    expect(j.conversaciones[0]!.via).toEqual({ titularId: titular, titularName: QA + "CVT" });
+    expect(j.conversaciones[1]!.via).toBeNull();
+    const t = (await (await pedir(`/contacts/${titular}/conversaciones`, "GET")).json()) as Resp;
+    expect(t.conversaciones.map((x) => x.id)).toEqual([deTitular]);
+    expect(t.conversaciones[0]!.via).toBeNull();
+  });
+
+  it("lista vacía y 404", async () => {
+    const a = await crear("CV0");
+    const j = (await (await pedir(`/contacts/${a}/conversaciones`, "GET")).json()) as Resp;
+    expect(j.conversaciones).toEqual([]);
+    const res = await pedir(`/contacts/00000000-0000-0000-0000-000000000000/conversaciones`, "GET");
+    expect(res.status).toBe(404);
+  });
+});
