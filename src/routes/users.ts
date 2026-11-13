@@ -12,9 +12,21 @@ import {
 } from "../lib/supabase-admin";
 import type { AppBindings, Variables } from "../env";
 import { createDb } from "../db/client";
-import { setLocalUserActive, setLocalUserRole, upsertLocalUser } from "../repositories/users.repo";
+import {
+  fullNamesByAuthId,
+  setLocalUserActive,
+  setLocalUserFullName,
+  setLocalUserRole,
+  upsertLocalUser,
+} from "../repositories/users.repo";
 
 const ROLES = ["admin", "manager", "operator", "sales", "accountant"] as const;
+
+const fullNameSchema = z
+  .string()
+  .trim()
+  .min(1, "El nombre es obligatorio")
+  .max(100, "El nombre no puede pasar los 100 caracteres");
 
 const usersRouter = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 
@@ -22,7 +34,12 @@ usersRouter.use("*", requireAuth, requireAdmin);
 
 usersRouter.get("/", async (c) => {
   const cfg = requireSupabaseAdmin(c.env);
-  return c.json(await listUsers(cfg));
+  const list = await listUsers(cfg);
+  const names = await fullNamesByAuthId(
+    createDb(c.env),
+    list.map((u) => u.id),
+  );
+  return c.json(list.map((u) => ({ ...u, fullName: names.get(u.id) ?? null })));
 });
 
 usersRouter.post(
@@ -30,6 +47,7 @@ usersRouter.post(
   zValidator(
     "json",
     z.object({
+      fullName: fullNameSchema,
       email: z.string().email(),
       password: z.string().min(8, "La contraseña debe tener al menos 8 caracteres"),
       role: z.enum(ROLES),
@@ -38,10 +56,26 @@ usersRouter.post(
   async (c) => {
     const cfg = requireSupabaseAdmin(c.env);
     const body = c.req.valid("json");
-    const created = await createUser(cfg, body);
+    const { fullName, ...authData } = body;
+    const created = await createUser(cfg, authData);
     const db = createDb(c.env);
-    await upsertLocalUser(db, { authId: created.id, email: created.email ?? body.email, role: body.role });
-    return c.json(created, 201);
+    await upsertLocalUser(db, { authId: created.id, email: created.email ?? body.email, role: body.role, fullName });
+    return c.json({ ...created, fullName }, 201);
+  },
+);
+
+usersRouter.patch(
+  "/:authId/nombre",
+  zValidator("json", z.object({ fullName: fullNameSchema })),
+  async (c) => {
+    const { fullName } = c.req.valid("json");
+    const authId = c.req.param("authId");
+    if (!z.string().uuid().safeParse(authId).success) {
+      throw new AppError(404, "Usuario no encontrado.");
+    }
+    const ok = await setLocalUserFullName(createDb(c.env), authId, fullName);
+    if (!ok) throw new AppError(404, "Usuario no encontrado.");
+    return c.json({ ok: true, fullName });
   },
 );
 
