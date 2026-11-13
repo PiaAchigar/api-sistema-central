@@ -5,8 +5,8 @@ const mayuscula = (s: string) => (s ? s.charAt(0).toLocaleUpperCase("es") + s.sl
 export function nombreCorto(fullName: string | null, email: string | null): string {
   const palabras = (fullName ?? "").trim().split(/\s+/).filter(Boolean);
   if (palabras.length === 0) return email || "Sin nombre";
-  const primera = mayuscula(palabras[0]);
+  const primera = mayuscula(palabras[0] ?? "");
   if (palabras.length === 1) return primera;
-  const ultima = palabras[palabras.length - 1];
+  const ultima = palabras[palabras.length - 1] ?? "";
   return `${primera} ${mayuscula(Array.from(ultima).slice(0, 2).join(""))}.`;
 }
