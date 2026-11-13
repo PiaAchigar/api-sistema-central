@@ -101,6 +101,51 @@ describe("POST /users", () => {
     expect(supa.createUser.mock.calls[0][1]).not.toHaveProperty("fullName");
   });
 
+  it("guarda quién lo creó si el admin tiene fila local, y NULL si no", async () => {
+    // el pedido llega con userId "admin-test" (no es uuid): sin fila local
+    supa.createUser.mockResolvedValue({ id: A1, email: base.email, role: "sales" });
+    await pedir("admin", "POST", "/", { ...base, fullName: "Laura" });
+    const [sin] = await db.select().from(users).where(eq(users.authId, A1));
+    expect(sin.createdByUserId).toBeNull();
+
+    const [admin] = await db
+      .insert(users)
+      .values({ authId: A2, email: `${QA}admin@x.com`, fullName: "Lucía Celano", role: "admin", isActive: true })
+      .returning();
+    const app = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
+    app.use("*", async (c, next) => {
+      c.set("userId", A2);
+      c.set("userRole", "admin");
+      c.set("userEmail", null);
+      await next();
+    });
+    app.route("/", usersRouter);
+    await db.delete(users).where(eq(users.authId, A1));
+    const r = await app.request(
+      "/",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...base, fullName: "Rosa" }),
+      },
+      ENV,
+    );
+    expect(r.status).toBe(201);
+    const [con] = await db.select().from(users).where(eq(users.authId, A1));
+    expect(con.createdByUserId).toBe(admin.id);
+
+    supa.listUsers.mockResolvedValue([
+      { id: A1, email: base.email, role: "sales", createdAt: null, lastSignInAt: null },
+      { id: A2, email: `${QA}admin@x.com`, role: "admin", createdAt: null, lastSignInAt: null },
+    ]);
+    const lista = (await (await app.request("/", {}, ENV)).json()) as {
+      id: string;
+      createdByName: string | null;
+    }[];
+    expect(lista.find((u) => u.id === A1)?.createdByName).toBe("Lucía Ce.");
+    expect(lista.find((u) => u.id === A2)?.createdByName).toBeNull();
+  });
+
   it("es sólo para admin", async () => {
     expect((await pedir("manager", "POST", "/", { ...base, fullName: "L" })).status).toBe(403);
     expect((await pedir(null, "POST", "/", { ...base, fullName: "L" })).status).toBe(401);
@@ -151,5 +196,24 @@ describe("listActiveLocalUsers", () => {
     ]);
     const mios = (await listActiveLocalUsers(db)).filter((u) => u.email?.startsWith(QA));
     expect(mios.map((u) => u.fullName)).toEqual(["Ana", "Zoe"]);
+  });
+});
+
+describe("GET /api/crm/deals/agents", () => {
+  it("agrega nombreCorto sin perder fullName ni email", async () => {
+    const { dealsRouter } = await import("./crm/deals");
+    await db.insert(users).values({ authId: A1, email: `${QA}ag@x.com`, fullName: "Agostina Ríos", isActive: true });
+    const app = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
+    app.use("*", async (c, next) => {
+      c.set("userId", "t");
+      c.set("userRole", "admin");
+      c.set("userEmail", null);
+      await next();
+    });
+    app.route("/", dealsRouter);
+    const r = await app.request("/agents", {}, ENV);
+    const lista = (await r.json()) as { fullName: string; email: string; nombreCorto: string }[];
+    const mio = lista.find((a) => a.email === `${QA}ag@x.com`);
+    expect(mio).toMatchObject({ fullName: "Agostina Ríos", nombreCorto: "Agostina Rí." });
   });
 });

@@ -122,6 +122,7 @@ export const users = pgTable("users", {
   authId: uuid("auth_id"),
   email: varchar("email", { length: 255 }),
   fullName: varchar("full_name", { length: 255 }),
+  createdByUserId: uuid("created_by_user_id"),
   role: varchar("role", { length: 50 }), // admin | accountant | sales | operator
   isActive: boolean("is_active"),
   createdAt: createdAt(),

@@ -159,6 +159,7 @@ services:
       - ./src/db/migrations/1.69.0/01-historial-de-precios-por-planilla.sql:/docker-entrypoint-initdb.d/55-historial-de-precios-por-planilla.sql:ro
       - ./src/db/migrations/1.70.0/01-rate-limit-sin-fk-users.sql:/docker-entrypoint-initdb.d/56-rate-limit-sin-fk-users.sql:ro
       - ./src/db/migrations/1.71.0/01-titular-y-revision.sql:/docker-entrypoint-initdb.d/57-titular-y-revision.sql:ro
+      - ./src/db/migrations/1.72.0/01-users-created-by.sql:/docker-entrypoint-initdb.d/58-users-created-by.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]

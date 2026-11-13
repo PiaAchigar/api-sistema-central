@@ -15,7 +15,11 @@ import {
   updateDealTitle,
 } from "../../repositories/deals.repo";
 import { getAppointmentById } from "../../repositories/appointments.repo";
-import { creditCustomer, getCustomerByContactId } from "../../repositories/customers.repo";
+import {
+  creditCustomer,
+  getCustomerByContactId,
+} from "../../repositories/customers.repo";
+import { nombreCorto } from "../../lib/nombre-corto";
 import { listActiveLocalUsers } from "../../repositories/users.repo";
 import { runAutomations } from "../../services/automation.service";
 import type { AppBindings, Variables } from "../../env";
@@ -31,15 +35,31 @@ const STAGES = [
   "completado",
 ] as const;
 
-dealsRouter.get("/", requireAuth, requirePermission("crm", "view"), async (c) => {
-  const db = createDb(c.env);
-  return c.json(await listDealsForPipeline(db));
-});
+dealsRouter.get(
+  "/",
+  requireAuth,
+  requirePermission("crm", "view"),
+  async (c) => {
+    const db = createDb(c.env);
+    return c.json(await listDealsForPipeline(db));
+  },
+);
 
-dealsRouter.get("/agents", requireAuth, requirePermission("crm", "view"), async (c) => {
-  const db = createDb(c.env);
-  return c.json(await listActiveLocalUsers(db));
-});
+dealsRouter.get(
+  "/agents",
+  requireAuth,
+  requirePermission("crm", "view"),
+  async (c) => {
+    const db = createDb(c.env);
+    const agentes = await listActiveLocalUsers(db);
+    return c.json(
+      agentes.map((a) => ({
+        ...a,
+        nombreCorto: nombreCorto(a.fullName, a.email),
+      })),
+    );
+  },
+);
 
 dealsRouter.post(
   "/",
@@ -141,7 +161,8 @@ dealsRouter.patch(
       if (!deal) return null;
       if (deal.seniaPaid && deal.seniaAmount) {
         const customer = await getCustomerByContactId(tx, deal.contactId!);
-        if (customer) await creditCustomer(tx, customer.id, Number(deal.seniaAmount));
+        if (customer)
+          await creditCustomer(tx, customer.id, Number(deal.seniaAmount));
       }
       return deal;
     });

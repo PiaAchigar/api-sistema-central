@@ -13,7 +13,8 @@ import {
 import type { AppBindings, Variables } from "../env";
 import { createDb } from "../db/client";
 import {
-  fullNamesByAuthId,
+  datosLocalesPorAuthId,
+  localUserIdByAuthId,
   setLocalUserActive,
   setLocalUserFullName,
   setLocalUserRole,
@@ -35,11 +36,17 @@ usersRouter.use("*", requireAuth, requireAdmin);
 usersRouter.get("/", async (c) => {
   const cfg = requireSupabaseAdmin(c.env);
   const list = await listUsers(cfg);
-  const names = await fullNamesByAuthId(
+  const datos = await datosLocalesPorAuthId(
     createDb(c.env),
     list.map((u) => u.id),
   );
-  return c.json(list.map((u) => ({ ...u, fullName: names.get(u.id) ?? null })));
+  return c.json(
+    list.map((u) => ({
+      ...u,
+      fullName: datos.get(u.id)?.fullName ?? null,
+      createdByName: datos.get(u.id)?.createdByName ?? null,
+    })),
+  );
 });
 
 usersRouter.post(
@@ -49,7 +56,9 @@ usersRouter.post(
     z.object({
       fullName: fullNameSchema,
       email: z.string().email(),
-      password: z.string().min(8, "La contraseña debe tener al menos 8 caracteres"),
+      password: z
+        .string()
+        .min(8, "La contraseña debe tener al menos 8 caracteres"),
       role: z.enum(ROLES),
     }),
   ),
@@ -59,7 +68,13 @@ usersRouter.post(
     const { fullName, ...authData } = body;
     const created = await createUser(cfg, authData);
     const db = createDb(c.env);
-    await upsertLocalUser(db, { authId: created.id, email: created.email ?? body.email, role: body.role, fullName });
+    await upsertLocalUser(db, {
+      authId: created.id,
+      email: created.email ?? body.email,
+      role: body.role,
+      fullName,
+      createdByUserId: await localUserIdByAuthId(db, c.get("userId")),
+    });
     return c.json({ ...created, fullName }, 201);
   },
 );

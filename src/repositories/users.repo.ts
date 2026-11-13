@@ -1,11 +1,19 @@
 import { and, asc, eq, isNotNull, inArray } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+import { nombreCorto } from "../lib/nombre-corto";
 import type { Db } from "../db/client";
 import { users } from "../db/schema";
 
 /** Crea o actualiza la fila local de `users` indexada por auth_id (puente a Supabase Auth). */
 export async function upsertLocalUser(
   db: Db,
-  data: { authId: string; email: string; role: string; fullName?: string },
+  data: {
+    authId: string;
+    email: string;
+    role: string;
+    fullName?: string;
+    createdByUserId?: string | null;
+  },
 ) {
   const existing = await db
     .select({ id: users.id })
@@ -29,6 +37,7 @@ export async function upsertLocalUser(
     email: data.email,
     role: data.role,
     fullName: data.fullName ?? null,
+    createdByUserId: data.createdByUserId ?? null,
     isActive: true,
   });
 }
@@ -37,7 +46,11 @@ export async function setLocalUserRole(db: Db, authId: string, role: string) {
   await db.update(users).set({ role }).where(eq(users.authId, authId));
 }
 
-export async function setLocalUserActive(db: Db, authId: string, isActive: boolean) {
+export async function setLocalUserActive(
+  db: Db,
+  authId: string,
+  isActive: boolean,
+) {
   await db.update(users).set({ isActive }).where(eq(users.authId, authId));
 }
 
@@ -53,7 +66,11 @@ export async function listActiveLocalUsers(db: Db) {
 }
 
 /** Cambia el nombre visible. Devuelve false si no hay fila local con ese auth_id. */
-export async function setLocalUserFullName(db: Db, authId: string, fullName: string) {
+export async function setLocalUserFullName(
+  db: Db,
+  authId: string,
+  fullName: string,
+) {
   const rows = await db
     .update(users)
     .set({ fullName })
@@ -62,14 +79,47 @@ export async function setLocalUserFullName(db: Db, authId: string, fullName: str
   return rows.length > 0;
 }
 
-/** Nombres por auth_id, para enriquecer el listado de Supabase Auth. */
-export async function fullNamesByAuthId(db: Db, authIds: string[]) {
-  const map = new Map<string, string | null>();
-  if (authIds.length === 0) return map;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** users.id local de quien hace el pedido (por su auth id). null si no hay fila
+ *  (cuentas de desarrollo, api-key). */
+export async function localUserIdByAuthId(db: Db, authId: string | null) {
+  if (!authId || !UUID.test(authId)) return null;
   const rows = await db
-    .select({ authId: users.authId, fullName: users.fullName })
+    .select({ id: users.id })
     .from(users)
+    .where(eq(users.authId, authId))
+    .limit(1);
+  return rows[0]?.id ?? null;
+}
+
+/** Nombre y "creado por" por auth_id, para enriquecer el listado de Supabase Auth. */
+export async function datosLocalesPorAuthId(db: Db, authIds: string[]) {
+  const map = new Map<
+    string,
+    { fullName: string | null; createdByName: string | null }
+  >();
+  if (authIds.length === 0) return map;
+  const creador = alias(users, "creador");
+  const rows = await db
+    .select({
+      authId: users.authId,
+      fullName: users.fullName,
+      creadorNombre: creador.fullName,
+      creadorEmail: creador.email,
+      creadorId: creador.id,
+    })
+    .from(users)
+    .leftJoin(creador, eq(users.createdByUserId, creador.id))
     .where(inArray(users.authId, authIds));
-  for (const r of rows) if (r.authId) map.set(r.authId, r.fullName);
+  for (const r of rows) {
+    if (!r.authId) continue;
+    map.set(r.authId, {
+      fullName: r.fullName,
+      createdByName: r.creadorId
+        ? nombreCorto(r.creadorNombre, r.creadorEmail)
+        : null,
+    });
+  }
   return map;
 }
