@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { badRequest, conflict, internal, notFound } from "../lib/errors";
+import { fichasQueCompartenNumero } from "./contact-links.repo";
 
 /**
  * Unir dos fichas de contacto: `keepId` (A) queda, `dupId` (B) desaparece.
@@ -330,5 +331,13 @@ async function unirEnTransaccion(db: Db, keepId: string, dupId: string): Promise
     }
 
     await tx.execute(sql`DELETE FROM contacts WHERE id = ${dupId}`);
+
+    // 7) "Por revisar": si ya no queda otra ficha con el número de A, la duda se resolvió sola.
+    const [sobreviviente] = (await tx.execute(
+      sql`SELECT id, phone, whatsapp_id AS "whatsappId" FROM contacts WHERE id = ${keepId}`,
+    )) as unknown as { id: string; phone: string | null; whatsappId: string | null }[];
+    if (sobreviviente && (await fichasQueCompartenNumero(tx, sobreviviente)).length === 0) {
+      await tx.execute(sql`UPDATE conversations SET needs_contact_review = false WHERE contact_id = ${keepId}`);
+    }
   });
 }

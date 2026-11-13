@@ -59,6 +59,8 @@ export const titularInput = z.object({
   holderContactId: z.string().uuid().nullable(),
   relationship: z.enum(RELATIONSHIPS).optional(),
   relationshipOther: z.string().max(60).optional(),
+  /** Sólo con holderContactId null. string = número propio; null = sin número por ahora. */
+  telefonoPropio: z.string().max(40).nullable().optional(),
 });
 
 /** POST /contacts/:id/unir — `:id` es la ficha que queda; `duplicadoId` la que desaparece. */

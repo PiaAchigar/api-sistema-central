@@ -123,3 +123,68 @@ describe("rutas de unión", () => {
     await pg`DELETE FROM customers WHERE contact_id IN (${a}, ${b})`;
   });
 });
+
+describe("desvincular con número propio", () => {
+  const NUM = "1155559901";
+  async function par(hijaExtra: { phone?: string; whatsapp_id?: string } = { phone: NUM, whatsapp_id: "5491155559901" }) {
+    const t = await crear("TIT", { phone: NUM, whatsapp_id: "5491155559901" });
+    const h = await crear("HIJA", hijaExtra);
+    await pg`UPDATE contacts SET holder_contact_id = ${t}, relationship = 'hija' WHERE id = ${h}`;
+    return { t, h };
+  }
+  const leer = async (id: string) =>
+    (await pg`SELECT phone, whatsapp_id, holder_contact_id, relationship FROM contacts WHERE id = ${id}`)[0]!;
+
+  it("número válido: desvincula y guarda phone + whatsapp_id 549", async () => {
+    const { h } = await par();
+    const res = await pedir(`/contacts/${h}/titular`, "PUT", { holderContactId: null, telefonoPropio: "11 4444-5566" });
+    expect(res.status).toBe(200);
+    const r = await leer(h);
+    expect(r.holder_contact_id).toBeNull();
+    expect(r.relationship).toBeNull();
+    expect(r.whatsapp_id).toBe("5491144445566");
+    expect(r.phone).toBe("11 4444-5566");
+  });
+
+  it("número con 15: 400 con el motivo y no desvincula", async () => {
+    const { t, h } = await par();
+    const res = await pedir(`/contacts/${h}/titular`, "PUT", { holderContactId: null, telefonoPropio: "11 15 4444 5566" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain("15");
+    expect((await leer(h)).holder_contact_id).toBe(t);
+  });
+
+  it("número de otra ficha: 409", async () => {
+    const { h } = await par();
+    await crear("OTRA", { phone: "1166667777", whatsapp_id: "5491166667777" });
+    const res = await pedir(`/contacts/${h}/titular`, "PUT", { holderContactId: null, telefonoPropio: "1166667777" });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toMatch(/ya lo tiene/);
+  });
+
+  it("null: borra phone y whatsapp_id si eran los de la titular", async () => {
+    const { h } = await par();
+    const res = await pedir(`/contacts/${h}/titular`, "PUT", { holderContactId: null, telefonoPropio: null });
+    expect(res.status).toBe(200);
+    const r = await leer(h);
+    expect(r.holder_contact_id).toBeNull();
+    expect(r.phone).toBeNull();
+    expect(r.whatsapp_id).toBeNull();
+  });
+
+  it("null: conserva un número propio distinto al de la titular", async () => {
+    const { h } = await par({ phone: "1144445566", whatsapp_id: "5491144445566" });
+    await pedir(`/contacts/${h}/titular`, "PUT", { holderContactId: null, telefonoPropio: null });
+    const r = await leer(h);
+    expect(r.phone).toBe("1144445566");
+    expect(r.whatsapp_id).toBe("5491144445566");
+  });
+
+  it("omitido: no toca los números", async () => {
+    const { h } = await par();
+    await pedir(`/contacts/${h}/titular`, "PUT", { holderContactId: null });
+    const r = await leer(h);
+    expect(r.holder_contact_id).toBeNull();
+    expect(r.phone).toBe(NUM);
+  });
+});

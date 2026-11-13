@@ -1,8 +1,8 @@
 import { and, asc, eq, ne, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { contacts, conversations } from "../db/schema";
-import { badRequest, notFound } from "../lib/errors";
-import { clave } from "../lib/telefono";
+import { badRequest, conflict, notFound } from "../lib/errors";
+import { aWhatsappId, clave, diagnosticoTelefono } from "../lib/telefono";
 import { fusionarConversacion } from "./contact-merge.repo";
 
 export const RELATIONSHIPS = ["pareja", "hijo", "hija", "nieto", "nieta", "otro"] as const;
@@ -86,19 +86,58 @@ export async function getVinculos(db: Db, contactId: string): Promise<Vinculos> 
   return { titular: titularConParentesco, aCargo, compartenNumero };
 }
 
+const MOTIVOS = {
+  con15: "sacá el 15 del número",
+  con0: "sacá el 0 del principio",
+  corto: "el número es muy corto",
+  extranjero: "sólo se aceptan números de Argentina",
+} as const;
+
 export async function setTitular(
   db: Db,
   contactId: string,
-  input: { holderContactId: string | null; relationship?: Relationship; relationshipOther?: string },
+  input: {
+    holderContactId: string | null;
+    relationship?: Relationship;
+    relationshipOther?: string;
+    /** Sólo al desvincular. string = número propio; null = "sin número por ahora"; omitido = no se toca. */
+    telefonoPropio?: string | null;
+  },
 ): Promise<void> {
   const [yo] = await db.select().from(contacts).where(eq(contacts.id, contactId)).limit(1);
   if (!yo) throw notFound("Contact");
 
   if (input.holderContactId === null) {
-    await db
-      .update(contacts)
-      .set({ holderContactId: null, relationship: null, relationshipOther: null })
-      .where(eq(contacts.id, contactId));
+    const cambios: Partial<typeof contacts.$inferInsert> = {
+      holderContactId: null,
+      relationship: null,
+      relationshipOther: null,
+    };
+    const propio = input.telefonoPropio;
+    if (typeof propio === "string") {
+      const wa = aWhatsappId(propio);
+      if (!wa) {
+        const d = diagnosticoTelefono(propio);
+        throw badRequest(`WhatsApp inválido: ${d.ok ? "número no válido" : MOTIVOS[d.motivo]}`);
+      }
+      const otras = await fichasQueCompartenNumero(db, { id: contactId, phone: propio, whatsappId: wa });
+      if (otras.length > 0) {
+        throw conflict(`Ese número ya lo tiene ${otras[0]!.name ?? "otra ficha"}. Usá otro o unilas desde la ficha.`);
+      }
+      cambios.phone = propio.trim();
+      cambios.whatsappId = wa;
+    } else if (propio === null && yo.holderContactId) {
+      // "Sin número por ahora": se libera sólo lo que era el número de la titular.
+      const [tit] = await db.select().from(contacts).where(eq(contacts.id, yo.holderContactId)).limit(1);
+      const claves = new Set([clave(tit?.phone), clave(tit?.whatsappId)].filter((k): k is string => !!k));
+      if (claves.size > 0) {
+        const kp = clave(yo.phone);
+        const kw = clave(yo.whatsappId);
+        if (kp && claves.has(kp)) cambios.phone = null;
+        if (kw && claves.has(kw)) cambios.whatsappId = null;
+      }
+    }
+    await db.update(contacts).set(cambios).where(eq(contacts.id, contactId));
     return;
   }
 

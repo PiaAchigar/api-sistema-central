@@ -64,6 +64,25 @@ const existe = async (id: string) => (await pg`SELECT 1 FROM contacts WHERE id =
 const status = async (p: Promise<unknown>) => (await p.then(() => null, (e) => e)) as { status?: number } | null;
 
 describe("unir dos fichas", () => {
+  it("por revisar: al unir las dos fichas que compartían número, la marca de A se apaga", async () => {
+    const a = await contacto("A", { phone: "1155550001" });
+    const b = await contacto("B", { phone: "1155550001" });
+    const conv = await conversacion(a, "whatsapp", ["hola"]);
+    await pg`UPDATE conversations SET needs_contact_review = true WHERE id = ${conv}`;
+    await unirContactos(db, a, b);
+    expect((await pg`SELECT needs_contact_review FROM conversations WHERE id = ${conv}`)[0]!.needs_contact_review).toBe(false);
+  });
+
+  it("por revisar: si una tercera ficha sigue con el número, la marca queda", async () => {
+    const a = await contacto("A", { phone: "1155550002" });
+    const b = await contacto("B", { phone: "1155550002" });
+    await contacto("C", { phone: "1155550002" });
+    const conv = await conversacion(a, "whatsapp", ["hola"]);
+    await pg`UPDATE conversations SET needs_contact_review = true WHERE id = ${conv}`;
+    await unirContactos(db, a, b);
+    expect((await pg`SELECT needs_contact_review FROM conversations WHERE id = ${conv}`)[0]!.needs_contact_review).toBe(true);
+  });
+
   it("lee las FK de pg_constraint (contacts y customers)", async () => {
     const c = await fksHacia(db, "contacts");
     const nombres = c.map((f) => `${f.tabla}.${f.columna}`);
