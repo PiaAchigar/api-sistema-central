@@ -232,7 +232,7 @@ describe("aplicarPlanilla", () => {
     editada.categorias.push({ fila: 3, servicio: P + "Nuevo", categoria: `${P}madre › ${P}hija` });
 
     const resumen = await aplicarPlanilla(db, { area: AREA, original, editada }, usuario);
-    expect(resumen).toEqual({ serviciosNuevos: 1, serviciosModificados: 1, acuerdos: 1, insumos: 1, categorias: 1 });
+    expect(resumen).toEqual({ serviciosNuevos: 1, serviciosModificados: 1, acuerdos: 1, insumos: 1, categorias: 1, maquinas: 0 });
 
     const s = await filaDeServicio(sActivo);
     expect(Number(s.unitPriceList)).toBe(12000);
@@ -336,5 +336,99 @@ describe("aplicarPlanilla", () => {
     await db.update(service).set({ unitPriceList: "15000.00" }).where(eq(service.id, sActivo));
     await expect(aplicarPlanilla(db, { area: AREA, original, editada }, usuario)).rejects.toBeInstanceOf(ErroresDePlanilla);
     expect(Number((await filaDeServicio(sActivo)).unitPriceList)).toBe(15000);
+  });
+});
+
+describe("pestaña Máquinas", () => {
+  const nuevaFila = (fila: number, servicio: string, maquina: string) => ({ fila, servicio, maquina });
+  const delServicio = (id: string) => db.select().from(serviceMachine).where(eq(serviceMachine.serviceId, id));
+
+  it("la descarga trae las máquinas actuales del servicio", async () => {
+    const { original } = await bajar();
+    expect(original.maquinas).toEqual([{ fila: 2, servicio: P + "Activo", maquina: P + "Maquina" }]);
+  });
+
+  it("agrega varias máquinas, crea la nueva una sola vez y marca requires_machine", async () => {
+    const { original, editada } = await bajar();
+    editada.servicios.push({
+      fila: 3, id: null, nombre: P + "Nuevo", codigo: null, descripcion: null, precioLista: 20000, precioEfectivo: 18000,
+      duracion: 60, unidad: null, requiereOperadora: "Sí", requiereMaquina: "No", maquina: null,
+      visibleWeb: "Sí", destacado: "No", ordenWeb: null, beneficios: null, contraindicaciones: null, instrucciones: null,
+    });
+    editada.categorias.push({ fila: 3, servicio: P + "Nuevo", categoria: `${P}madre › ${P}hija` });
+    editada.maquinas!.push(
+      nuevaFila(3, P + "Activo", P + "Electrodos"),
+      nuevaFila(4, P + "Nuevo", P + "ELECTRODOS"),
+      nuevaFila(5, P + "Nuevo", P + "Maquina"),
+    );
+    const prev = await previsualizarPlanilla(db, { area: AREA, original, editada });
+    expect(prev.errores).toEqual([]);
+    expect(prev.avisos.filter((a) => a.mensaje.startsWith("Máquina nueva:"))).toHaveLength(1);
+    expect(prev.resumen.maquinas).toBe(3);
+    expect(await db.select().from(machines).where(like(machines.name, `${P}Electrodos%`))).toHaveLength(0); // previsualizar no escribe
+
+    const resumen = await aplicarPlanilla(db, { area: AREA, original, editada }, usuario);
+    expect(resumen.maquinas).toBe(3);
+
+    const creadas = await db.select().from(machines).where(like(machines.name, `${P}E%`));
+    expect(creadas).toHaveLength(1);
+    expect(creadas[0]).toMatchObject({ name: P + "Electrodos", status: "active", quantity: 1 });
+
+    const [nuevo] = await db.select().from(service).where(eq(service.name, P + "Nuevo"));
+    expect((await delServicio(nuevo!.id)).map((m) => m.machineId).sort()).toEqual([creadas[0]!.id, maq].sort());
+    expect((await delServicio(sActivo)).map((m) => m.machineId).sort()).toEqual([creadas[0]!.id, maq].sort());
+    expect((await filaDeServicio(sActivo)).requiresMachine).toBe(true);
+    expect((await filaDeServicio(nuevo!.id)).requiresMachine).toBe(true);
+  });
+
+  it("no duplica un par que ya existe ni borra al sacar una fila", async () => {
+    const { original, editada } = await bajar();
+    editada.maquinas = [];
+    const r = await aplicarPlanilla(db, { area: AREA, original, editada }, usuario);
+    expect(r.maquinas).toBe(0);
+    expect(await delServicio(sActivo)).toHaveLength(1);
+    expect((await filaDeServicio(sActivo)).requiresMachine).toBe(false);
+  });
+
+  it("máquina inactiva no cuenta: se crea una activa nueva", async () => {
+    await db.insert(machines).values({ name: P + "Vieja", status: "inactive" });
+    const { original, editada } = await bajar();
+    editada.maquinas!.push(nuevaFila(3, P + "Activo", P + "Vieja"));
+    await aplicarPlanilla(db, { area: AREA, original, editada }, usuario);
+    const todas = await db.select().from(machines).where(eq(machines.name, P + "Vieja"));
+    expect(todas.map((m) => m.status).sort()).toEqual(["active", "inactive"]);
+  });
+
+  it("todo o nada: con un error en otra pestaña no se crea la máquina", async () => {
+    const { original, editada } = await bajar();
+    editada.maquinas!.push(nuevaFila(3, P + "Activo", P + "Fantasma"));
+    editada.acuerdos[0]!.tarifa = 0;
+    await expect(aplicarPlanilla(db, { area: AREA, original, editada }, usuario)).rejects.toBeInstanceOf(ErroresDePlanilla);
+    expect(await db.select().from(machines).where(eq(machines.name, P + "Fantasma"))).toHaveLength(0);
+    expect(await delServicio(sActivo)).toHaveLength(1);
+  });
+
+  it("todo o nada: si falla la escritura, la máquina creada se deshace", async () => {
+    const { original, editada } = await bajar();
+    editada.maquinas!.push(nuevaFila(3, P + "Activo", P + "Fantasma2"));
+    editada.insumos.push({ fila: 3, servicio: P + "Activo", insumo: P + "Crema", cantidad: 1 });
+    // fuerza un fallo en el paso de historial de precios, que va después de las máquinas
+    editada.servicios[0]!.precioLista = 12000;
+    // un NUL en el email hace fallar el insert del historial, que va después de las máquinas
+    await expect(
+      aplicarPlanilla(db, { area: AREA, original, editada }, { id: null, email: "a\u0000b" }),
+    ).rejects.toBeDefined();
+    expect(await db.select().from(machines).where(eq(machines.name, P + "Fantasma2"))).toHaveLength(0);
+    expect(await delServicio(sActivo)).toHaveLength(1);
+  });
+
+  it("cambiar la máquina principal desde Servicios no borra las otras", async () => {
+    const otra = crypto.randomUUID();
+    await db.insert(machines).values({ id: otra, name: P + "Otra", status: "active" });
+    await db.insert(serviceMachine).values({ serviceId: sActivo, machineId: otra, isPrimaryMachine: false });
+    const { original, editada } = await bajar();
+    editada.servicios[0]!.maquina = null;
+    await aplicarPlanilla(db, { area: AREA, original, editada }, usuario);
+    expect((await delServicio(sActivo)).map((m) => m.machineId)).toEqual([otra]);
   });
 });

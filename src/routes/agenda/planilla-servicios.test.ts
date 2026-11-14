@@ -90,6 +90,16 @@ describe("/api/agenda/planilla-servicios", () => {
     expect(b.resumen.serviciosNuevos).toBe(0);
   });
 
+  it("la pestaña Máquinas es opcional pero, si viene, se valida", async () => {
+    const ok = { ...entrada, editada: { ...vacio, maquinas: [] }, original: { ...vacio, maquinas: [] } };
+    const r1 = await manager.request(`${BASE}/previsualizar`, { method: "POST", headers: H, body: JSON.stringify(ok) }, ENV);
+    expect(r1.status).toBe(200);
+    expect(((await r1.json()) as any).resumen.maquinas).toBe(0);
+    const mal = { ...entrada, editada: { ...vacio, maquinas: [{ fila: 2, servicio: {}, maquina: "x" }] } };
+    const r2 = await manager.request(`${BASE}/previsualizar`, { method: "POST", headers: H, body: JSON.stringify(mal) }, ENV);
+    expect(r2.status).toBe(400);
+  });
+
   it("manager aplicar sin cambios → 200 con resumen", async () => {
     const r = await manager.request(`${BASE}/aplicar`, { method: "POST", headers: H, body: JSON.stringify(entrada) }, ENV);
     expect(r.status).toBe(200);

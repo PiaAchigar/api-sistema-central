@@ -198,15 +198,21 @@ async function leerContenido(db: Db, areaId: string): Promise<ContenidoPlanilla>
 
   const ids = servicios.map((s) => s.id);
   const nombreDe = new Map(servicios.map((s) => [s.id, s.name ?? ""]));
-  const vacio: ContenidoPlanilla = { servicios: [], acuerdos: [], insumos: [], categorias: [] };
+  const vacio: ContenidoPlanilla = { servicios: [], acuerdos: [], insumos: [], categorias: [], maquinas: [] };
   if (ids.length === 0) return vacio;
 
-  const [maqs, acus, ins, cats, todas] = await Promise.all([
+  const [maqs, todasMaqs, acus, ins, cats, todas] = await Promise.all([
     db
       .select({ serviceId: serviceMachine.serviceId, name: machines.name })
       .from(serviceMachine)
       .innerJoin(machines, eq(machines.id, serviceMachine.machineId))
       .where(and(inArray(serviceMachine.serviceId, ids), eq(serviceMachine.isPrimaryMachine, true))),
+    // Pestaña Máquinas: todas las asociaciones con máquinas activas.
+    db
+      .select({ serviceId: serviceMachine.serviceId, name: machines.name })
+      .from(serviceMachine)
+      .innerJoin(machines, eq(machines.id, serviceMachine.machineId))
+      .where(and(inArray(serviceMachine.serviceId, ids), eq(machines.status, "active"))),
     db
       .select({
         serviceId: serviceProviderService.serviceId,
@@ -281,6 +287,10 @@ async function leerContenido(db: Db, areaId: string): Promise<ContenidoPlanilla>
         insumo: r.insumo,
         cantidad: num(r.quantity),
       })),
+    maquinas: todasMaqs
+      .filter((m) => (m.name ?? "").trim() !== "")
+      .sort((a, b) => porServicio(a, b) || orden(a.name, b.name))
+      .map((m, i) => ({ fila: i + 2, servicio: nombreDe.get(m.serviceId ?? "") ?? "", maquina: m.name })),
     categorias: cats
       .filter((c) => c.categoryId && !esArea.has(c.categoryId))
       .map((c) => ({ serviceId: c.serviceId, ruta: rutas.get(c.categoryId as string) ?? "" }))
@@ -345,13 +355,21 @@ function columnasDeServicio(p: Partial<ServicioNormalizado>) {
   return set;
 }
 
-/** Misma lógica que `setServicePrimaryMachine` (una máquina principal por servicio), sobre la transacción. */
+/**
+ * Una máquina principal por servicio, sobre la transacción. Sólo toca la principal: las otras
+ * máquinas del servicio (pestaña Máquinas) quedan como están.
+ */
 async function ponerMaquinaPrincipal(db: Db, serviceId: string, nombre: string | null, catalogo: Catalogo) {
-  await db.delete(serviceMachine).where(eq(serviceMachine.serviceId, serviceId));
+  await db.delete(serviceMachine).where(and(eq(serviceMachine.serviceId, serviceId), eq(serviceMachine.isPrimaryMachine, true)));
   if (nombre === null) return;
   const machineId = buscar(catalogo.maquinas, nombre);
   if (!machineId) throw new Error(`Máquina «${nombre}» sin resolver`); // el planificador ya lo validó
-  await db.insert(serviceMachine).values({ serviceId, machineId, isPrimaryMachine: true });
+  const ya = await db
+    .update(serviceMachine)
+    .set({ isPrimaryMachine: true })
+    .where(and(eq(serviceMachine.serviceId, serviceId), eq(serviceMachine.machineId, machineId)))
+    .returning({ id: serviceMachine.id });
+  if (ya.length === 0) await db.insert(serviceMachine).values({ serviceId, machineId, isPrimaryMachine: true });
 }
 
 async function ejecutarPlan(db: Db, plan: PlanDePlanilla, areaId: string, catalogo: Catalogo, usuario: { id: string | null; email: string | null }) {
@@ -440,6 +458,34 @@ async function ejecutarPlan(db: Db, plan: PlanDePlanilla, areaId: string, catalo
       .where(and(eq(serviceCategory.serviceId, serviceId), eq(serviceCategory.categoryId, c.categoryId)))
       .limit(1);
     if (ya.length === 0) await db.insert(serviceCategory).values({ serviceId, categoryId: c.categoryId });
+  }
+
+  // Máquinas: sólo altas. Las que no existían se crean una vez (activas, cantidad 1).
+  const maquinaNueva = new Map<string, string>();
+  for (const m of plan.maquinasNuevas) {
+    const [fila] = await db
+      .insert(machines)
+      .values({ name: m.nombre, status: "active", quantity: 1 })
+      .returning({ id: machines.id });
+    if (!fila) throw new Error("No se pudo crear la máquina");
+    maquinaNueva.set(m.clave, fila.id);
+  }
+  const conMaquina = new Set<string>();
+  for (const m of plan.maquinas) {
+    const serviceId = idDe(m.servicio);
+    const machineId = m.maquinaId ?? maquinaNueva.get(m.nuevaClave ?? "");
+    if (!machineId) throw new Error("Máquina sin resolver");
+    const ya = await db
+      .select({ id: serviceMachine.id })
+      .from(serviceMachine)
+      .where(and(eq(serviceMachine.serviceId, serviceId), eq(serviceMachine.machineId, machineId)))
+      .limit(1);
+    if (ya.length === 0) await db.insert(serviceMachine).values({ serviceId, machineId, isPrimaryMachine: false });
+    conMaquina.add(serviceId);
+  }
+  // Un servicio con máquinas asociadas por la planilla pasa a requerir máquina.
+  for (const serviceId of conMaquina) {
+    await db.update(service).set({ requiresMachine: true, updatedAt: new Date() }).where(eq(service.id, serviceId));
   }
 
   // Historial de precios: una cabecera + un ítem por servicio, igual que el ajuste en bloque.

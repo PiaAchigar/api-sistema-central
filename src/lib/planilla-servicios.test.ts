@@ -198,7 +198,7 @@ describe("planificarPlanilla — servicios existentes", () => {
     });
     const r = plan({ original, editada: contenido(), actual: original });
     expect(r.vista.errores).toEqual([]);
-    expect(r.plan).toEqual({ crear: [], actualizar: [], acuerdos: [], insumos: [], categorias: [] });
+    expect(r.plan).toEqual({ crear: [], actualizar: [], acuerdos: [], insumos: [], categorias: [], maquinas: [], maquinasNuevas: [] });
   });
 
   it("la vista previa muestra el número que se va a guardar", () => {
@@ -406,7 +406,7 @@ describe("planificarPlanilla — relaciones", () => {
     const editada = contenido({ servicios: [], acuerdos, insumos, categorias });
     const r = plan({ original, editada, actual: original });
     expect(r.vista.errores).toEqual([]);
-    expect(r.plan).toEqual({ crear: [], actualizar: [], acuerdos: [], insumos: [], categorias: [] });
+    expect(r.plan).toEqual({ crear: [], actualizar: [], acuerdos: [], insumos: [], categorias: [], maquinas: [], maquinasNuevas: [] });
   });
 
   it("relación de un servicio sacado pero con celdas tocadas sigue dando error", () => {
@@ -516,5 +516,101 @@ describe("planificarPlanilla — relaciones", () => {
     const t = base();
     t.editada.categorias = [{ fila: 4, servicio: "ZZ_QA_PLANILLA_A", categoria: "Otra" }];
     expect(plan(t).vista.errores[0]).toMatchObject({ pestana: "Categorías web", fila: 4 });
+  });
+});
+
+describe("planificarPlanilla — pestaña Máquinas", () => {
+  const cat = () =>
+    catalogo({ maquinas: new Map<string, string | null>([["Botas de Presoterapia", "m-botas"], ["Mantas Térmicas", "m-mantas"], ["Dup", null]]) });
+  const t0 = () => {
+    const c = () => contenido({ servicios: [A()] });
+    return { original: c(), editada: c(), actual: c() };
+  };
+  const fm = (fila: number, servicio: string, maquina: string | null) => ({ fila, servicio, maquina });
+
+  it("fila nueva de una máquina existente: alta, sin avisos", () => {
+    const t = t0();
+    t.editada.maquinas = [fm(2, "ZZ_QA_PLANILLA_A", "Botas de Presoterapia")];
+    const r = plan(t, cat());
+    expect(r.vista.errores).toEqual([]);
+    expect(r.plan.maquinas).toEqual([{ servicio: { id: ID_A }, maquinaId: "m-botas", nuevaClave: null }]);
+    expect(r.plan.maquinasNuevas).toEqual([]);
+    expect(r.vista.maquinas).toEqual([{ fila: 2, servicio: "ZZ_QA_PLANILLA_A", maquina: "Botas de Presoterapia", nueva: false }]);
+    expect(r.vista.resumen.maquinas).toBe(1);
+    expect(r.vista.avisos).toEqual([]);
+  });
+
+  it("compara sin mayúsculas, tildes ni espacios de más", () => {
+    const t = t0();
+    t.editada.maquinas = [fm(2, "ZZ_QA_PLANILLA_A", "  mantas  termicas ")];
+    const r = plan(t, cat());
+    expect(r.plan.maquinas[0]?.maquinaId).toBe("m-mantas");
+    expect(r.plan.maquinasNuevas).toEqual([]);
+  });
+
+  it("fila repetida es error; el par que ya estaba en el sistema no se vuelve a agregar", () => {
+    const t = t0();
+    t.editada.maquinas = [fm(2, "ZZ_QA_PLANILLA_A", "Mantas Térmicas"), fm(3, "ZZ_QA_PLANILLA_A", "Mantas Térmicas")];
+    expect(plan(t, cat()).vista.errores[0]).toMatchObject({ pestana: "Máquinas", fila: 3 });
+    const u = t0();
+    u.original.maquinas = u.actual.maquinas = [fm(2, "ZZ_QA_PLANILLA_A", "Mantas Térmicas")];
+    u.editada.maquinas = [fm(2, "ZZ_QA_PLANILLA_A", "Mantas Térmicas")];
+    expect(plan(u, cat()).plan.maquinas).toEqual([]);
+  });
+
+  it("máquina desconocida: se crea y avisa 'Máquina nueva: …'", () => {
+    const t = t0();
+    t.editada.maquinas = [fm(5, "ZZ_QA_PLANILLA_A", "  Electrodos   Térmicos ")];
+    const r = plan(t, cat());
+    expect(r.vista.errores).toEqual([]);
+    expect(r.plan.maquinasNuevas).toEqual([{ clave: "electrodos termicos", nombre: "Electrodos Térmicos" }]);
+    expect(r.plan.maquinas).toEqual([{ servicio: { id: ID_A }, maquinaId: null, nuevaClave: "electrodos termicos" }]);
+    expect(r.vista.avisos).toEqual([{ pestana: "Máquinas", fila: 5, mensaje: "Máquina nueva: Electrodos Térmicos" }]);
+    expect(r.vista.maquinas[0]).toMatchObject({ nueva: true, maquina: "Electrodos Térmicos" });
+  });
+
+  it("la misma máquina nueva en dos servicios crea UNA sola", () => {
+    const t = t0();
+    const b = (o: Partial<FilaServicioPlanilla> = {}) => filaServicio({ id: ID_B, nombre: "ZZ_QA_PLANILLA_B", ...o });
+    for (const c of [t.original, t.editada, t.actual]) c.servicios.push(b());
+    t.editada.maquinas = [fm(2, "ZZ_QA_PLANILLA_A", "Electrodos Térmicos"), fm(3, "ZZ_QA_PLANILLA_B", "electrodos termicos")];
+    const r = plan(t, cat());
+    expect(r.plan.maquinasNuevas).toHaveLength(1);
+    expect(r.plan.maquinas).toHaveLength(2);
+    expect(r.vista.avisos.filter((a) => a.pestana === "Máquinas")).toHaveLength(1);
+  });
+
+  it("sacar una fila no hace nada", () => {
+    const t = t0();
+    t.original.maquinas = t.actual.maquinas = [fm(2, "ZZ_QA_PLANILLA_A", "Mantas Térmicas")];
+    t.editada.maquinas = [];
+    const r = plan(t, cat());
+    expect(r.plan.maquinas).toEqual([]);
+    expect(r.vista.errores).toEqual([]);
+  });
+
+  it("acepta un servicio nuevo de la pestaña Servicios", () => {
+    const t = t0();
+    t.editada.servicios.push(filaServicio({ fila: 3, id: null, nombre: "ZZ_QA_PLANILLA_Nuevo" }));
+    t.editada.categorias = [{ fila: 2, servicio: "ZZ_QA_PLANILLA_Nuevo", categoria: "Madre › Hija" }];
+    t.editada.maquinas = [fm(2, "ZZ_QA_PLANILLA_Nuevo", "Botas de Presoterapia")];
+    const r = plan(t, cat());
+    expect(r.vista.errores).toEqual([]);
+    expect(r.plan.maquinas).toEqual([{ servicio: { nuevaFila: 3 }, maquinaId: "m-botas", nuevaClave: null }]);
+  });
+
+  it("errores: servicio inexistente, máquina vacía, nombre ambiguo", () => {
+    const t = t0();
+    t.editada.maquinas = [fm(2, "No existe", "Mantas Térmicas"), fm(3, "ZZ_QA_PLANILLA_A", null), fm(4, "ZZ_QA_PLANILLA_A", "Dup")];
+    const r = plan(t, cat());
+    expect(r.vista.errores.map((e) => e.fila)).toEqual([2, 3, 4]);
+    expect(r.vista.errores.every((e) => e.pestana === "Máquinas")).toBe(true);
+  });
+
+  it("planilla vieja sin la pestaña: sin cambios ni errores", () => {
+    const t = t0();
+    const r = plan(t, cat());
+    expect(r.vista.errores).toEqual([]);
+    expect(r.plan.maquinas).toEqual([]);
   });
 });

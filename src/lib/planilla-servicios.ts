@@ -31,12 +31,15 @@ export type FilaServicioPlanilla = {
 export type FilaAcuerdoPlanilla = { fila: number; servicio: Celda; proveedora: Celda; tipoDePago: Celda; tarifa: Celda };
 export type FilaInsumoPlanilla = { fila: number; servicio: Celda; insumo: Celda; cantidad: Celda };
 export type FilaCategoriaPlanilla = { fila: number; servicio: Celda; categoria: Celda };
+export type FilaMaquinaPlanilla = { fila: number; servicio: Celda; maquina: Celda };
 
 export type ContenidoPlanilla = {
   servicios: FilaServicioPlanilla[];
   acuerdos: FilaAcuerdoPlanilla[];
   insumos: FilaInsumoPlanilla[];
   categorias: FilaCategoriaPlanilla[];
+  /** Pestaña "Máquinas". Opcional: las planillas viejas no la traen. */
+  maquinas?: FilaMaquinaPlanilla[];
 };
 
 export type ListasPlanilla = {
@@ -56,7 +59,7 @@ export type PlanillaDescarga = {
 
 export type EntradaPlanilla = { area: string; original: ContenidoPlanilla; editada: ContenidoPlanilla };
 
-export type Pestana = "Servicios" | "Proveedoras" | "Insumos" | "Categorías web" | "Archivo";
+export type Pestana = "Servicios" | "Proveedoras" | "Insumos" | "Categorías web" | "Máquinas" | "Archivo";
 export type ErrorDePlanilla = { pestana: Pestana; fila: number | null; mensaje: string };
 /** Igual que un error pero no frena el guardado: sólo avisa. */
 export type AvisoDePlanilla = ErrorDePlanilla;
@@ -69,8 +72,10 @@ export type Previsualizacion = {
   acuerdos: { fila: number; servicio: string; proveedora: string; tipo: "nuevo" | "cambia"; antes: string | null; despues: string }[];
   insumos: { fila: number; servicio: string; insumo: string; tipo: "nuevo" | "cambia"; antes: number | null; despues: number }[];
   categorias: { fila: number; servicio: string; categoria: string }[];
+  /** Máquinas que se agregan a cada servicio (una fila por par). `nueva` = la máquina se crea al guardar. */
+  maquinas: { fila: number; servicio: string; maquina: string; nueva: boolean }[];
   combosAfectados: { id: string; nombre: string; kind: "combo" | "pack" }[];
-  resumen: { serviciosNuevos: number; serviciosModificados: number; acuerdos: number; insumos: number; categorias: number };
+  resumen: { serviciosNuevos: number; serviciosModificados: number; acuerdos: number; insumos: number; categorias: number; maquinas: number };
 };
 
 // ───────────────────────── Encabezados y mapeos ─────────────────────────
@@ -118,6 +123,7 @@ export const ENCABEZADOS_SERVICIOS: Record<keyof ServicioNormalizado, string> = 
 export const ENCABEZADOS_PROVEEDORAS = ["Servicio", "Proveedora", "Tipo de pago", "Tarifa"] as const;
 export const ENCABEZADOS_INSUMOS = ["Servicio", "Insumo", "Cantidad"] as const;
 export const ENCABEZADOS_CATEGORIAS = ["Servicio", "Categoría web"] as const;
+export const ENCABEZADOS_MAQUINAS = ["Servicio", "Máquina"] as const;
 
 export const TIPO_DE_PAGO_A_CODIGO: Record<string, string> = {
   "Por hora": "per_hour",
@@ -333,6 +339,10 @@ export type PlanDePlanilla = {
   acuerdos: { servicio: Ref; proveedoraId: string; paymentType: string; rate: number; cerrarVigente: boolean }[];
   insumos: { servicio: Ref; productId: string; quantity: number }[];
   categorias: { servicio: Ref; categoryId: string }[];
+  /** Máquinas a asociar. `maquinaId` null = máquina nueva, identificada por `nuevaClave` (ver `maquinasNuevas`). */
+  maquinas: { servicio: Ref; maquinaId: string | null; nuevaClave: string | null }[];
+  /** Máquinas a crear (activas, cantidad 1), una por nombre aunque aparezca en varias filas. */
+  maquinasNuevas: { clave: string; nombre: string }[];
 };
 
 type Vista = Omit<Previsualizacion, "combosAfectados">;
@@ -428,7 +438,7 @@ function planificarRelacion<V>(
       continue;
     }
     if (vacia(f.rel)) {
-      err(f.fila, `Falta completar la columna ${cfg.pestana === "Proveedoras" ? "Proveedora" : cfg.pestana === "Insumos" ? "Insumo" : "Categoría web"}.`);
+      err(f.fila, `Falta completar la columna ${cfg.pestana === "Proveedoras" ? "Proveedora" : cfg.pestana === "Insumos" ? "Insumo" : cfg.pestana === "Máquinas" ? "Máquina" : "Categoría web"}.`);
       continue;
     }
     const ref: Ref = srv.id ? { id: srv.id } : { nuevaFila: srv.fila };
@@ -492,7 +502,7 @@ export function planificarPlanilla(p: {
 }): { plan: PlanDePlanilla; vista: Vista } {
   const { original, editada, actual, catalogo } = p;
   const errores: ErrorDePlanilla[] = [];
-  const plan: PlanDePlanilla = { crear: [], actualizar: [], acuerdos: [], insumos: [], categorias: [] };
+  const plan: PlanDePlanilla = { crear: [], actualizar: [], acuerdos: [], insumos: [], categorias: [], maquinas: [], maquinasNuevas: [] };
   const avisos: AvisoDePlanilla[] = [];
   const vista: Vista = {
     errores,
@@ -501,7 +511,8 @@ export function planificarPlanilla(p: {
     acuerdos: [],
     insumos: [],
     categorias: [],
-    resumen: { serviciosNuevos: 0, serviciosModificados: 0, acuerdos: 0, insumos: 0, categorias: 0 },
+    maquinas: [],
+    resumen: { serviciosNuevos: 0, serviciosModificados: 0, acuerdos: 0, insumos: 0, categorias: 0, maquinas: 0 },
   };
   const errS = (fila: number | null, mensaje: string) => errores.push({ pestana: "Servicios", fila, mensaje });
 
@@ -655,7 +666,12 @@ export function planificarPlanilla(p: {
   for (const c of plan.crear) avisarSiExiste(c.fila, c.datos.name);
   for (const a of plan.actualizar) if ("name" in a.patch) avisarSiExiste(a.fila, a.patch.name);
 
-  const ctx = { original, editada, actual };
+  // La pestaña Máquinas es opcional (planillas viejas).
+  const ctx = {
+    original: { ...original, maquinas: original.maquinas ?? [] },
+    editada: { ...editada, maquinas: editada.maquinas ?? [] },
+    actual: { ...actual, maquinas: actual.maquinas ?? [] },
+  };
 
   // ── Acuerdos ──
   const acuerdos = planificarRelacion(
@@ -765,5 +781,51 @@ export function planificarPlanilla(p: {
     vista.resumen.categorias++;
   }
 
+  // ── Máquinas (sólo altas; una máquina que no existe se crea) ──
+  const nuevasPorClave = new Map<string, string>();
+  const yaAsociadas = new Set<string>();
+  const maquinas = planificarRelacion<{ maquinaId: string | null; nuevaClave: string | null; nombre: string }>(
+    {
+      pestana: "Máquinas",
+      etiqueta: "La máquina",
+      filas: (c) => (c.maquinas ?? []).map((r) => ({ fila: r.fila, servicio: r.servicio, rel: r.maquina, celdas: [] })),
+      describir: () => "",
+      validar: (f) => {
+        const nombre = String(f.rel).trim().replace(/\s+/g, " ");
+        const k = claveMaquina(nombre);
+        const ids = new Set<string | null>();
+        for (const [n, id] of catalogo.maquinas) if (claveMaquina(n) === k) ids.add(id);
+        if (ids.size > 1 || (ids.size === 1 && [...ids][0] === null)) {
+          return { error: `Hay más de una máquina llamada «${nombre}»: no se sabe cuál es.` };
+        }
+        if (ids.size === 1) return { valor: { maquinaId: [...ids][0] as string, nuevaClave: null, nombre } };
+        return { valor: { maquinaId: null, nuevaClave: k, nombre } };
+      },
+    },
+    ctx,
+    serviciosEditados,
+    errores,
+  );
+  for (const r of maquinas) {
+    const { maquinaId, nuevaClave, nombre } = r.valor;
+    // Mismo servicio y misma máquina escrita de dos maneras (tildes, espacios): una sola vez.
+    const par = `${"id" in r.ref ? r.ref.id : `nueva:${r.ref.nuevaFila}`}|${maquinaId ?? nuevaClave}`;
+    if (yaAsociadas.has(par)) continue;
+    yaAsociadas.add(par);
+    if (nuevaClave !== null && !nuevasPorClave.has(nuevaClave)) {
+      nuevasPorClave.set(nuevaClave, nombre);
+      plan.maquinasNuevas.push({ clave: nuevaClave, nombre });
+      avisos.push({ pestana: "Máquinas", fila: r.fila, mensaje: `Máquina nueva: ${nombre}` });
+    }
+    plan.maquinas.push({ servicio: r.ref, maquinaId, nuevaClave });
+    vista.maquinas.push({ fila: r.fila, servicio: r.servicio, maquina: nuevaClave !== null ? nuevasPorClave.get(nuevaClave)! : r.rel, nueva: nuevaClave !== null });
+    vista.resumen.maquinas++;
+  }
+
   return { plan, vista };
+}
+
+/** Nombre de máquina comparable: sin tildes, sin mayúsculas, espacios colapsados. */
+export function claveMaquina(nombre: string): string {
+  return sinTildes(nombre).replace(/\s+/g, " ").trim().toLowerCase();
 }

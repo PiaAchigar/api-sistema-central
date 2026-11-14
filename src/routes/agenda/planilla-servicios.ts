@@ -44,6 +44,8 @@ const contenidoSchema = z.object({
     .max(5000),
   insumos: z.array(z.object({ ...fila, servicio: celda, insumo: celda, cantidad: celda })).max(5000),
   categorias: z.array(z.object({ ...fila, servicio: celda, categoria: celda })).max(5000),
+  // Opcional: las planillas viejas no tienen la pestaña Máquinas.
+  maquinas: z.array(z.object({ ...fila, servicio: celda, maquina: celda })).max(5000).optional(),
 });
 
 const entradaSchema = z.object({
