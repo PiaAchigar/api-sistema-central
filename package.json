@@ -12,7 +12,7 @@
     "test:watch": "vitest",
     "db:up": "docker compose up -d --wait db",
     "db:down": "docker compose down",
-    "db:reset": "docker compose down -v && docker compose up -d --wait db && ./scripts/traer-catalogo.sh",
+    "db:reset": "docker compose down -v && docker compose up -d --wait db && (./scripts/traer-catalogo.sh || echo 'AVISO: no se pudo traer el catalogo de produccion (sin IPv6? probar: ip -6 addr show scope global). La base local quedo sana pero con el catalogo de juguete del seed: correr ./scripts/traer-catalogo.sh cuando haya conexion.')",
     "db:psql": "docker compose exec db psql -U piubella -d piubella",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

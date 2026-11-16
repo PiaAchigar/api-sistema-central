@@ -145,11 +145,13 @@ services:
       # 47: dropea el indice unico que crea la 1.9.0 (10-) y lo reemplaza por
       # uno que incluye `environment`. Tiene que ir DESPUES de la 1.9.0.
       - ./src/db/migrations/1.62.0/01-facturador-por-ambiente.sql:/docker-entrypoint-initdb.d/47-facturador-por-ambiente.sql:ro
-      # 1.54.0 y 1.57.0 nunca se montaron: el reset dejaba la base sin el trigger
-      # que invalida el vector del servicio y con las clasificaciones muertas
-      # adentro. Van al final porque los dos son idempotentes y sólo dependen de
-      # tablas que a esta altura ya existen.
-      - ./src/db/migrations/1.54.0/01-limpiar-clasificaciones-muertas.sql:/docker-entrypoint-initdb.d/48-limpiar-clasificaciones-muertas.sql:ro
+      # 49: la 1.57.0 (trigger que invalida el vector del servicio) es de
+      # ESQUEMA e idempotente, así que va montada.
+      # La 1.54.0 (borrar clasificaciones muertas) NO se monta: es una
+      # migración de DATOS que exige con RAISE EXCEPTION encontrar 4
+      # clasificaciones de producción, y en una base recién creada encuentra 0
+      # y aborta el entrypoint ("Esperaba 4 clasificaciones a borrar,
+      # encontré 0"). El catálogo ya cocinado viene de `traer-catalogo.sh`.
       - ./src/db/migrations/1.57.0/01-el-vector-del-servicio-se-invalida.sql:/docker-entrypoint-initdb.d/49-el-vector-del-servicio-se-invalida.sql:ro
       - ./src/db/migrations/1.64.0/01-actividades-visibles-en-la-web.sql:/docker-entrypoint-initdb.d/50-actividades-visibles-en-la-web.sql:ro
       - ./src/db/migrations/1.65.0/01-historial-de-ajustes-de-precios.sql:/docker-entrypoint-initdb.d/51-historial-de-ajustes-de-precios.sql:ro
@@ -162,7 +164,11 @@ services:
       - ./src/db/migrations/1.72.0/01-users-created-by.sql:/docker-entrypoint-initdb.d/58-users-created-by.sql:ro
       - piubella-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U piubella -d piubella"]
+      # `-h 127.0.0.1` es a propósito: el servidor TEMPORAL que levanta el
+      # entrypoint para correr /docker-entrypoint-initdb.d sólo escucha por
+      # socket Unix. Sin -h, pg_isready lo veía "healthy" a mitad del init y
+      # `--wait` devolvía antes de tiempo. Por TCP sólo responde el definitivo.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U piubella -d piubella"]
       interval: 3s
       timeout: 3s
       retries: 10
