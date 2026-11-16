@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq, like, notLike } from "drizzle-orm";
+import { and, eq, like, notLike } from "drizzle-orm";
 import * as schema from "../db/schema";
 import { bodyZone, categories, combos, depilationCombo, service, serviceCategory, training } from "../db/schema";
 import type { Db } from "../db/client";
@@ -31,6 +31,16 @@ let servicioSinAreaId: string;
 let comboId: string;
 let packDepiId: string;
 let capacitacionId: string;
+// Áreas que el catálogo busca POR NOMBRE. En producción existen; en una base
+// recién creada (`db:reset`) el seed no las trae. Si faltan, el test las crea
+// y las borra al final: no depende de haber corrido `traer-catalogo.sh`.
+const areasCreadas: string[] = [];
+async function asegurarAreaPorNombre(nombre: string) {
+  const [ya] = await db.select({ id: categories.id }).from(categories).where(and(eq(categories.name, nombre), eq(categories.kind, "area")));
+  if (ya) return;
+  const [nueva] = await db.insert(categories).values({ name: nombre, kind: "area", isActive: true, displayOrder: 99 }).returning({ id: categories.id });
+  areasCreadas.push(nueva!.id);
+}
 
 async function limpiar() {
   const depi = await db.select({ id: depilationCombo.id }).from(depilationCombo).where(like(depilationCombo.name, `${QA}%`));
@@ -44,10 +54,13 @@ async function limpiar() {
   }
   await db.delete(training).where(like(training.name, `${QA}%`));
   await db.delete(categories).where(like(categories.name, `${QA}%`));
+  for (const id of areasCreadas.splice(0)) await db.delete(categories).where(eq(categories.id, id));
 }
 
 beforeAll(async () => {
   await limpiar();
+  await asegurarAreaPorNombre(AREA_DEPILACION);
+  await asegurarAreaPorNombre(AREA_CAPACITACIONES);
 
   // Archivada a propósito: es el caso de producción.
   const [area] = await db

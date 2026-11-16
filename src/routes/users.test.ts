@@ -97,8 +97,8 @@ describe("POST /users", () => {
     const r = await pedir("admin", "POST", "/", { ...base, fullName: "  Laura  " });
     expect(r.status).toBe(201);
     const [row] = await db.select().from(users).where(eq(users.authId, A1));
-    expect(row.fullName).toBe("Laura");
-    expect(supa.createUser.mock.calls[0][1]).not.toHaveProperty("fullName");
+    expect(row!.fullName).toBe("Laura");
+    expect(supa.createUser.mock.calls[0]![1]).not.toHaveProperty("fullName");
   });
 
   it("guarda quién lo creó si el admin tiene fila local, y NULL si no", async () => {
@@ -106,7 +106,7 @@ describe("POST /users", () => {
     supa.createUser.mockResolvedValue({ id: A1, email: base.email, role: "sales" });
     await pedir("admin", "POST", "/", { ...base, fullName: "Laura" });
     const [sin] = await db.select().from(users).where(eq(users.authId, A1));
-    expect(sin.createdByUserId).toBeNull();
+    expect(sin!.createdByUserId).toBeNull();
 
     const [admin] = await db
       .insert(users)
@@ -132,7 +132,7 @@ describe("POST /users", () => {
     );
     expect(r.status).toBe(201);
     const [con] = await db.select().from(users).where(eq(users.authId, A1));
-    expect(con.createdByUserId).toBe(admin.id);
+    expect(con!.createdByUserId).toBe(admin!.id);
 
     supa.listUsers.mockResolvedValue([
       { id: A1, email: base.email, role: "sales", createdAt: null, lastSignInAt: null },
@@ -158,7 +158,7 @@ describe("PATCH /users/:authId/nombre", () => {
     const r = await pedir("admin", "PATCH", `/${A1}/nombre`, { fullName: " Ana " });
     expect(r.status).toBe(200);
     const [row] = await db.select().from(users).where(eq(users.authId, A1));
-    expect(row.fullName).toBe("Ana");
+    expect(row!.fullName).toBe("Ana");
   });
 
   it("404 si no hay fila local", async () => {

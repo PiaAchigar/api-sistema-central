@@ -65,8 +65,8 @@ describe("calcularPrecioCombo — orden y desglose", () => {
   it("ordena grande antes que chica sin importar cómo entren", () => {
     const r = calcularPrecioCombo([C(), G()], "mujer", CONFIG);
     expect(r.lineas.map((l) => l.categoria)).toEqual(["grande", "chica"]);
-    expect(r.lineas[0].motivo).toBe("lista");
-    expect(r.lineas[1].motivo).toBe("escalon_1");
+    expect(r.lineas[0]?.motivo).toBe("lista");
+    expect(r.lineas[1]?.motivo).toBe("escalon_1");
   });
   it("a igual categoría conserva el orden de entrada (desempate estable)", () => {
     const a = z("chica", "a");
@@ -94,8 +94,8 @@ describe("calcularPrecioCombo — no-inversión (propiedad del PDF §1)", () => 
     const cats = ["grande", "mediana", "chica"] as const;
     for (let i = 0; i < 500; i++) {
       const largo = 1 + Math.floor(Math.random() * 8);
-      const base = Array.from({ length: largo }, () => z(cats[Math.floor(Math.random() * 3)]));
-      const extra = z(cats[Math.floor(Math.random() * 3)]);
+      const base = Array.from({ length: largo }, () => z(cats[Math.floor(Math.random() * 3)]!));
+      const extra = z(cats[Math.floor(Math.random() * 3)]!);
       const antes = calcularPrecioCombo(base, "mujer", CONFIG).total;
       const despues = calcularPrecioCombo([...base, extra], "mujer", CONFIG).total;
       expect(despues).toBeGreaterThan(antes);

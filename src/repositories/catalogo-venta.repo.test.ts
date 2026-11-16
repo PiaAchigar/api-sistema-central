@@ -156,12 +156,15 @@ beforeAll(async () => {
   });
   packConEleccionId = conEleccion!.id;
 
+  // `noVendible = false`: el ancla de depilación ("Depilación Definitiva") es
+  // un servicio activo que NO sale en el catálogo, y en una base recién creada
+  // es el primero por nombre.
   // Un servicio real CON precio: `createCombo` congela el precio de cada
   // renglón, y uno sin precio dejaría el combo en $0 y sin nada que desglosar.
   const [s1] = await db
     .select({ id: service.id, name: service.name })
     .from(service)
-    .where(and(eq(service.isActive, true), notLike(service.name, "ZZ_QA%")))
+    .where(and(eq(service.isActive, true), eq(service.noVendible, false), notLike(service.name, "ZZ_QA%")))
     .orderBy(service.name)
     .limit(1);
   servicioId = s1!.id;
@@ -296,6 +299,10 @@ describe("listCatalogoVendible — el desglose llega al front", () => {
     const catalogo = await listCatalogoVendible(db);
     const pack = catalogo.combos.find((i) => i.id === comboPackId)!;
     const suelto = catalogo.servicios.find((i) => i.id === servicioId)!;
+
+    // `ItemDeCatalogo` es una unión: sólo el combo trae `base`/`conDescuento`,
+    // y el servicio suelto trae `unitario`. Se angosta para que los tipos lo sepan.
+    if (pack.origen !== "combo" || suelto.origen === "combo") throw new Error("origen inesperado");
 
     expect(pack.precioDesde).toBeGreaterThan(0);
     // `base` es lo que la cotización devuelve como `baseAmount`.
