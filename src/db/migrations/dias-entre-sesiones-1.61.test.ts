@@ -82,10 +82,14 @@ async function limpiar() {
 beforeAll(async () => {
   aplicarMigracion();
   await limpiar();
-  areaId = (await sql`SELECT id FROM categories ORDER BY id LIMIT 1`)[0]!.id as string;
-  servicioId = (await sql`SELECT id FROM service ORDER BY id LIMIT 1`)[0]!.id as string;
-  proveedoraId = (await sql`SELECT id FROM service_providers ORDER BY id LIMIT 1`)[0]!.id as string;
-  zonaId = (await sql`SELECT id FROM body_zone WHERE is_active ORDER BY id LIMIT 1`)[0]!.id as string;
+  // Las filas "prestadas" NO pueden ser fixtures ZZ_QA de otro archivo: los
+  // tests corren en paralelo contra la misma base y esos fixtures se borran
+  // en su propio afterAll. Con `ORDER BY id LIMIT 1` este test agarró un
+  // servicio ajeno que desapareció a mitad de camino (FK violada, 500).
+  areaId = (await sql`SELECT id FROM categories WHERE name NOT LIKE 'ZZ_QA%' ORDER BY id LIMIT 1`)[0]!.id as string;
+  servicioId = (await sql`SELECT id FROM service WHERE is_active AND name NOT LIKE 'ZZ_QA%' ORDER BY id LIMIT 1`)[0]!.id as string;
+  proveedoraId = (await sql`SELECT id FROM service_providers WHERE full_name NOT LIKE 'ZZ_QA%' ORDER BY id LIMIT 1`)[0]!.id as string;
+  zonaId = (await sql`SELECT id FROM body_zone WHERE is_active AND name NOT LIKE 'ZZ_QA%' ORDER BY id LIMIT 1`)[0]!.id as string;
   const [cfg] = await sql`SELECT session_interval_days FROM depilation_pricing_config WHERE singleton = true`;
   diasOriginalConfig = (cfg?.session_interval_days as number | null) ?? null;
 });
