@@ -541,6 +541,8 @@ export const combos = pgTable("combos", {
   discountPercentage: decimal("discount_percentage", { precision: 5, scale: 2 }),
   /** 1.66.0 — Vigencia en semanas. CHECK > 0. */
   validityWeeks: integer("validity_weeks"),
+  /** 1.73.0 — La última sesión del pack es un retoque y no se cobra. Sólo packs (CHECK). */
+  lastSessionIsTouchup: boolean("last_session_is_touchup").notNull().default(false),
   /** 1.66.0 — Precio fijo en efectivo. NULL = no cargado. */
   fixedPriceCash: decimal("fixed_price_cash", { precision: 10, scale: 2 }),
   /** 1.61.0 — Cada cuántos días se sugiere la siguiente sesión. NULL = no cargado. */

@@ -117,6 +117,8 @@ export const comboBody = z
       .positive("El redondeo tiene que ser mayor que cero")
       .nullish(),
     servicesTogether: z.boolean().nullish(),
+    // 1.73.0 — Sólo un pack: la última sesión es un retoque y no se cobra.
+    lastSessionIsTouchup: z.boolean().nullish(),
     // Sin `min(1)`: un pack que repite un combo NO lleva renglones propios. El
     // mínimo se pide más abajo, según el tipo.
     lines: z.array(lineSchema),
@@ -124,6 +126,13 @@ export const comboBody = z
   .superRefine((v, ctx) => {
     // ── Combo o pack ───────────────────────────────────────────────────────
     if (v.kind === "combo") {
+      if (v.lastSessionIsTouchup === true) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["lastSessionIsTouchup"],
+          message: "El retoque es sólo para packs",
+        });
+      }
       if (v.lines.length === 0) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

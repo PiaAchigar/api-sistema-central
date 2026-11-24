@@ -127,3 +127,25 @@ describe("precioPack sigue andando igual que antes de moverse", () => {
     expect(precioPack(10000, GLOBAL, { sesiones: 4, descuentoPct: 20, redondeo: 100 })).toBe(32000);
   });
 });
+
+describe("precioPack con sesiones sin cobrar (retoque)", () => {
+  const propia = { sesiones: 2, descuentoPct: 10, redondeo: 100 };
+
+  it("un pack de 2 con el retoque sin cobrar cuesta una sesión, con descuento", () => {
+    expect(precioPack(10000, GLOBAL, propia, 1)).toBe(9000);
+  });
+
+  it("un pack de 4 con retoque cobra 3", () => {
+    expect(precioPack(10000, GLOBAL, { ...propia, sesiones: 4 }, 1)).toBe(27000);
+  });
+
+  it("sin sesiones sin cobrar es igual que antes", () => {
+    expect(precioPack(10000, GLOBAL, propia, 0)).toBe(18000);
+    expect(precioPack(10000, GLOBAL, propia)).toBe(18000);
+  });
+
+  it("nunca cobra menos de una sesión ni cuenta negativas", () => {
+    expect(precioPack(10000, GLOBAL, { ...propia, sesiones: 2 }, 5)).toBe(9000);
+    expect(precioPack(10000, GLOBAL, propia, -3)).toBe(18000);
+  });
+});

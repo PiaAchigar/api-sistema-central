@@ -49,6 +49,15 @@ export function politicaDePack(
 }
 
 /**
+ * Cuántas sesiones del pack se cobran. El retoque (la última sesión de un pack
+ * que lo marca, #36) se entrega pero NO se cobra: `sinCobrar` = 1. Siempre se
+ * cobra al menos una, y un valor negativo no suma sesiones.
+ */
+export function sesionesCobradas(sesiones: number, sinCobrar = 0): number {
+  return Math.max(1, sesiones - Math.max(0, sinCobrar));
+}
+
+/**
  * Capa 1 — precio del pack de N sesiones (PDF §7).
  *
  * Se redondea UNA SOLA VEZ, al final. El PDF lo marca en mayúsculas: si se
@@ -58,10 +67,12 @@ export function precioPack(
   totalCombo: number,
   config: PoliticaGlobal,
   propia?: PackPolitica | null,
+  sesionesSinCobrar = 0,
 ): number {
   const pack = politicaDePack(config, propia);
+  const cobradas = sesionesCobradas(pack.sesiones, sesionesSinCobrar);
   // Entero antes de dividir: `× 0,85` en coma flotante da 45900.000000000007.
-  const bruto = (totalCombo * pack.sesiones * (100 - pack.descuentoPct)) / 100;
+  const bruto = (totalCombo * cobradas * (100 - pack.descuentoPct)) / 100;
   return Math.round(bruto / pack.redondeo) * pack.redondeo;
 }
 

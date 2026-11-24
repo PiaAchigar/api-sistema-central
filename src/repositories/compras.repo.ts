@@ -18,6 +18,7 @@ import {
   promotionTarget,
   promotions,
   purchaseExpiryPostponements,
+  combos,
 } from "../db/schema";
 import {
   estadoDeSesion,
@@ -52,6 +53,7 @@ import { desgloseDeDepilacion, type FilaDeDesglose } from "../lib/desglose-de-ca
 import { lineasDelPaquete, type ParteDelPaquete } from "../lib/desglose-de-paquete";
 import { repartirPrecioDelPaquete } from "../lib/reparto-de-paquete";
 import { precioDeServicio } from "../lib/combo-pricing";
+import { esLineaDeRetoque } from "../lib/retoque";
 import { TIPO_PAQUETE } from "./promotions.repo";
 import { obtenerCombo } from "./depilacion.repo";
 import type { Sexo } from "../lib/depilation-pricing";
@@ -554,6 +556,8 @@ export type ServicioLeido = {
   appointmentStart: Date | null;
   consumedAt: Date | null;
   estado: EstadoSesion;
+  /** #36 — Esta sesión es el retoque del pack (la última, y no se cobró). */
+  esRetoque: boolean;
   /** Nombres de las zonas del turno de esta línea; null si no hay turno o no tiene zonas. */
   zonasDelTurno: string[] | null;
 };
@@ -702,6 +706,20 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
           .orderBy(bodyZone.name)
       : [],
   ]);
+  // #36 — Qué compras vienen de un pack con "la última sesión es retoque".
+  const comboIdsDeCompras = [
+    ...new Set(compras.map((c) => c.comboId).filter((v): v is string => v != null)),
+  ];
+  const packsConRetoque = new Set(
+    comboIdsDeCompras.length > 0
+      ? (
+          await db
+            .select({ id: combos.id })
+            .from(combos)
+            .where(and(inArray(combos.id, comboIdsDeCompras), eq(combos.lastSessionIsTouchup, true)))
+        ).map((f) => f.id)
+      : [],
+  );
   const desglosePorPack = new Map<string, FilaDeDesglose[]>(
     packsConEleccion.map((p) => [
       p.id,
@@ -758,8 +776,12 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
         facturasConNotaPendiente.has(p.invoiceId),
     );
 
+    const ultimaSesionEsRetoque = c.comboId != null && packsConRetoque.has(c.comboId);
+
     return {
       ...c,
+      /** #36 — La última sesión de esta compra es un retoque (no se cobró). */
+      ultimaSesionEsRetoque,
       baseAmount: Number(c.baseAmount),
       discountedAmount: Number(c.discountedAmount),
       finalAmount: Number(c.finalAmount),
@@ -805,6 +827,7 @@ export async function listComprasDeCliente(db: Db, customerId: string, ahora = n
             appointmentStart: conTurno ? s.appointmentStart : null,
             consumedAt: s.consumedAt,
             estado,
+            esRetoque: esLineaDeRetoque(s, c, ultimaSesionEsRetoque),
             zonasDelTurno: conTurno && s.appointmentId ? (zonasPorTurno.get(s.appointmentId) ?? null) : null,
           };
         }),

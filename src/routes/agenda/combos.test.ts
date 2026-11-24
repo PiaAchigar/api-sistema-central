@@ -144,6 +144,13 @@ describe("comboBody", () => {
     }
   });
 
+  it("la tilde de retoque se acepta en un pack y se rechaza en un combo", () => {
+    expect(comboBody.safeParse({ ...packValido, lastSessionIsTouchup: true }).success).toBe(true);
+    const r = comboBody.safeParse({ ...valido, lastSessionIsTouchup: true });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.message).toMatch(/sólo para packs/i);
+  });
+
   it("ya no acepta validityMonths: se descarta y no llega al header", () => {
     const r = comboBody.safeParse({ ...valido, validityMonths: 12 });
     expect(r.success).toBe(true);

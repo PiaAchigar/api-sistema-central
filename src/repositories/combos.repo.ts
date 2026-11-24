@@ -22,7 +22,7 @@ import {
   type FilaDeClasificacion,
 } from "../lib/clasificaciones-de-combo";
 import { type ComboComparable, combosDuplicados } from "../lib/combo-duplicado";
-import { precioPack } from "../lib/pack-pricing";
+import { precioPack, sesionesCobradas } from "../lib/pack-pricing";
 import { type PoliticaDeArea, politicaDeUnPack } from "../lib/politica-de-pack";
 import {
   comboDelQueSalenLosServicios,
@@ -59,6 +59,8 @@ export type ComboHeaderInput = {
   packRoundingBase?: number | null;
   /** Sólo en un combo: si los servicios se hacen en la misma visita. */
   servicesTogether?: boolean | null;
+  /** 1.73.0 — Sólo en un pack: la última sesión es un retoque y no se cobra. */
+  lastSessionIsTouchup?: boolean | null;
 };
 
 /** Lo que se puede editar de un combo ya guardado: el precio y la
@@ -92,6 +94,7 @@ const comboFields = {
   packDiscountPercentage: combos.packDiscountPercentage,
   packRoundingBase: combos.packRoundingBase,
   servicesTogether: combos.servicesTogether,
+  lastSessionIsTouchup: combos.lastSessionIsTouchup,
 };
 
 async function linesFor(db: Db, comboId: string) {
@@ -166,6 +169,8 @@ export function assembleCombo(
     discountPercentage: num(combo.discountPercentage),
     kind: (combo.kind as string | null) ?? "combo",
     servicesTogether: combo.servicesTogether === true,
+    // Sólo un pack puede tenerla (lo garantiza `ck_combos_touchup_solo_pack`).
+    lastSessionIsTouchup: combo.kind === "pack" && combo.lastSessionIsTouchup === true,
     // Explícitas y no por el spread: `combo` entra como `Record<string,
     // unknown>`, así que al esparcirlo TypeScript no ve ninguna de estas
     // claves y todo lo que las lea después no compila.
@@ -281,6 +286,8 @@ async function conPrecioDePack(db: Db, filas: FilaArmada[]): Promise<FilaArmada[
         packEffectiveDiscount: 0,
         // Sin tarifario ni fórmula: las sesiones que se cobran son las declaradas.
         packEffectiveSessions: f.packSessions,
+        // A mano el precio es el escrito: la tilde sólo rotula la última sesión.
+        packChargedSessions: f.packSessions,
       };
     }
 
@@ -290,6 +297,8 @@ async function conPrecioDePack(db: Db, filas: FilaArmada[]): Promise<FilaArmada[
     const politica = politicaDeUnPack(f, area);
     if (!politica) return f;
 
+    // El retoque se entrega pero no se cobra: el pack cuesta N − 1 sesiones.
+    const sinCobrar = f.lastSessionIsTouchup ? 1 : 0;
     const config = {
       packSesiones: politica.sesiones,
       packDescuentoPct: area.packDiscountPercentage,
@@ -302,9 +311,11 @@ async function conPrecioDePack(db: Db, filas: FilaArmada[]): Promise<FilaArmada[
        *  "4 × $12.000" y que se entienda de dónde sale el total. */
       packUnitAmount: base,
       packUnitAmountCash: baseCash,
-      finalAmount: precioPack(base, config, politica),
+      finalAmount: precioPack(base, config, politica, sinCobrar),
       // Misma política y mismo redondeo, sobre la base de efectivo.
-      finalAmountCash: precioPack(baseCash, config, politica),
+      finalAmountCash: precioPack(baseCash, config, politica, sinCobrar),
+      /** Cuántas de las `packEffectiveSessions` se cobran (N − 1 con retoque). */
+      packChargedSessions: sesionesCobradas(politica.sesiones, sinCobrar),
       /** De dónde salió el descuento, para que la pantalla lo diga. */
       packDiscountSource: f.packDiscountPercentage == null ? "area" : "propio",
       packEffectiveDiscount: politica.descuentoPct,
@@ -719,6 +730,7 @@ export async function createCombo(db: Db, header: ComboHeaderInput, lines: Combo
         // Un pack nunca lo lleva (lo prohíbe `ck_combos_pack`): si repite un
         // combo, el dato sale del combo apuntado.
         servicesTogether: header.kind === "pack" ? false : (header.servicesTogether ?? false),
+        lastSessionIsTouchup: header.kind === "pack" && header.lastSessionIsTouchup === true,
       })
       .returning({ id: combos.id });
     if (!created) return null;
@@ -765,6 +777,11 @@ export async function updateCombo(db: Db, id: string, header: ComboEditInput) {
       packDiscountPercentage: header.packDiscountPercentage ?? null,
       packRoundingBase: header.packRoundingBase ?? null,
       servicesTogether: header.servicesTogether ?? false,
+      // Sólo un pack puede llevarla; en un combo se ignora en vez de romper el CHECK.
+      // undefined = "no me mandaron la tilde": no se toca.
+      ...(header.lastSessionIsTouchup !== undefined && {
+        lastSessionIsTouchup: sql<boolean>`(${header.lastSessionIsTouchup === true} AND ${combos.kind} = 'pack')`,
+      }),
     })
     .where(eq(combos.id, id))
     .returning({ id: combos.id });
