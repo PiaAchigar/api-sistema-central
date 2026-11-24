@@ -57,8 +57,7 @@ beforeAll(async () => {
       name: QA,
       priceType: "fixed",
       fixedPrice: "1000",
-      validityMonths: 1,
-      isActive: true,
+            isActive: true,
       isVisibleWeb: true,
       areaCategoryId: area!.id,
     })

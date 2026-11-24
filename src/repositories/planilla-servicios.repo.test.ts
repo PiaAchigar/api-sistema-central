@@ -118,7 +118,7 @@ beforeEach(async () => {
   combo = crypto.randomUUID();
   await db.insert(combos).values({
     id: combo, name: P + "combo", isActive: true, priceType: "fixed", fixedPrice: "1000.00",
-    validityMonths: 6, kind: "combo", areaCategoryId: areaId,
+    kind: "combo", areaCategoryId: areaId,
   });
   await db.insert(comboService).values({ comboId: combo, serviceId: sActivo, sessionsIncluded: 1, servicePrice: "10000.00" });
 });

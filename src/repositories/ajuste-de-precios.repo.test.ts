@@ -90,9 +90,9 @@ beforeAll(async () => {
   comboInactivo = crypto.randomUUID();
   packActivo = crypto.randomUUID();
   await db.insert(combos).values([
-    { id: comboActivo, name: P + "combo", isActive: true, priceType: "fixed", fixedPrice: "1000.00", validityMonths: 6, kind: "combo", areaCategoryId: padre },
-    { id: comboInactivo, name: P + "combo inactivo", isActive: false, priceType: "fixed", fixedPrice: "1000.00", validityMonths: 6, kind: "combo", areaCategoryId: padre },
-    { id: packActivo, name: P + "pack", isActive: true, priceType: "fixed", fixedPrice: "1000.00", validityMonths: 6, kind: "pack", packSessions: 4, areaCategoryId: padre },
+    { id: comboActivo, name: P + "combo", isActive: true, priceType: "fixed", fixedPrice: "1000.00", kind: "combo", areaCategoryId: padre },
+    { id: comboInactivo, name: P + "combo inactivo", isActive: false, priceType: "fixed", fixedPrice: "1000.00", kind: "combo", areaCategoryId: padre },
+    { id: packActivo, name: P + "pack", isActive: true, priceType: "fixed", fixedPrice: "1000.00", kind: "pack", packSessions: 4, areaCategoryId: padre },
   ]);
   await db.insert(comboService).values([
     { comboId: comboActivo, serviceId: sHija, sessionsIncluded: 1, servicePrice: "10000.00" },

@@ -47,7 +47,14 @@ async function packDepi(meses: number | null): Promise<string> {
   return r!.id;
 }
 
-describe("migración 1.66.0 — efectivo de combos y plazo en semanas", () => {
+// Desde la 1.73.0 `validity_months` no existe y la 1.66.0 (que la lee para pasar
+// meses a semanas) ya no se puede volver a correr: este archivo queda como
+// historia y sólo corre contra una base que todavía tenga la columna.
+const viva = (await sql<{ viva: boolean }[]>`
+  SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_name = 'combos' AND column_name = 'validity_months') AS viva`)[0]!.viva;
+
+describe.skipIf(!viva)("migración 1.66.0 — efectivo de combos y plazo en semanas", () => {
   beforeAll(() => aplicarMigracion());
 
   afterAll(async () => {

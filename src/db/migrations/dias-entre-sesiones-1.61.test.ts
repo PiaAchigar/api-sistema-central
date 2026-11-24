@@ -143,8 +143,7 @@ describe("APIs de Administración", () => {
     name: `${QA}_combo`,
     priceType: "fixed",
     fixedPrice: 10000,
-    validityMonths: 6,
-    areaCategoryId: areaId,
+        areaCategoryId: areaId,
     ...extra,
   });
 

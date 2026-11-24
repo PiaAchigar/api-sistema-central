@@ -91,8 +91,7 @@ beforeAll(async () => {
         name: QA,
         priceType: "fixed",
         fixedPrice: "1000",
-        validityMonths: 1,
-        isActive: true,
+                isActive: true,
         areaCategoryId: area!.id,
       })
       .returning({ id: combos.id });
@@ -562,8 +561,7 @@ describe("getComboDeleteImpact — el combo que está en oferta", () => {
         name: QA,
         priceType: "fixed",
         fixedPrice: "1000",
-        validityMonths: 1,
-        isActive: true,
+                isActive: true,
         areaCategoryId: area!.id,
       })
       .returning({ id: combos.id });
@@ -621,8 +619,7 @@ describe("vender con promo — invariante de servicios agendables", () => {
         name: COMBO_DE_VENTA,
         priceType: "fixed",
         fixedPrice: "1000",
-        validityMonths: 1,
-        isActive: true,
+                isActive: true,
         areaCategoryId: area!.id,
       })
       .returning({ id: combos.id });

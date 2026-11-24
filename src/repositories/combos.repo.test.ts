@@ -21,8 +21,7 @@ const combo = {
   priceType: "percentage",
   fixedPrice: null,
   discountPercentage: "20.00",
-  validityMonths: 12,
-  isActive: true,
+    isActive: true,
   isVisibleWeb: true,
   displayOrder: 0,
 };

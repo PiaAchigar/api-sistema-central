@@ -376,7 +376,7 @@ describe("hermanosDelCombo — V3c, los combos que se hacen juntos", () => {
       .insert(combos)
       .values({
         name: `${QA_COMBO}_JUNTOS`, priceType: "fixed", fixedPrice: "10000",
-        validityMonths: 12, isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
+        isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
         kind: "combo", servicesTogether: true,
       })
       .returning({ id: combos.id });
@@ -392,7 +392,7 @@ describe("hermanosDelCombo — V3c, los combos que se hacen juntos", () => {
       .insert(combos)
       .values({
         name: `${QA_COMBO}_SEPARADO`, priceType: "fixed", fixedPrice: "6000",
-        validityMonths: 12, isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
+        isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
         kind: "combo", servicesTogether: false,
       })
       .returning({ id: combos.id });
@@ -407,7 +407,7 @@ describe("hermanosDelCombo — V3c, los combos que se hacen juntos", () => {
       .insert(combos)
       .values({
         name: `${QA_COMBO}_COMBO_DEL_PACK`, priceType: "fixed", fixedPrice: "5000",
-        validityMonths: 12, isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
+        isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
         kind: "combo", servicesTogether: true,
       })
       .returning({ id: combos.id });
@@ -424,7 +424,7 @@ describe("hermanosDelCombo — V3c, los combos que se hacen juntos", () => {
       .insert(combos)
       .values({
         name: `${QA_COMBO}_PACK_DE_COMBO`, priceType: "fixed", fixedPrice: "20000",
-        validityMonths: 12, isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
+        isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
         kind: "pack", packOfComboId: comboDelPackId, packSessions: 4, servicesTogether: false,
       })
       .returning({ id: combos.id });
@@ -436,7 +436,7 @@ describe("hermanosDelCombo — V3c, los combos que se hacen juntos", () => {
       .insert(combos)
       .values({
         name: `${QA_COMBO}_PACK_SUELTO`, priceType: "fixed", fixedPrice: "9000",
-        validityMonths: 12, isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
+        isActive: true, isVisibleWeb: false, areaCategoryId: areaId,
         kind: "pack", packOfComboId: null, packSessions: 3, servicesTogether: false,
       })
       .returning({ id: combos.id });

@@ -88,8 +88,8 @@ beforeAll(async () => {
   const categoria = await uno(sql`SELECT id FROM categories LIMIT 1`);
   const combo = async (nombre: string, servicios: string[]) => {
     const c = await uno(sql`
-      INSERT INTO combos (id, name, price_type, fixed_price, validity_months, area_category_id)
-      VALUES (gen_random_uuid(), ${`${QA}_${nombre}`}, 'fixed', 1000, 3, ${categoria}) RETURNING id`);
+      INSERT INTO combos (id, name, price_type, fixed_price, area_category_id)
+      VALUES (gen_random_uuid(), ${`${QA}_${nombre}`}, 'fixed', 1000, ${categoria}) RETURNING id`);
     for (const sv of servicios) {
       await db.execute(sql`INSERT INTO combo_service (combo_id, service_id, sessions_included) VALUES (${c}, ${sv}, 1)`);
     }
@@ -98,8 +98,8 @@ beforeAll(async () => {
   comboMixto = await combo("Mixto", [suyo, ajeno]);
   comboAjeno = await combo("Ajeno", [ajeno]);
   packDelMixto = await uno(sql`
-    INSERT INTO combos (id, name, price_type, fixed_price, validity_months, area_category_id, kind, pack_of_combo_id, pack_sessions)
-    VALUES (gen_random_uuid(), ${QA + "_Pack"}, 'fixed', 1000, 3, ${categoria}, 'pack', ${comboMixto}, 3) RETURNING id`);
+    INSERT INTO combos (id, name, price_type, fixed_price, area_category_id, kind, pack_of_combo_id, pack_sessions)
+    VALUES (gen_random_uuid(), ${QA + "_Pack"}, 'fixed', 1000, ${categoria}, 'pack', ${comboMixto}, 3) RETURNING id`);
   capaPasada = await capacitacion("Vieja", "2026-09-01");
 });
 

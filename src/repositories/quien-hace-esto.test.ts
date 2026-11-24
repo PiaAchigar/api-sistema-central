@@ -61,14 +61,14 @@ beforeAll(async () => {
 
   const categoria = await uno(sql`SELECT id FROM categories LIMIT 1`);
   combo = await uno(sql`
-    INSERT INTO combos (id, name, price_type, fixed_price, validity_months, area_category_id)
-    VALUES (gen_random_uuid(), ${QA + "_Rostro"}, 'fixed', 1000, 3, ${categoria}) RETURNING id`);
+    INSERT INTO combos (id, name, price_type, fixed_price, area_category_id)
+    VALUES (gen_random_uuid(), ${QA + "_Rostro"}, 'fixed', 1000, ${categoria}) RETURNING id`);
   for (const sv of [limpieza, masaje]) {
     await db.execute(sql`INSERT INTO combo_service (combo_id, service_id, sessions_included) VALUES (${combo}, ${sv}, 1)`);
   }
   pack = await uno(sql`
-    INSERT INTO combos (id, name, price_type, fixed_price, validity_months, area_category_id, kind, pack_of_combo_id, pack_sessions)
-    VALUES (gen_random_uuid(), ${QA + "_Pack"}, 'fixed', 1000, 3, ${categoria}, 'pack', ${combo}, 3) RETURNING id`);
+    INSERT INTO combos (id, name, price_type, fixed_price, area_category_id, kind, pack_of_combo_id, pack_sessions)
+    VALUES (gen_random_uuid(), ${QA + "_Pack"}, 'fixed', 1000, ${categoria}, 'pack', ${combo}, 3) RETURNING id`);
 
   await habilitar(gabi, await anclaDeDepilacion(db));
   promoCombo = await uno(sql`INSERT INTO promotions (id, name, promotion_type, is_visible_web) VALUES (gen_random_uuid(), ${QA + "_PromoCombo"}, 'paquete', false) RETURNING id`);

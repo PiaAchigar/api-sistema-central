@@ -46,8 +46,8 @@ async function limpiar() {
 
 const combo = (nombre: string, dias: number | null, pack?: { de: string }) =>
   uno(sql`
-    INSERT INTO combos (id, name, price_type, fixed_price, validity_months, area_category_id, kind, pack_of_combo_id, pack_sessions, session_interval_days)
-    VALUES (gen_random_uuid(), ${`${QA}_${nombre}`}, 'fixed', 1000, 3, ${categoria},
+    INSERT INTO combos (id, name, price_type, fixed_price, area_category_id, kind, pack_of_combo_id, pack_sessions, session_interval_days)
+    VALUES (gen_random_uuid(), ${`${QA}_${nombre}`}, 'fixed', 1000, ${categoria},
             ${pack ? "pack" : "combo"}, ${pack?.de ?? null}, ${pack ? 3 : null}, ${dias}) RETURNING id`);
 
 const compra = (nombre: string, origen: { combo?: string; depi?: string; promo?: string }) =>
@@ -197,8 +197,8 @@ async function comboDeDosServicios(nombre: string, juntos: boolean) {
   const alfa = await uno(sql`
     INSERT INTO service (id, name, estimated_duration_minutes, is_active) VALUES (gen_random_uuid(), ${`${QA}_Svc${nombre}Alfa`}, 25, true) RETURNING id`);
   const id = await uno(sql`
-    INSERT INTO combos (id, name, price_type, fixed_price, validity_months, area_category_id, kind, services_together)
-    VALUES (gen_random_uuid(), ${`${QA}_Base${nombre}`}, 'fixed', 1000, 3, ${categoria}, 'combo', ${juntos}) RETURNING id`);
+    INSERT INTO combos (id, name, price_type, fixed_price, area_category_id, kind, services_together)
+    VALUES (gen_random_uuid(), ${`${QA}_Base${nombre}`}, 'fixed', 1000, ${categoria}, 'combo', ${juntos}) RETURNING id`);
   await db.execute(sql`INSERT INTO combo_service (id, combo_id, service_id, sessions_included, service_price, created_at)
     VALUES (gen_random_uuid(), ${id}, ${zeta}, 1, 500, '2026-01-01 10:00:00.000')`);
   await db.execute(sql`INSERT INTO combo_service (id, combo_id, service_id, sessions_included, service_price, created_at)
@@ -299,8 +299,8 @@ describe("basePlanificador", () => {
     const alfa = await uno(sql`
       INSERT INTO service (id, name, estimated_duration_minutes, is_active) VALUES (gen_random_uuid(), ${`${QA}_SvcEmpateAlfa`}, 25, true) RETURNING id`);
     const id = await uno(sql`
-      INSERT INTO combos (id, name, price_type, fixed_price, validity_months, area_category_id, kind, services_together)
-      VALUES (gen_random_uuid(), ${`${QA}_BaseEmpate`}, 'fixed', 1000, 3, ${categoria}, 'combo', false) RETURNING id`);
+      INSERT INTO combos (id, name, price_type, fixed_price, area_category_id, kind, services_together)
+      VALUES (gen_random_uuid(), ${`${QA}_BaseEmpate`}, 'fixed', 1000, ${categoria}, 'combo', false) RETURNING id`);
     // Como writeLines: una sola sentencia multi-fila, así que created_at empata.
     await db.execute(sql`INSERT INTO combo_service (id, combo_id, service_id, sessions_included, service_price, created_at)
       VALUES (gen_random_uuid(), ${id}, ${zeta}, 1, 500, '2026-01-01 10:00:00'),
