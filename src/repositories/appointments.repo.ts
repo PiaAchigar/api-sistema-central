@@ -4,7 +4,9 @@ import {
   activities,
   appointmentBodyZone,
   bodyZone,
+  customerPurchase,
   customerPurchaseService,
+  combos,
   appointments,
   contacts,
   customers,
@@ -199,12 +201,16 @@ export async function listAppointmentsByRange(
       // dos veces a la clienta. Uno solo por turno lo garantiza el índice
       // `ux_cpsv_turno`, así que el join no multiplica filas.
       customerPurchaseServiceId: customerPurchaseService.id,
+      /** #36 — Este turno es el retoque: la última sesión de una compra de un pack con retoque. */
+      esRetoque: sql<boolean>`coalesce(${combos.lastSessionIsTouchup} and ${customerPurchaseService.repeticion} = ${customerPurchase.sessionsTotal}, false)`,
       // La compra de ese servicio comprado: con ella la agenda pregunta cuánto
       // se debe. Null si el turno no sale de una compra.
       customerPurchaseId: customerPurchaseService.customerPurchaseId,
     })
     .from(appointments)
     .leftJoin(customerPurchaseService, eq(customerPurchaseService.appointmentId, appointments.id))
+    .leftJoin(customerPurchase, eq(customerPurchase.id, customerPurchaseService.customerPurchaseId))
+    .leftJoin(combos, eq(combos.id, customerPurchase.comboId))
     .leftJoin(customers, eq(customers.id, appointments.customerId))
     .leftJoin(contacts, eq(contacts.id, customers.contactId))
     .leftJoin(service, eq(service.id, appointments.serviceId))
@@ -263,9 +269,13 @@ export async function getAppointmentDetail(db: Db, id: string) {
       // dos veces a la clienta. Uno solo por turno lo garantiza el índice
       // `ux_cpsv_turno`, así que el join no multiplica filas.
       customerPurchaseServiceId: customerPurchaseService.id,
+      /** #36 — Este turno es el retoque: la última sesión de una compra de un pack con retoque. */
+      esRetoque: sql<boolean>`coalesce(${combos.lastSessionIsTouchup} and ${customerPurchaseService.repeticion} = ${customerPurchase.sessionsTotal}, false)`,
     })
     .from(appointments)
     .leftJoin(customerPurchaseService, eq(customerPurchaseService.appointmentId, appointments.id))
+    .leftJoin(customerPurchase, eq(customerPurchase.id, customerPurchaseService.customerPurchaseId))
+    .leftJoin(combos, eq(combos.id, customerPurchase.comboId))
     .leftJoin(customers, eq(customers.id, appointments.customerId))
     .leftJoin(contacts, eq(contacts.id, customers.contactId))
     .leftJoin(service, eq(service.id, appointments.serviceId))
